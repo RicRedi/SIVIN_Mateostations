@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="https://mapy.com/">
+	<wpt lat="48.880215" lon="16.673002">
+		<ele>183.939606</ele>
+		<name>77680921 (VUT)</name>
+	</wpt>
+	<wpt lat="48.879593" lon="16.672016">
+		<ele>201.622162</ele>
+		<name>77800065 (VUT)</name>
+	</wpt>
+	<wpt lat="48.878895" lon="16.670900">
+		<ele>222.397003</ele>
+		<name>77678271 (VUT)</name>
+	</wpt>
+</gpx>
+
