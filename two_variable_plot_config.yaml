@@ -8,10 +8,17 @@ file_path: 'data.xlsx'
 
 # Časové omezení (formát RRRR-MM-DD HH:MM:SS)
 # Můžete nechat prázdné nebo smazat, pokud omezení nechcete
-date_from: '2025-12-31 00:00:00'
-date_to: '2026-01-05 23:59:59'
+date_from: '2026-01-10 00:00:00'
+date_to: '2026-01-14 23:59:59'
 
-sensor: ["9986", "8271", "0065", "0921"]
+language: de # cz
+
+sensor: [
+    # "9986",
+    # "8271", 
+    "0065",
+    #  "0921",
+     ]
 # Sampling frequency [Hz] (= 1/1825 seconds)
 T_s: 1825
 f_s: 0.000547945
@@ -20,25 +27,30 @@ f_s: 0.000547945
 axes:
   left_y:
       name: 'Teplota'
+      name_de: 'Temperatur'
       marker: 'o'
-      marker_size: 5
-      line_width: 4
-      label: 'Teplota [°C]'
+      marker_size: 2
+      line_width: 3
+      label_cz: 'Teplota [°C]'
+      label_de: 'Temperatur [°C]'
       label_weight: 'bold'
       label_color: 'k'
   right_y: 
       name: 'Vlhkost'
+      name_de: 'Feuchtigkeit'
       marker: 's'
-      marker_size: 5
-      line_width: 4
-      label: 'Vlhkost [%]'
+      marker_size: 2
+      line_width: 3
+      label_cz: 'Vlhkost [%]'
+      label_de: 'Feuchtigkeit [%]'
       label_color: 'k'
       label_weight: 'bold'
   x_axis: 
       name: 'Datum a čas'
       label_color: 'k'
       label_weight: 'bold'
-      label: 'Datum a čas'
+      label_cz: 'Datum a čas'
+      label_de: 'Datum und Uhrzeit'
   
 # Nastavení plotu
 figure:
@@ -57,7 +69,8 @@ figure:
 save:
     on_off: True
     path: "vystupy/grafy"  # Složka pro export
-    filename_prefix: "sensor_report"
+    filename_prefix_cz: "cz_sensor_report"
+    filename_prefix_de: "de_sensor_report"
     format: ['eps', 'png', 'pdf']
     dpi: 600
     transparent: True

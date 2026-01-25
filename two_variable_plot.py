@@ -64,11 +64,11 @@ def plot_sensor_data(
         linewidth=left_col["line_width"],
         marker=left_col["marker"],
         markersize = left_col["marker_size"],
-        label=left_col["label"],
+        label=left_col[f'label_{config['language']}'],
         )
 
     ax1.set_ylabel(
-        left_col["label"],
+        left_col[f'label_{config['language']}'],
         fontweight=left_col['label_weight'],
         color=left_col["label_color"],
         fontsize = config["figure"]["font_size"],
@@ -85,11 +85,11 @@ def plot_sensor_data(
         linewidth=right_col["line_width"],
         marker=right_col["marker"],
         markersize = right_col["marker_size"],
-        label=right_col["label"],
+        label=right_col[f'label_{config['language']}'],
         )
 
     ax2.set_ylabel(
-        right_col["label"],
+        right_col[f'label_{config['language']}'],
         fontweight=right_col['label_weight'],
         color=right_col["label_color"],
         fontsize = config["figure"]["font_size"],
@@ -104,7 +104,7 @@ def plot_sensor_data(
         mdates.AutoDateLocator()
         )
     ax1.set_xlabel(
-        x_col['label'],
+        x_col[f'label_{config['language']}'],
         fontsize=config['figure']['tick_size'],
         fontweight=x_col['label_weight']
         )
@@ -134,12 +134,20 @@ def plot_sensor_data(
     # 6. Dynamický nadpis s rozptylem času
     min_date = df[x_col['name']].min().strftime('%d.%m.%Y')
     max_date = df[x_col['name']].max().strftime('%d.%m.%Y')
-    plt.title(
-        f"Senzor {sensor}, analýza: {left_col['name']} a {right_col['name']}\n"
-        f"({min_date} - {max_date})",
-        fontsize = config["figure"]["title_size"],
-        fontweight = config["figure"]['title_weight']
-        )
+    if config['language'] == 'cz':
+        plt.title(
+            f"Senzor {sensor}, analýza: {left_col['name']} a {right_col['name']}\n"
+            f"({min_date} - {max_date})",
+            fontsize = config["figure"]["title_size"],
+            fontweight = config["figure"]['title_weight']
+            )
+    elif config['language'] == 'de':
+        plt.title(
+            f"Sensor  {sensor}, Analyse: {left_col['name_de']} und {right_col['name_de']}\n"
+            f"({min_date} - {max_date})",
+            fontsize = config["figure"]["title_size"],
+            fontweight = config["figure"]['title_weight']
+            )
 
     # Sjednocení legendy (nepovinné, ale vypadá to lépe)
     lines, labels = ax1.get_legend_handles_labels()
@@ -174,7 +182,7 @@ def plot_sensor_data(
         # Sestavení názvu souboru (prefix + časový rozsah)
         # prefix = save_cfg.get('filename_prefix', 'plot')
         filename = f"{
-            save_cfg.get('filename_prefix', 'plot')
+            save_cfg.get(f'filename_prefix_{config['language']}', 'plot')
             }_{sensor}_{min_date}_{max_date}".replace('.', '-')
 
         # Cyklus přes požadované formáty
@@ -205,23 +213,25 @@ if __name__ == "__main__":
             "r",
             encoding="utf-8",
             ) as f:
-        cfg = yaml.safe_load(f)
+        cfg = yaml.safe_load(
+            f
+            )
 
     # Načtení dat z Excelu (používáme cestu z YAML)
     # Přidán decimal=',' pro správné načtení českých čísel
     try:
         # Volání funkce
-        for sensor in cfg.get('sensor', [None]):
-            if sensor:
+        for sensor_name in cfg.get('sensor', [None]):
+            if sensor_name:
                 data = pd.read_excel(
                     cfg['file_path'],
                     decimal=',',
-                    sheet_name=sensor,
+                    sheet_name=sensor_name,
                     )
                 plot_sensor_data(
                     data,
                     cfg,
-                    sensor,
+                    sensor_name,
                     )
-    except Exception as e:
-        print(f"Nastala chyba: {e}")
+    except FileNotFoundError:
+        print("Chyba: Soubor s daty nebyl nalezen. Zkontroluj cestu k souboru.")
