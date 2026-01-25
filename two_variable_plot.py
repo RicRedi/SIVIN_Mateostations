@@ -136,7 +136,7 @@ def plot_sensor_data(
     max_date = df[x_col['name']].max().strftime('%d.%m.%Y')
     if config['language'] == 'cz':
         plt.title(
-            f"Senzor {sensor}, analýza: {left_col['name']} a {right_col['name']}\n"
+            f"Senzor {sensor}, Analýza: {left_col['name']} a {right_col['name']}\n"
             f"({min_date} - {max_date})",
             fontsize = config["figure"]["title_size"],
             fontweight = config["figure"]['title_weight']
