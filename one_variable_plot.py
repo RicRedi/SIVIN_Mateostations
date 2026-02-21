@@ -1,9 +1,24 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Thu Dec 18 12:55:16 2025
 
-@author: xredin00
 """
+Created on 21. 02. 2026 at 11:44:10
+
+Author: Richard Redina
+Email: 195715@vut.cz
+Affiliation:
+         International Clinical Research Center, Brno
+         Brno University of Technology, Brno
+GitHub: RicRedi
+
+(._.)
+ <|>
+_/|_
+
+Description:
+    Ploting only one variable
+"""
+
+
 import os
 import pandas as pd
 import seaborn as sns
@@ -51,8 +66,7 @@ def plot_sensor_data(
         figsize = tuple(config['figure']['fig_size'])
         )
 
-    left_col = config['axes']['left_y']
-    right_col = config['axes']['right_y']
+    left_col = config['axes']['y_axis']
 
     # 3. Vykreslení - Levá osa (První barva z Set2)
     sns.lineplot(
@@ -71,27 +85,6 @@ def plot_sensor_data(
         left_col[f'label_{config['language']}'],
         fontweight=left_col['label_weight'],
         color=left_col["label_color"],
-        fontsize = config["figure"]["font_size"],
-        )
-
-    # 4. Vykreslení - Pravá osa (Druhá barva z Set2)
-    ax2 = ax1.twinx()
-    sns.lineplot(
-        data=df,
-        x=x_col['name'],
-        y=right_col["name"],
-        ax=ax2,
-        color=colors[1],
-        linewidth=right_col["line_width"],
-        marker=right_col["marker"],
-        markersize = right_col["marker_size"],
-        label=right_col[f'label_{config['language']}'],
-        )
-
-    ax2.set_ylabel(
-        right_col[f'label_{config['language']}'],
-        fontweight=right_col['label_weight'],
-        color=right_col["label_color"],
         fontsize = config["figure"]["font_size"],
         )
 
@@ -123,27 +116,20 @@ def plot_sensor_data(
         labelcolor=left_col["label_color"]
         )
 
-    # Pravá osa Y (Vlhkost)
-    ax2.tick_params(
-        axis='y',
-        labelsize=config['figure']['tick_size'],
-        labelcolor=right_col["label_color"]
-        )
-
 
     # 6. Dynamický nadpis s rozptylem času
     min_date = df[x_col['name']].min().strftime('%d.%m.%Y')
     max_date = df[x_col['name']].max().strftime('%d.%m.%Y')
     if config['language'] == 'cz':
         plt.title(
-            f"Senzor {sensor}, Analýza: {left_col['name']} a {right_col['name']}\n"
+            f"Senzor {sensor}, Analýza: {left_col['name']}\n"
             f"({min_date} - {max_date})",
             fontsize = config["figure"]["title_size"],
             fontweight = config["figure"]['title_weight']
             )
     elif config['language'] == 'de':
         plt.title(
-            f"Sensor  {sensor}, Analyse: {left_col['name_de']} und {right_col['name_de']}\n"
+            f"Sensor  {sensor}, Analyse: {left_col['name_de']}\n"
             f"({min_date} - {max_date})",
             fontsize = config["figure"]["title_size"],
             fontweight = config["figure"]['title_weight']
@@ -151,10 +137,10 @@ def plot_sensor_data(
 
     # Sjednocení legendy (nepovinné, ale vypadá to lépe)
     lines, labels = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
+    # lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(
-        lines + lines2,
-        labels + labels2,
+        lines,
+        labels,
         loc=config['figure']['legend_loc'],           # 'upper center'
         bbox_to_anchor=(
             0.5, # Polovina obrázku
@@ -164,7 +150,7 @@ def plot_sensor_data(
         fontsize=config['figure']['font_size'],
         frameon=True                                  # O rámeček se postaráme podle vkusu
     )
-    ax2.get_legend().remove()
+    # ax2.get_legend().remove()
 
     fig.tight_layout()
     # 7. Ukládání (vložte před plt.show())
@@ -183,7 +169,9 @@ def plot_sensor_data(
         # prefix = save_cfg.get('filename_prefix', 'plot')
         filename = f"{
             save_cfg.get(f'filename_prefix_{config['language']}', 'plot')
-            }_{sensor}_{min_date}_{max_date}".replace('.', '-')
+            }_{
+                config['axes']['y_axis'][f'label_{config['language']}']
+                }_{sensor}_{min_date}_{max_date}".replace('.', '-')
 
         # Cyklus přes požadované formáty
         for fmt in save_cfg.get('format', ['eps']):
@@ -209,7 +197,7 @@ def plot_sensor_data(
 if __name__ == "__main__":
     # Načtení YAML konfigurace
     with open(
-            "./config/two_variable_plot.yaml",
+            "./config/one_variable_plot.yaml",
             "r",
             encoding="utf-8",
             ) as f:

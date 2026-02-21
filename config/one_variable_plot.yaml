@@ -1,0 +1,69 @@
+
+# Created on Thu Dec 18 13:00:23 2025
+
+# author: 
+
+# Nastavení cesty k souboru
+file_path: 'data.xlsx'
+
+# Časové omezení (formát RRRR-MM-DD HH:MM:SS)
+# Můžete nechat prázdné nebo smazat, pokud omezení nechcete
+date_from: '2026-01-10 00:00:00'
+date_to: '2026-01-14 23:59:59'
+
+language: de # cz
+
+sensor: [
+    # "9986",
+    # "8271", 
+    "0065",
+    #  "0921",
+     ]
+# Sampling frequency [Hz] (= 1/1825 seconds)
+T_s: 1825
+f_s: 0.000547945
+
+# Nastavení os
+axes:
+  y_axis:
+      name: 'Vlhkost'
+      name_de: 'Feuchtigkeit'
+      marker: 's'
+      marker_size: 2
+      line_width: 3
+      label_cz: 'Vlhkost [%]'
+      label_de: 'Feuchtigkeit [%]'
+      label_color: 'k'
+      label_weight: 'bold'
+  x_axis: 
+      name: 'Datum a čas'
+      name_de: 'Datum unf Uhrzeit'
+      label_color: 'k'
+      label_weight: 'bold'
+      label_cz: 'Datum a čas'
+      label_de: 'Datum und Uhrzeit'
+  
+# Nastavení plotu
+figure:
+    fig_size: [12,8]
+    font_size: 16
+    tick_size: 16
+    x_tick_rotation: 45
+    title_size: 20
+    title_weight: 'bold'
+    legend_loc: 'upper center'
+    legend_cols: 2
+    legend_y_offset: -0.2
+    color_palette: 'Set2'
+
+# Nastavení ukládání grafů
+save:
+    on_off: True
+    path: "vystupy/grafy"  # Složka pro export
+    filename_prefix_cz: "cz_sensor_report"
+    filename_prefix_de: "de_sensor_report"
+    format: ['eps', 'png', 'pdf']
+    dpi: 600
+    transparent: True
+        
+
