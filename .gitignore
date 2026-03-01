@@ -135,9 +135,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
-.envrc
-.venv
+*.env
+*.envrc
+*.venv
 env/
 venv/
 ENV/
@@ -215,3 +215,4 @@ __marimo__/
 *.eps
 # Grafy
 vystupy/
+data/

@@ -1,0 +1,38 @@
+# ============================================================
+# Project  : SIVIN_METEOSTATIONS
+# File     : vineyard_analyst.yaml
+# Created on 22. 02. 2026 at 11:20:54
+#
+# Author: Richard Redina
+# Email: 195715@vut.cz
+# Affiliation:
+#          International Clinical Research Center, Brno
+#          Brno University of Technology, Brno
+# GitHub: RicRedi
+# 
+# (._.)
+#  <|>
+# _/|_
+# 
+# Description:
+#     Short description of the script.
+# ============================================================
+
+# Nastavení cesty k souboru
+file_path: 'data.xlsx'
+
+# Časové omezení (formát RRRR-MM-DD HH:MM:SS)
+# Můžete nechat prázdné nebo smazat, pokud omezení nechcete
+date_from: '2026-01-01 00:00:00'
+date_to: '2026-01-05 23:59:59'
+
+language: cz
+
+sensor: [
+    "9986",
+    "8271", 
+    "0065",
+    "0921",
+     ]
+
+gdd_base: 10
