@@ -139,40 +139,40 @@ try:
                 By.XPATH, "//button[.//i[contains(@class, 'mdi-file-excel')]]"
                 )
 
-            target_btn = None
+            TARGET_BTN = None
             for btn in excel_btns:
                 if btn.is_displayed(): # Chceme jen to, které vidíš na obrazovce
-                    target_btn = btn
+                    TARGET_BTN = btn
                     break
 
-            if target_btn:
+            if TARGET_BTN:
                 driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", target_btn
+                    "arguments[0].scrollIntoView({block: 'center'});", TARGET_BTN
                     )
                 time.sleep(1)
-                driver.execute_script("arguments[0].click();", target_btn)
+                driver.execute_script("arguments[0].click();", TARGET_BTN)
                 print(f"Excel pro {name} odeslán ke stažení.")
                 time.sleep(5)
             else:
                 print("Viditelné tlačítko Excel nenalezeno.")
             # 3. Počkáme, až se objeví nový soubor a zmizí přípona .crdownload
             # (dočasný soubor Chromu)
-            timeout = 30
+            TIMEOUT = 30
             start_time = time.time()
-            new_file = None
+            NEW_FILE = None
 
-            while time.time() - start_time < timeout:
+            while time.time() - start_time < TIMEOUT:
                 current_latest = get_latest_file(download_folder)
                 if current_latest and not current_latest.endswith('.crdownload'):
-                    new_file = current_latest
+                    NEW_FILE = current_latest
                     break
                 time.sleep(1)
 
-            print(f"Stáhnut soubor: {new_file}")
+            print(f"Stáhnut soubor: {NEW_FILE}")
             # 5. Návrat zpět
             driver.back()
 
-        except Exception as e:
+        except ValueError as e:
             print(f"Chyba u čidla {name}: {e}")
             # Pokud se něco pokazí, zkusíme se vrátit na hlavní stránku SIVIN VUT
             driver.get("tvoje_url_s_vypisem_sivin_vut")

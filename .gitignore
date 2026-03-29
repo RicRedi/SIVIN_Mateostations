@@ -213,6 +213,10 @@ __marimo__/
 *.png
 *.pdf
 *.eps
+
+# Guides
+*.md
+
 # Grafy
 vystupy/
 data/

@@ -49,7 +49,7 @@ The SIVIN_Mateostations project provides an integrated workflow for:
 ```
 SIVIN_Mateostations/
 ├── chrome_driver.py              # Automated web scraper for data collection
-├── chrome_driver.env             # Environment variables (credentials, paths) - KEEP SECURE
+├── chrome_driver.env             # Environment variables (credentials, paths) - USER-CONFIGURED, KEEP SECURE
 ├── vineyard_analyst.py           # Core analysis engine with viticulture metrics
 ├── vineyard_analyst.yaml         # Configuration for vineyard analysis
 ├── one_variable_plot.py          # Single-variable plotting script
@@ -75,6 +75,31 @@ SIVIN_Mateostations/
 ├── requirements.txt              # Python package dependencies
 └── README.md                     # This file
 ```
+
+**Key Files**:
+
+- **`chrome_driver.env`** - Configuration file (YOU CREATE THIS)
+  - Contains portal credentials and download settings
+  - Never commit to version control
+  - Must be created by each team member with their own credentials
+  - See [Step 6: Configure Chrome Driver Environment](#step-6-configure-chrome-driver-environment) for template
+
+- **`chrome_driver.py`** - Web scraper (SYSTEM FILE)
+  - Automatically downloads data from SIVIN VUT portal
+  - Loads all settings from `chrome_driver.env`
+  - Requires Chrome browser installed
+
+- **`vineyard_analyst.py`** - Analysis engine (SYSTEM FILE)
+  - Calculates viticulture metrics from downloaded data
+  - Configured via `vineyard_analyst.yaml`
+
+- **`data/`** - Input folder
+  - Store downloaded Excel files here
+  - Path configured in `chrome_driver.env` (`DOWNLOAD_FOLDER` parameter)
+
+- **`vystupy/`** - Output folder
+  - Analysis JSON files
+  - Generated plots in multiple formats
 
 ---
 
@@ -111,18 +136,6 @@ conda activate sivin
 pip install -r requirements.txt
 ```
 
-### Step 4: Configure Credentials
-
-Create `chrome_driver.env` in the project root with:
-
-```env
-SIVIN_USER=your_username
-SIVIN_PASSWORD=your_password
-DOWNLOAD_FOLDER=C:\absolute\path\to\downloads
-```
-
-**Security Note**: Never commit `chrome_driver.env` to version control. Add it to `.gitignore` if not already done.
-
 ### Step 5: Create Output Directories
 
 ```bash
@@ -131,6 +144,136 @@ mkdir vystupy\grafy\eps
 mkdir vystupy\grafy\pdf
 mkdir vystupy\grafy\png
 ```
+
+### Step 6: Configure Chrome Driver Environment
+
+Create `chrome_driver.env` in the project root directory. This file contains all configuration needed for automated data collection from the SIVIN VUT portal.
+
+**Important**: Never commit `chrome_driver.env` to version control (add it to `.gitignore`). Each team member should create their own copy with their credentials.
+
+#### Template for chrome_driver.env
+
+Create a file named `chrome_driver.env` with the following structure:
+
+```env
+# ============================================================
+# CREDENTIALS (required)
+# ============================================================
+SIVIN_USER=your_username
+SIVIN_PASSWORD=your_password
+
+# ============================================================
+# FILE PATHS (required)
+# ============================================================
+# Absolute path where Excel files will be downloaded
+DOWNLOAD_FOLDER=C:\path\to\your\download\folder
+
+# ============================================================
+# TIMING CONFIGURATION (in seconds)
+# Adjust these based on your network speed and system performance
+# ============================================================
+# Maximum time to wait for page elements to appear (login, tabs, buttons)
+WAIT_TIMEOUT=15
+
+# Maximum time to wait for file download to complete
+DOWNLOAD_WAIT_TIMEOUT=30
+
+# Delay after scrolling the page (prevents timing issues)
+SCROLL_WAIT=1
+
+# Delay for element rendering after page navigation
+ELEMENT_LOAD_WAIT=3
+
+# ============================================================
+# PORTAL CONFIGURATION
+# ============================================================
+# URL of the SIVIN VUT portal
+PORTAL_URL=https://lemon.e-service.cz/
+
+# Exact name of the SIVIN folder in the portal (case-sensitive)
+SIVIN_FOLDER_NAME=SIVIN VUT
+
+# Exact name of the Meteorological Data tab (case-sensitive)
+METEO_TAB_NAME=Meteorologická data
+```
+
+#### Parameter Reference
+
+| Parameter | Type | Required | Default | Purpose | Example |
+|-----------|------|----------|---------|---------|---------|
+| `SIVIN_USER` | string | Yes | - | SIVIN VUT portal login username | `195715@vut.cz` |
+| `SIVIN_PASSWORD` | string | Yes | - | SIVIN VUT portal login password | `YourSecurePassword123` |
+| `DOWNLOAD_FOLDER` | path | Yes | - | Absolute directory path for downloaded Excel files. Must exist. | `C:\Users\Username\Downloads` |
+| `WAIT_TIMEOUT` | integer | No | 15 | Max seconds to wait for page elements (buttons, tabs, links). Increase if portal is slow. | `20` |
+| `DOWNLOAD_WAIT_TIMEOUT` | integer | No | 30 | Max seconds to wait for file download to complete. Increase for slow connections. | `45` |
+| `SCROLL_WAIT` | float | No | 1 | Pause time (seconds) after scrolling page. Prevents timing conflicts. | `1.5` |
+| `ELEMENT_LOAD_WAIT` | integer | No | 3 | Pause time (seconds) for elements to render after page navigation. | `5` |
+| `PORTAL_URL` | URL | No | `https://lemon.e-service.cz/` | Base URL of SIVIN VUT portal. Change only if portal URL changes. | - |
+| `SIVIN_FOLDER_NAME` | string | No | `SIVIN VUT` | Exact name of main folder in portal (portal-specific, match case exactly). | `SIVIN VUT` |
+| `METEO_TAB_NAME` | string | No | `Meteorologická data` | Exact name of meteorological data tab (portal-specific, match case exactly). | `Meteorologická data` |
+
+#### Common Configuration Scenarios
+
+**Slow Network / Slow Portal**:
+```env
+WAIT_TIMEOUT=25
+DOWNLOAD_WAIT_TIMEOUT=60
+SCROLL_WAIT=2
+ELEMENT_LOAD_WAIT=5
+```
+
+**Fast Network / Responsive System**:
+```env
+WAIT_TIMEOUT=10
+DOWNLOAD_WAIT_TIMEOUT=20
+SCROLL_WAIT=0.5
+ELEMENT_LOAD_WAIT=1
+```
+
+**Custom Download Location**:
+```env
+# Windows user folder
+DOWNLOAD_FOLDER=C:\Users\YourUsername\Documents\MeteoData
+
+# Network path
+DOWNLOAD_FOLDER=\\server\shared\meteorological_data
+
+# Different drive
+DOWNLOAD_FOLDER=D:\MeteoData\downloads
+```
+
+#### Validation Checklist
+
+Before running `chrome_driver.py`, verify:
+
+- ✓ File is named exactly `chrome_driver.env` (not `.env.txt`)
+- ✓ Located in project root directory (same folder as `chrome_driver.py`)
+- ✓ `SIVIN_USER` and `SIVIN_PASSWORD` are valid (can login to portal manually)
+- ✓ `DOWNLOAD_FOLDER` exists and you have write permissions
+- ✓ File has no BOM (Byte Order Mark) - save as UTF-8 without BOM in text editor
+- ✓ No trailing spaces after values
+
+#### Troubleshooting
+
+**Error**: `Environment file not found: chrome_driver.env`
+- **Cause**: File not in project root or misspelled
+- **Solution**: Ensure file is named `chrome_driver.env` in `C:\SIVIN_Mateostations\`
+
+**Error**: `Missing SIVIN_USER or SIVIN_PASSWORD in .env file`
+- **Cause**: Credentials not set or empty
+- **Solution**: Add valid credentials between the quotes: `SIVIN_USER=username`
+
+**Error**: `Download folder does not exist`
+- **Cause**: Path in `DOWNLOAD_FOLDER` doesn't exist
+- **Solution**: Create folder first: `mkdir C:\path\to\folder` or change path in .env
+
+**Error**: `Download folder is not writable`
+- **Cause**: Insufficient permissions to the folder
+- **Solution**: Check folder permissions, run VS Code as Administrator, or use different folder
+
+**Warning**: `Download timeout for sensor`
+- **Cause**: Network slow, portal slow, or timeout too short
+- **Solution**: Increase `WAIT_TIMEOUT` and `DOWNLOAD_WAIT_TIMEOUT` values
 
 ---
 
@@ -142,12 +285,22 @@ mkdir vystupy\grafy\png
 
 **File**: `chrome_driver.py`
 
+**Prerequisites**:
+- `chrome_driver.env` file configured (see [Configure Chrome Driver Environment](#step-6-configure-chrome-driver-environment))
+- Valid SIVIN VUT portal credentials
+- Chrome browser installed and updated
+
 **How it works**:
-1. Authenticate with SIVIN VUT portal (lemon.e-service.cz)
-2. Navigate to SIVIN folder structure
-3. For each configured sensor, click to the meteorological data tab
-4. Download Excel file automatically
-5. Store file with timestamp
+1. Loads configuration from `chrome_driver.env` file
+2. Authenticates with SIVIN VUT portal (lemon.e-service.cz)
+3. Navigates to SIVIN folder and retrieves device list
+4. For each sensor:
+   - Clicks to sensor details
+   - Navigates to meteorological data tab
+   - Locates and clicks the Excel export button in "Historie meteorologických dat" section
+   - Waits for file download to complete
+   - Validates downloaded file size
+5. Closes browser and reports results
 
 **To Run**:
 
@@ -155,21 +308,67 @@ mkdir vystupy\grafy\png
 python chrome_driver.py
 ```
 
-**What happens**:
-- Opens Chrome browser (runs in background after initial setup)
-- Logs in with credentials from `.env`
-- Iterates through all sensors in SIVIN VUT
-- Downloads Excel files to configured `DOWNLOAD_FOLDER`
-- Closes browser upon completion
+**Output**:
+- Downloads timestamped Excel files to `DOWNLOAD_FOLDER` specified in `.env`
+- Logs progress and any errors to console
+- Returns exit code 0 if ≥1 file downloaded, 1 if no files downloaded
 
-**Configuration Requirements**:
-- `chrome_driver.env` must exist with valid credentials
-- `DOWNLOAD_FOLDER` must exist (script doesn't create it)
+**Log Output Example**:
+```
+======================================================================
+SIVIN VUT DATA DOWNLOADER
+======================================================================
+✓ Configuration loaded from: c:\SIVIN_Mateostations\chrome_driver.env
+  Credentials: ✓ Loaded
+  Download folder: C:\SIVIN_Mateostations\data
+  Wait timeout: 15 seconds
+  Download timeout: 30 seconds
+  Portal: https://lemon.e-service.cz/
+✓ Chrome WebDriver initialized
+Logging in as: 195715@vut.cz
+✓ Login successful - dashboard loaded
+✓ Found 4 devices: ['8615620 77678271', '8615620 77680921', '8615620 77799986', '8615620 77800065']
 
-**Troubleshooting**:
-- If login fails, check credentials in `chrome_driver.env`
-- If browser hangs, verify Chrome is installed and up-to-date
-- TimeoutException errors indicate slow network or portal slowness
+Processing sensor: 8615620 77678271
+  ✓ Clicked on sensor
+  ✓ Switched to Meteorologická data
+  ✓ Found Excel button in historia section
+  ✓ Excel export postback initiated
+  ✓ File downloaded: MeteoData_8615620 77678271.xlsx
+```
+
+**Configuration Requirements** (see `.env` template above):
+- `SIVIN_USER`: Portal login username
+- `SIVIN_PASSWORD`: Portal login password
+- `DOWNLOAD_FOLDER`: Folder where files are saved (must exist and be writable)
+- `WAIT_TIMEOUT`: Timeout for page elements (default 15s, increase if network is slow)
+- `DOWNLOAD_WAIT_TIMEOUT`: Timeout for downloads (default 30s)
+- `ELEMENT_LOAD_WAIT`: Delay for page rendering (default 3s)
+- `SCROLL_WAIT`: Delay after scrolling (default 1s)
+
+**Common Issues & Solutions**:
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `Environment file not found` | `chrome_driver.env` missing | Create file with template above |
+| `Missing SIVIN_USER or SIVIN_PASSWORD` | Empty credentials | Add valid username/password |
+| `Login timeout` or `Login element not found` | Invalid credentials or slow portal | Verify credentials manually, increase `WAIT_TIMEOUT` |
+| `Download timeout for all sensors` | Button click not triggering download | This is expected if you're rerunning on same data; use empty folder first time |
+| `No visible Excel button found` | Portal structure changed | Check portal UI, compare with HTML structure, update XPath if needed |
+| `TimeoutException: UpdateProgress` | Portal updates taking too long | Increase `ELEMENT_LOAD_WAIT` and `WAIT_TIMEOUT` values |
+
+**Advanced Troubleshooting**:
+
+- For detailed logging, check console output for `✓` (success) and `✗` (failure) indicators
+- The script logs every 5 download status checks with elapsed time and file count
+- If browser window gets stuck, wait for timeout (30 seconds default) or increase timeouts in `.env`
+- Check that Chrome is updated: `chrome://version/` should show recent version
+
+**Security Notes**:
+- Never share `chrome_driver.env` file containing credentials
+- Each team member should create their own copy with their credentials
+- Credentials are loaded from environment variables, not hardcoded in script
+- Portal URL can be modified if portal endpoint changes
 
 ---
 
@@ -358,6 +557,78 @@ Rozdíl mezi timestamp 2 a 1: 1825.00 s, 30.42 min, 0.51 h
 ---
 
 ## Component Documentation
+
+### Chrome Driver
+
+**Location**: `chrome_driver.py`
+
+**Purpose**: Automated web scraper for downloading meteorological data from SIVIN VUT portal
+
+**Architecture**:
+- Configuration-driven: All settings loaded from `chrome_driver.env`
+- Modular design: Separate functions for login, navigation, and download
+- Robust error handling: Specific exception types for debugging
+- Smart file detection: Tracks new files by comparing filesystem state before/after download
+
+**Key Functions**:
+
+| Function | Parameters | Returns | Purpose |
+|----------|------------|---------|---------|
+| `load_config()` | None | dict | Load and validate all configuration from .env file |
+| `initialize_driver()` | None | WebDriver | Initialize Chrome WebDriver with download preferences |
+| `login_to_portal()` | driver, config | WebElement | Authenticate with portal and return SIVIN folder element |
+| `open_sivin_folder()` | driver, folder, config | list | Extract device names from folder |
+| `download_sensor_data()` | driver, wait, sensor, config | str | Download Excel file for single sensor |
+| `main()` | None | int | Orchestrate entire download pipeline |
+| `get_latest_file()` | folder_path | str | Find newest file in directory (helper function) |
+
+**Configuration Loading** (Critical):
+```python
+# Automatically loads from chrome_driver.env file
+config = load_config()
+
+# Returns dictionary with all 10 configuration parameters:
+# - username, password
+# - download_folder
+# - wait_timeout, download_wait_timeout, scroll_wait, element_load_wait
+# - portal_url, sivin_folder_name, meteo_tab_name
+```
+
+**File Download Logic**:
+1. **Before download**: Records all existing files in download folder
+2. **After export button click**: Waits for NEW files to appear (not in original list)
+3. **Completion detection**: Ignores incomplete `.crdownload` files
+4. **Validation**: Checks file size (warns if < 10 KB, likely incomplete)
+
+This approach ensures:
+- ✓ Works with empty folders (all downloads are "new")
+- ✓ Works with pre-existing files (finds only new downloads)
+- ✓ No false positives from old files
+- ✓ Handles multiple sensors independently
+
+**Error Handling**:
+- `RuntimeError`: Missing/invalid configuration
+- `TimeoutError`: Page elements not found within timeout
+- `ValueError`: Unexpected element structure
+- `FileExistsError`, `OSError`: File system issues
+
+**Important Notes**:
+
+1. **DotVVM Framework**: Portal uses DotVVM which requires proper event handling
+   - Uses direct `.click()` method (not JavaScript) to trigger postback
+   - Specific button selection using "Historie meteorologických dat" section header
+
+2. **Security**: Credentials in `.env` file never logged or exposed
+
+3. **Browser Management**:
+   - Opens Chrome browser for duration of script
+   - Automatically closes browser on completion (finally block)
+   - Sets download folder to temp directory for safety
+
+4. **Logging**:
+   - Comprehensive info, debug, and error logging
+   - Progress indicators (✓ success, ✗ error, ⚠ warning)
+   - File count tracking during download wait
 
 ### VineyardAnalyst Class
 
