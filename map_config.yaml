@@ -1,0 +1,36 @@
+# ============================================================
+# Project  : Project Name
+# File     : map_config.yaml
+# Created on 29. 03. 2026 at 22:05:01
+#
+# Author: Richard Redina
+# Email: 195715@vut.cz
+# Affiliation:
+#          International Clinical Research Center, Brno
+#          Brno University of Technology, Brno
+# GitHub: RicRedi
+# 
+# (._.)
+#  <|>
+# _/|_
+# 
+# Description:
+#     Short description of the script.
+# ============================================================
+paths:
+  data_folder: "./data"
+  gpx_file: "./sensor_location.gpx"
+  output_video: "vinice_animace.mp4"
+
+analysis:
+  start_date: "2026-02-22 00:00:00"
+  end_date: "2026-02-22 23:59:59"
+  target_value: "Teplota" # nebo "Vlhkost"
+  resample_period: "h"   # Průměrování po hodinách (h, 30min, atd.) - Use 'h' not 'H' (deprecated)
+
+video:
+  fps: 5                  # Rychlost animace (snímky za sekundu)
+  dpi: 150                # Kvalita obrazu
+  colormap: "coolwarm"    # "coolwarm" pro teplotu, "YlGnBu" pro vlhkost
+  format: "gif"           # Output format: "mp4" (requires FFmpeg), "gif" (no dependencies), "png_frames" (individual frames)
+  padding_factor: 0.50    # Map margin around sensors (0.1=tight, 0.2=normal, 0.5=very wide context)
