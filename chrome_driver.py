@@ -157,11 +157,11 @@ try:
                 print("Viditelné tlačítko Excel nenalezeno.")
             # 3. Počkáme, až se objeví nový soubor a zmizí přípona .crdownload
             # (dočasný soubor Chromu)
-            TIMEOUT = 30
+            timeout = 30
             start_time = time.time()
             NEW_FILE = None
 
-            while time.time() - start_time < TIMEOUT:
+            while time.time() - start_time < timeout:
                 current_latest = get_latest_file(download_folder)
                 if current_latest and not current_latest.endswith('.crdownload'):
                     NEW_FILE = current_latest

@@ -30,7 +30,7 @@ GitHub: RicRedi
 Created: 29. 03. 2026
 """
 
-import os
+# import os
 import sys
 import re
 import logging
@@ -115,7 +115,7 @@ def load_and_validate_config(config_path: Path) -> Dict:
     logger.info("Loading configuration from %s", config_path)
 
     if not config_path.exists():
-        raise FileNotFoundError("Configuration file not found: %s", config_path)
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
@@ -124,13 +124,13 @@ def load_and_validate_config(config_path: Path) -> Dict:
     required_sections = ['paths', 'analysis', 'video']
     for section in required_sections:
         if section not in config:
-            raise ValueError("Configuration missing required section: '%s'", section)
+            raise ValueError(f"Configuration missing required section: '{section}'")
 
     # Validate required keys
     required_paths = ['data_folder', 'gpx_file', 'output_video']
     for key in required_paths:
         if key not in config['paths']:
-            raise ValueError("Configuration missing 'paths.%s'", key)
+            raise ValueError(f"Configuration missing 'paths.{key}'")
 
     required_analysis = ['start_date', 'end_date', 'target_value', 'resample_period']
     for key in required_analysis:
@@ -186,7 +186,7 @@ def validate_prerequisites(config: Dict, project_root: Path) -> Tuple[Path, Path
     # Check for CSV files
     csv_files = list(data_folder.glob('*.csv'))
     if not csv_files:
-        raise ValueError("No CSV files found in %s", data_folder)
+        raise ValueError(f"No CSV files found in {data_folder}")
     logger.info("Found %d CSV files in data folder", len(csv_files))
 
     # Resolve GPX file path
@@ -195,13 +195,13 @@ def validate_prerequisites(config: Dict, project_root: Path) -> Tuple[Path, Path
         gpx_file = project_root / gpx_file
 
     if not gpx_file.exists():
-        raise FileNotFoundError("GPX file not found: %s", gpx_file)
-    logger.info("GPX file found: %s", gpx_file.name)
+        raise FileNotFoundError(f"GPX file not found: {gpx_file}")
+    logger.info("GPX file found: {gpx_file.name}")
 
     # Create output folder if needed
-    output_folder = project_root / 'vystupy' / 'grafy'
+    output_folder = project_root / 'vystupy' / 'grafy' / 'animace'
     output_folder.mkdir(parents=True, exist_ok=True)
-    logger.info("Output folder ready: %s", output_folder)
+    logger.info("Output folder ready: {output_folder}")
 
     return data_folder, gpx_file, output_folder
 
@@ -224,7 +224,7 @@ def load_sensor_locations(gpx_file: Path) -> gpd.GeoDataFrame:
     try:
         gdf_sensors = gpd.read_file(gpx_file, layer='waypoints')
     except Exception as e:
-        raise ValueError("Failed to read GPX file: %s", e)
+        raise ValueError(f"Failed to read GPX file: {e}")
 
     if len(gdf_sensors) == 0:
         raise ValueError("No waypoints found in GPX file")
@@ -236,7 +236,7 @@ def load_sensor_locations(gpx_file: Path) -> gpd.GeoDataFrame:
     gdf_sensors = gdf_sensors.to_crs(epsg=3857)
 
     logger.info("Loaded %d sensor locations:", len(gdf_sensors))
-    for idx, row in gdf_sensors.iterrows():
+    for _, row in gdf_sensors.iterrows():
         logger.info("  - %s", row['name'])
 
     return gdf_sensors
@@ -379,8 +379,8 @@ def load_and_process_data(
         try:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date)
-        except Exception as e:
-            raise ValueError("Invalid date format: %s", e)
+        except ValueError as e:
+            raise ValueError(f"Invalid date format: {e}")
 
         df_filtered = df[(df['Čas'] >= start_dt) & (df['Čas'] <= end_dt)].copy()
 
@@ -397,7 +397,7 @@ def load_and_process_data(
                 .agg({target_value: 'mean'})
                 .reset_index()
             )
-        except Exception as e:
+        except ValueError as e:
             logger.warning("  ⚠ Resampling failed for %s: %s", matching_sensor, e)
             continue
 
@@ -498,7 +498,8 @@ def generate_animation(
         # Calculate bounds of sensor locations and add padding
         # This ensures the map fetches the correct area from OpenStreetMap
         minx, miny, maxx, maxy = merged.total_bounds
-        padding_factor = config['video'].get('padding_factor', 0.15)  # Get from config, default 0.15
+        # Get from config, default 0.15
+        padding_factor = config['video'].get('padding_factor', 0.15)
         padding = max(maxx - minx, maxy - miny) * padding_factor
 
         # Set axis limits BEFORE adding basemap (this tells the basemap what area to fetch)
@@ -587,9 +588,10 @@ def generate_animation(
             logger.info("✓ %d PNG frames saved to: %s", len(timestamps), frames_dir)
 
     except RuntimeError as e:
+        logger.error("Failed to save animation: %s", e)
         raise RuntimeError(
-            f"Failed to save animation: {e}. \n \
-            Tip: For MP4, ensure FFmpeg is installed (ffmpeg -version)") 
+            f"Failed to save animation: {e}. \
+            Tip: For MP4, ensure FFmpeg is installed (ffmpeg -version)")
     finally:
         plt.close(fig)
 
@@ -615,7 +617,7 @@ def main() -> None:
     try:
         # Get project root
         project_root = get_project_root()
-        logger.info(f"Project root: {project_root}")
+        logger.info("Project root: %s", project_root)
 
         # Load and validate config
         config_path = project_root / 'map_config.yaml'
