@@ -203,7 +203,15 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 - A glitched first row only slightly ahead (between 2 h and about 4 h with 30-minute
   sampling) is not recognised as an outlier. The first row has no reference, and the next
   rows are not yet 2 h earlier than it. The rows within 2 h after it are then dropped and
-  reported. This needs a glitch on exactly the first row.
+  reported. This needs a glitch on exactly the first row. Measured in review round 3 (400 rows
+  at 1825 s): up to +2.5 h nothing is lost but the glitched row keeps its wrong time; from
+  +2.75 h to +3.5 h at most 2 genuine rows (about 1 h) are lost; from +3.75 h the glitched row
+  is dropped cleanly.
+- A burst of 4 or more consecutive glitched rows within the last ~5 % of a file is taken as a
+  new timeline: the wrong timestamps are imported and a few genuine rows before them are
+  dropped with a WARNING (review round 3: rows 387–390 of 400 shifted +3 days → 4 wrong rows
+  imported, 9 genuine rows dropped). Bursts of up to 3 rows, or anywhere earlier in the file,
+  are handled. Open minor, left for the owner.
 - A °F temperature column with plausible-looking values (e.g. a winter export, 30–45 °F) and a
   header without a unit is not detected. It is caught only through its header or when more
   than 5 % of the values exceed 70.
