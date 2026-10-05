@@ -1,0 +1,38 @@
+# Off-site log: periods when a sensor was NOT measuring in the vineyard
+# (office, service, transport, storage). MIGRATION_PLAN §2.8, docs/sensors.md.
+#
+# By default every sensor is assumed to measure in the vineyard. Samples recorded inside a
+# period listed here get the quality flag PRE_DEPLOYMENT, are left out of all climate indices
+# and are drawn as a grey band (without a line) in the web charts.
+#
+# One entry per period:
+#   sensor  the 8-digit serial; any known spelling of the name is accepted
+#           ("77799986", "8615620 77799986", "77799986 (VUT)").
+#   from    start, inclusive. Local time "YYYY-MM-DD HH:MM" (Europe/Prague), or ISO 8601 with
+#           an explicit offset or Z ("2025-10-26T02:30+01:00", "2025-12-17T11:00Z").
+#           Quote the value. During the repeated hour in October and the skipped hour in
+#           March a local time is rejected: give it with an explicit offset.
+#   to      end, exclusive, same formats. Write "to: null" while the sensor is still off site
+#           (only the last period of a sensor may be open).
+#   reason  office | service | transport | storage | other
+#   note    free text (optional).
+#
+# Rules checked on every run: the sensor is in sensors/sensors.geojson, from < to, periods of
+# one sensor do not overlap. An invalid log stops the pipeline with an error that names the
+# entry (entries.<index>) and the field.
+#
+# Example (remove the leading "# " to use it):
+#
+# entries:
+#   - sensor: "77799986"
+#     from: "2025-12-17 12:00"
+#     to: "2026-03-15 09:00"
+#     reason: office
+#     note: "winter storage in the office"
+#   - sensor: "77678271"
+#     from: "2026-06-02 08:00"
+#     to: null
+#     reason: service
+#     note: "battery replacement, still at the service"
+
+entries: []
