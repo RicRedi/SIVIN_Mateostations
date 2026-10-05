@@ -161,7 +161,148 @@ All commands in `/home/user/wt/wp-1.3` with the venv created by
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Gates observed by the reviewer in `/home/user/wt/wp-1.3`:
+
+- `make lint` → `All checks passed!`, `50 files already formatted`.
+- `make type` → `Success: no issues found in 31 source files`.
+- `make test` → `262 passed`.
+- `make cov` → every module in `src/sivin/ingest/portal/` at 100 % (statements and branches);
+  `Total coverage: 100.00%`.
+- `import sivin, sivin.config, sivin.ingest.portal` loads no `selenium*` module (checked).
+- Scope: the diff `bcde7d9...HEAD` touches only `src/sivin/ingest/portal/**`,
+  `tests/ingest/portal/**`, `docs/ingest.md` and this note.
+
+Probes were run outside the repo (`/tmp/claude-0/review-1.3/probe.py`, `alt.py`) against the
+real `DownloadWatcher` and the worker's fake portal.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `src/sivin/ingest/portal/watcher.py:92-129`, `client.py:266-269` | A download that times out but finishes later is attributed to the next device | open |
+| major | `src/sivin/ingest/portal/client.py:271`, `session.py:225-231`, `tests/ingest/portal/conftest.py:211-217` | `back()` is unchecked, and the fake hard-codes "a tab switch adds no history". If `back()` does not return to the list, every second device fails | open |
+| minor | `src/sivin/ingest/portal/client.py:255-265`, `settings.py:96-104` | The tab-switch and spinner race is wider than in the legacy script. The default `settle_delay_s=1` replaces legacy pauses of 3 + 1 s and 2 s, and no new explicit condition replaces them | open |
+| minor | `src/sivin/ingest/portal/settings.py:61-67`, `client.py:299-310` | "First visible Excel button" is described as the *Historie meteorologických dat* button. Nothing checks the section, so this is an unverified claim | open |
+| minor | `src/sivin/ingest/portal/client.py:269-272` | If `driver.back()` raises after a successful download, the device is recorded as failed and the file is missing from `SessionResult` | open |
+| minor | `src/sivin/ingest/portal/watcher.py:130-136` | A zero-byte new file is accepted as a finished export | open |
+| minor | `src/sivin/ingest/portal/client.py:67-77` | The temporary log-level change is process-global and not safe with concurrent clients. The level is restored on exceptions (verified) | open |
+| minor | `tests/ingest/portal/conftest.py:157-186` | The fake portal never has a `#UpdateProgress` element, so no test runs the spinner wait (visible, then invisible), its timeout message, or the race | open |
+| minor | `docs/ingest.md:190` | Troubleshooting says "every device after the first fails". With the current recovery it is every second device (see major 2) | open |
+| nit | `src/sivin/ingest/portal/watcher.py:137` | A file that first appears on the last poll before the deadline is never confirmed, so the effective timeout is one poll shorter | open |
+| nit | `src/sivin/ingest/portal/credentials.py:279-300` | A plain dataclass: `dataclasses.asdict`/`astuple`, pickling and `--showlocals` tracebacks expose the password. Consider pydantic `SecretStr` or `field(repr=False)` plus a docstring warning | open |
+| nit | `tests/ingest/portal/test_client.py:195-207` | `test_credentials_never_reach_the_logs` cannot fail with the fake driver, because it never goes through Selenium's `RemoteConnection`. The real protection is tested separately (lines 210-218), but restoration on an exception is not tested | open |
+| nit | `src/sivin/ingest/portal/driver.py:580-597` | On GitHub `ubuntu-latest` this works offline when `chromedriver` is on `PATH`. Also reading `$CHROMEWEBDRIVER` (set by the runner image) would make it independent of the symlink | open |
+
+### Details
+
+**Major 1: a late download is claimed by the next device.** Input: device A times out while
+`A.xlsx.crdownload` is still being written. The session recovers and starts device B. B's
+snapshot contains `A.xlsx.crdownload`, but not `A.xlsx`. When Chrome finishes A and renames it,
+`A.xlsx` is a new name. Wrong behaviour: B's `wait_for_new_file` returns `A.xlsx`. The
+`SessionResult` then maps A's data to device B, and B's own export becomes the "late" file for C.
+The probe reproduced this: `B got: A.xlsx`. This silently mis-attributes data, which is what the
+watcher was meant to prevent. Suggested fix (any one of these):
+(a) In `wait_for_new_file`, also exclude a completed name `X` when `X + suffix` was in the
+snapshot for any partial suffix. The watcher then also needs to track names that were partial at
+snapshot time.
+(b) After a `DownloadTimeoutError`, wait until no partial files remain in the directory, or mark
+those names as "orphaned" before the next device.
+(c) If the export file name contains the device or serial (the fake assumes
+`MeteoData_<name> ...`; unknown for the real portal), check the returned name against the
+device.
+Add a test for this scenario.
+
+**Major 2: `back()` versus reload, and an assumption the fake encodes.** The legacy script did
+one `driver.back()`. In the new code the fake portal makes `back()` correct by construction:
+`_switch_tab` sets `self.page` without a history entry. If the real "Meteorologická data" tab is
+a route link, or a DotVVM postback that changes the URL, `back()` lands on the device page.
+Simulation: the worker's fake with `_switch_tab` pushing history gives
+`ok: [device1, device3]`, `fail: [device2 "No link for device"]`. With four sensors, half the
+exports are lost on every run, and only every second run gets them, depending on the order. In
+the real flow, a device's failure is then caused by stale navigation, not by the device.
+Suggested fix: after `back()`, explicitly wait for the device list, for example for the next
+device's link or the folder/viewmodel element, with a short timeout. If it is not there, call
+`return_to_folder()` proactively. Alternatively, always use `return_to_folder()` after each
+device: it costs one reload but is deterministic. Optionally, `PortalSession` can retry a device
+once after a recovery. Add a fake variant whose tab switch pushes history, and a test that all
+devices still succeed.
+
+**Minor 3: race against the tab switch.** After the JS click on the tab, `_wait_until_idle()`
+can pass before DotVVM even shows `#UpdateProgress`. `invisibility_of_element_located` is true
+for an absent or not-yet-shown element. Then `first_visible` returns as soon as *any* Excel
+button is visible. The legacy comment says other tabs carry Excel buttons too. If the default
+device tab shows one and the tab switch or postback has not taken effect after 1 s, the wrong
+export is clicked. The legacy script waited 2 s at this point (and 3 + 1 s after the device
+click). Suggestion: set the defaults to the legacy pauses (3 s / 2 s) until the first real run.
+Better, wait for an explicit condition, such as the tab link becoming active or the button
+being inside the meteorological tab's pane. See minor 4.
+
+**Minor 4: Excel button section.** Selection is by DOM order among visible buttons. Neither the
+code nor the fake checks that the button belongs to *Historie meteorologických dat*. The
+setting's description states this as a fact. Reword it as an assumption [to be verified], or
+scope the default XPath to the section heading once the real HTML is known (open question 1
+could cover a saved page).
+
+**Minor 5: `back()` failing after a successful download.** `download_export` calls
+`self._driver.back()` after the file has been detected (`client.py:271`). A
+`WebDriverException` there turns a completed download into a `DeviceFailure`, and the path is
+lost from the result. Suggestion: return the path and let the session do the navigation in a
+separate step, with its own error handling.
+
+**Minor 6: zero-byte file.** Probe: an empty `empty.xlsx` is returned (size 0 stable in two
+polls). An empty file is never a valid export, so require `size > 0`. It is also not certain
+that Chrome never creates an empty placeholder under the final name.
+
+**Minor 7: logging.** `_secret_input_logging` restores the level in `finally`, which the probe
+verified with an exception inside the block. However, with two `PortalClient`s in parallel
+threads, client A can restore `NOTSET` while client B is typing. B's `send_keys` body is then
+logged at DEBUG. A `logging.Filter` on that logger that drops records during a thread-local or
+contextvar "typing secrets" flag would be thread-safe. Single-threaded use, which is the
+planned CLI, is fine. Exceptions: Selenium's `send_keys` errors do not echo the text, and the
+code takes no screenshots and attaches no chromedriver log, so I found no other leak path.
+
+### Comparison with the legacy `chrome_driver.py` (step by step)
+
+- Login: same steps. Native `click()` on submit (legacy: native) and an explicit presence wait
+  for `#username`. The legacy's spinner wait before `driver.get` was a bug and is rightly
+  dropped.
+- Folder: JS click after `element_to_be_clickable` (same as legacy), plus a spinner wait. The
+  viewmodel is read after an explicit presence wait (legacy: immediately). This is fine.
+- Device link: presence wait + JS click (same). Legacy: `sleep(3)`, scroll to the page bottom,
+  `sleep(1)`. New: settle 1 s + spinner wait, no scroll to the bottom. The scroll is irrelevant
+  for JS clicks unless the page lazy-loads on scroll (unknown).
+- Tab: `element_to_be_clickable` + JS click (same). Legacy: spinner + `sleep(2)`. New: spinner +
+  settle 1 s (see minor 3).
+- Excel: first `is_displayed()` button (same rule), now inside an explicit wait instead of a
+  one-shot `find_elements`, which is better. `scrollIntoView` + JS click (same). The 1 s pause
+  before the click and the 5 s pause after it are dropped. The watcher makes the 5 s pause
+  unnecessary.
+- Download detection: set difference + stable size. This fixes the legacy "newest file" bug,
+  except for major 1. The ` (1)` suffix for repeated names gives a new name and is detected
+  (probe: `export (1).xlsx`).
+- After the device: `back()` (same as legacy) on success. On failure, reload + folder, where the
+  legacy script did `driver.get("tvoje_url…")`, a bug. See major 2.
+- Chrome prefs: same, except `safebrowsing.enabled`. That is an accepted deviation; `.xlsx` is
+  not a dangerous file type.
+
+### Headless CI
+
+`ChromeDriverFactory` passes an explicit `ChromeService(executable_path=…)`. When `chromedriver`
+is on `PATH` (the GitHub `ubuntu-latest` image ships a matching Chrome and chromedriver), neither
+webdriver-manager nor Selenium Manager is contacted, so no network is needed. webdriver-manager
+is imported lazily, only in the fallback. `--headless=new` honours the download prefs. On the
+runner (non-root) no `--no-sandbox` is needed, and the docs say when to add it. Not run here,
+because the sandbox's chromedriver 147 does not match Chromium 141.
+
+### Deviations assessment
+
+- Fixture under `tests/ingest/portal/data/`: accepted. It is inside the Files scope and labelled
+  synthetic.
+- Extra settings fields (`browser`, `chromedriver_path`, `chrome_arguments`, suffix/prefix
+  tuples, `settle_delay_s`): accepted. All are described, with units and defaults.
+- Dropping `safebrowsing.enabled`: accepted (see above).
+- Temporary raising of Selenium's request-logger level: accepted for the single-threaded CLI. It
+  is restored on exceptions. See minor 7 for a thread-safe alternative.
+- The real-browser smoke test was not written: accepted, and the reason (version mismatch) is
+  plausible.
+- "Not verified against the real portal" is stated explicitly, as required.
