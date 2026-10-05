@@ -59,16 +59,29 @@ export interface LatestFile {
   readonly sensors: Readonly<Record<string, LatestSample>>;
 }
 
-/** `series/<sensor_id>/raw/<YYYY-MM>.json`: all columns have the length of `t`. */
+/**
+ * `series/<sensor_id>/raw/<YYYY-MM>.json`: all columns have the length of `t`.
+ *
+ * `precip_mm` (precipitation since the previous sample, mm) and `battery_v` (battery voltage, V)
+ * are optional (WP-1.9): files written before them, or for devices without them, omit the
+ * fields. They are read when present and not displayed yet (WP-3.4).
+ */
 export interface RawMonthFile {
   readonly sensor_id: string;
   readonly t: readonly number[];
   readonly temp_c: readonly (number | null)[];
   readonly rh_pct: readonly (number | null)[];
+  readonly precip_mm?: readonly (number | null)[];
+  readonly battery_v?: readonly (number | null)[];
   readonly qc: readonly number[];
 }
 
-/** `series/<sensor_id>/daily.json`; `date` is the local calendar day in the display time zone. */
+/**
+ * `series/<sensor_id>/daily.json`; `date` is the local calendar day in the display time zone.
+ *
+ * `precip_sum_mm` (daily precipitation sum, mm) and `battery_min_v` (daily minimum battery
+ * voltage, V) are optional (WP-1.9); `null` where a day has no such value.
+ */
 export interface DailyFile {
   readonly sensor_id: string;
   readonly date: readonly string[];
@@ -78,6 +91,8 @@ export interface DailyFile {
   readonly rh_min: readonly (number | null)[];
   readonly rh_mean: readonly (number | null)[];
   readonly rh_max: readonly (number | null)[];
+  readonly precip_sum_mm?: readonly (number | null)[];
+  readonly battery_min_v?: readonly (number | null)[];
   readonly coverage: readonly number[];
 }
 
