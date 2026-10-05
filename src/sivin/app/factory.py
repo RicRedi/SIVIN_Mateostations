@@ -27,6 +27,12 @@ from sivin.app.json_files import ErrorText, JsonFileWriter
 from sivin.app.quality import EventsWriter, KnownSensors, QualityService
 from sivin.app.run import Clock, ExportSource, RunRecorder, RunService
 from sivin.app.site import SiteIndices, SiteInputsLoader, SiteService
+from sivin.app.summary import (
+    RunRecordFinder,
+    RunSummaryService,
+    SummarySettings,
+    WarningCollector,
+)
 from sivin.app.workspace import Workspace
 from sivin.config.sections import QuarantineMode
 from sivin.ingest.parsers import base as parser_base
@@ -43,7 +49,7 @@ from sivin.site.sensor_files import default_sensor_writers
 from sivin.site.site_files import default_site_writers
 from sivin.site.state import StateDirectory, StoreFingerprints
 from sivin.storage.config import build_store
-from sivin.storage.runlog import RunLog
+from sivin.storage.runlog import RUNS_DIR, RunLog
 from sivin.storage.store import RAW_DIR, MeasurementStore
 
 if TYPE_CHECKING:
@@ -446,3 +452,25 @@ class ServiceFactory:
             Appends to ``<paths.data_dir>/runs/<YYYY-MM-DD>.jsonl``.
         """
         return RunRecorder(RunLog(self._workspace.data_dir), self._error_text)
+
+    def summary_service(self, settings: SummarySettings | None = None) -> RunSummaryService:
+        """Return the service that summarises a run (``sivin report``).
+
+        Parameters
+        ----------
+        settings : SummarySettings, optional
+            Limits of the rendering; the defaults when omitted.
+
+        Returns
+        -------
+        RunSummaryService
+            Reads ``<paths.data_dir>/runs`` and ``<paths.derived_dir>/events``.
+        """
+        data_dir = self._workspace.data_dir
+        return RunSummaryService(
+            RunRecordFinder(RunLog(data_dir), data_dir / RUNS_DIR),
+            WarningCollector(self._workspace.events_dir),
+            self._workspace.config.time.display_timezone,
+            settings,
+            self._redactor.redact,
+        )
