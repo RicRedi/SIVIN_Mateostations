@@ -31,6 +31,24 @@ describe('HashStateCodec', () => {
     expect(codec.decode('')).toEqual({});
     expect(codec.decode('#s=77678271%2C77680921')).toEqual({ selectedSensorIds: ['77678271', '77680921'] });
   });
+
+  it.each([
+    '#w=custom&from=2026-06-01&to=2026-13-45',
+    '#w=custom&from=2026-02-30&to=2026-03-01',
+    '#w=custom&from=0001-01-01&to=9999-12-31',
+    '#w=custom&from=1999-12-31&to=2026-01-01',
+    '#w=custom&from=2026-01-01&to=2101-01-01',
+    '#w=season&y=0000',
+    '#w=season&y=2101',
+  ])('drops an invalid or out-of-range window %s', (hash) => {
+    expect(codec.decode(`${hash}&lang=de`)).toEqual({ language: 'de' });
+  });
+
+  it('accepts real dates at the edges of the year range, including 29 Feb of a leap year', () => {
+    expect(codec.decode('#w=custom&from=2000-01-01&to=2100-12-31').window).toEqual({ kind: 'custom', from: '2000-01-01', to: '2100-12-31' });
+    expect(codec.decode('#w=custom&from=2028-02-29&to=2028-02-29').window).toEqual({ kind: 'custom', from: '2028-02-29', to: '2028-02-29' });
+    expect(codec.decode('#w=season&y=2000').window).toEqual({ kind: 'season', year: 2000 });
+  });
 });
 
 describe('Store', () => {
@@ -46,6 +64,23 @@ describe('Store', () => {
     unsubscribe();
     store.update({ a: 3 });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify re-entrantly: a nested update is delivered after the current change', () => {
+    const store = new Store({ n: 0 });
+    const seen: string[] = [];
+    store.subscribe((state) => {
+      seen.push(`first:${state.n}`);
+      if (state.n === 1) {
+        store.update({ n: 2 });
+        expect(store.state.n).toBe(2);
+      }
+    });
+    store.subscribe((state, previous) => {
+      seen.push(`second:${previous.n}->${state.n}`);
+    });
+    store.update({ n: 1 });
+    expect(seen).toEqual(['first:1', 'second:0->1', 'first:2', 'second:1->2']);
   });
 });
 

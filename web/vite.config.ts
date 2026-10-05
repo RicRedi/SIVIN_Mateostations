@@ -29,7 +29,6 @@ export default defineConfig({
         'src/vite-env.d.ts',
         'src/ui/MapView.ts',
         'src/ui/SeriesChart.ts',
-        'src/ui/App.ts',
       ],
       reporter: ['text-summary', 'text'],
       thresholds: { lines: MIN_LINE_COVERAGE_PCT },

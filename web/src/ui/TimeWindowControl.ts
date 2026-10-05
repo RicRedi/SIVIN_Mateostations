@@ -52,6 +52,7 @@ export class TimeWindowControl {
   private readonly applyButton = el('button', { type: 'submit' });
   private readonly resolutionLabel = el('label', { for: 'resolution-select' });
   private readonly resolutionSelect = el('select', { id: 'resolution-select' });
+  private readonly shown = el('p', { class: 'window-control__shown', 'aria-live': 'polite' });
   private current: WindowControlState | null = null;
 
   /**
@@ -94,7 +95,14 @@ export class TimeWindowControl {
     this.customRow.append(this.fromLabel, this.fromInput, this.toLabel, this.toInput, this.applyButton);
     const resolutionRow = el('div', { class: 'window-control__row' }, [this.resolutionLabel, this.resolutionSelect]);
     root.append(
-      el('fieldset', { class: 'window-control' }, [this.legend, presets, this.seasonRow, this.customRow, resolutionRow]),
+      el('fieldset', { class: 'window-control' }, [
+        this.legend,
+        presets,
+        this.seasonRow,
+        this.customRow,
+        resolutionRow,
+        this.shown,
+      ]),
     );
   }
 
@@ -119,6 +127,16 @@ export class TimeWindowControl {
       this.toInput.value = state.spec.to;
     }
     this.renderResolutions(state);
+    this.renderShownWindow(state.window);
+  }
+
+  /** The concrete window actually shown (relative presets end at the end of the data). */
+  private renderShownWindow(window: TimeWindow): void {
+    const range = this.i18n.t('windowShown', {
+      from: this.i18n.formatDateTime(window.startT, this.zone.name),
+      to: this.i18n.formatDateTime(window.endT, this.zone.name),
+    });
+    this.shown.textContent = `${range} · ${this.i18n.t(RESOLUTION_LABELS[window.resolution])}`;
   }
 
   private renderResolutions(state: WindowControlState): void {

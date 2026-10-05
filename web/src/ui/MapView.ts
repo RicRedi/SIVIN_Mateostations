@@ -35,7 +35,9 @@ export class MapView {
   private readonly map: L.Map;
   private readonly markers = new Map<string, L.CircleMarker>();
   private readonly legend: L.Control;
-  private readonly legendBody = el('div', { class: 'map-legend' });
+  private readonly legendBody: HTMLDetailsElement;
+  private readonly legendSummary = el('summary', { class: 'map-legend__title' });
+  private readonly legendList = el('ul');
 
   /**
    * @param root - Element the map fills.
@@ -43,7 +45,8 @@ export class MapView {
    * @param i18n - Translations and formatting.
    * @param scale - Temperature colour scale.
    * @param timeZone - Display time zone for tooltip times.
-   * @param onClick - Called when a marker is clicked.
+   * @param legendCollapsed - Start with the legend collapsed (phones).
+   * @param onClick - Called when a marker is clicked or activated with Enter/Space.
    */
   constructor(
     root: HTMLElement,
@@ -51,8 +54,11 @@ export class MapView {
     private readonly i18n: I18n,
     private readonly scale: TemperatureScale,
     private readonly timeZone: string,
-    onClick: SensorClickHandler,
+    legendCollapsed: boolean,
+    private readonly onClick: SensorClickHandler,
   ) {
+    this.legendBody = el('details', { class: 'map-legend', open: !legendCollapsed }, [this.legendSummary, this.legendList]);
+    L.DomEvent.disableClickPropagation(this.legendBody);
     this.map = L.map(root, { zoomControl: true });
     const osm = L.tileLayer(OSM_URL, { attribution: OSM_ATTRIBUTION, maxZoom: OSM_MAX_ZOOM });
     const topo = L.tileLayer(TOPO_URL, { attribution: TOPO_ATTRIBUTION, maxZoom: TOPO_MAX_ZOOM });
@@ -84,8 +90,45 @@ export class MapView {
       marker?.setStyle(this.style(sensor, selected));
       marker?.setRadius(selected ? SELECTED_MARKER_RADIUS_PX : MARKER_RADIUS_PX);
       marker?.bindTooltip(this.tooltip(sensor), { direction: 'top' });
+      const element = marker?.getElement();
+      if (element !== undefined) {
+        this.makeKeyboardAccessible(element, sensor.id);
+        element.setAttribute('aria-label', this.accessibleName(sensor));
+        element.setAttribute('aria-pressed', String(selected));
+      }
     }
     this.renderLegend();
+  }
+
+  /**
+   * Turn the marker's SVG path into a button: focusable, named, Enter/Space selects it and
+   * Ctrl/⌘ + Enter/Space toggles it in the comparison (like a click). Leaflet creates the path
+   * only once the map has a view, so this runs on render and only once per element.
+   */
+  private makeKeyboardAccessible(element: Element, sensorId: string): void {
+    if (element.getAttribute('role') === 'button') {
+      return;
+    }
+    element.setAttribute('role', 'button');
+    element.setAttribute('tabindex', '0');
+    element.addEventListener('keydown', (event: Event) => {
+      if (!(event instanceof KeyboardEvent)) {
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.onClick(sensorId, event.ctrlKey || event.metaKey);
+      }
+    });
+  }
+
+  private accessibleName(sensor: SensorInfo): string {
+    const latest = sensor.latest;
+    const value =
+      latest?.temp_c === null || latest === null
+        ? this.i18n.t('noValue')
+        : `${this.i18n.formatNumber(latest.temp_c, VALUE_DECIMALS)} °C${latest.stale ? ` (${this.i18n.t('stale')})` : ''}`;
+    return `${sensor.label}: ${value}`;
   }
 
   /** Recompute the map size after its container changed. */
@@ -148,10 +191,8 @@ export class MapView {
     const staleSwatch = el('span', { class: 'map-legend__swatch map-legend__swatch--stale' });
     staleSwatch.style.background = STALE_COLOR;
     rows.push(el('li', {}, [staleSwatch, this.i18n.t('legendStale')]));
-    this.legendBody.replaceChildren(
-      el('div', { class: 'map-legend__title' }, [`${this.i18n.t('legendTitle')} (°C)`]),
-      el('ul', {}, rows),
-    );
+    this.legendSummary.textContent = `${this.i18n.t('legendTitle')} (°C)`;
+    this.legendList.replaceChildren(...rows);
   }
 
   private classLabel(lowerC: number | null, upperC: number | null): string {

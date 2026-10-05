@@ -5,7 +5,7 @@ import type { ChartData } from '../src/app/ChartDataLoader';
 import { SensorCatalog } from '../src/app/SensorCatalog';
 import { parseLatestFile, parseManifest, parseSensorsGeoJSON } from '../src/contract';
 import { DataClient } from '../src/data/DataClient';
-import { QcMask } from '../src/domain/QcFlags';
+import { DISPLAY_EXCLUDE_MASK, QcMask } from '../src/domain/QcFlags';
 import { Resampler } from '../src/domain/Resampler';
 import { ResolutionPolicy } from '../src/domain/ResolutionPolicy';
 import { TimeWindow } from '../src/domain/TimeWindow';
@@ -28,8 +28,15 @@ function fixtureFetcher() {
   }));
 }
 
-function loader(): ChartDataLoader {
-  return new ChartDataLoader(new DataClient(BASE, fixtureFetcher().fetcher), new Resampler(new QcMask()), zone);
+class Warnings {
+  readonly messages: string[] = [];
+  warn(message: string): void {
+    this.messages.push(message);
+  }
+}
+
+function loader(warnings = new Warnings(), client = new DataClient(BASE, fixtureFetcher().fetcher)): ChartDataLoader {
+  return new ChartDataLoader(client, new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK)), zone, warnings);
 }
 
 describe('SensorCatalog', () => {
@@ -44,7 +51,6 @@ describe('SensorCatalog', () => {
     const sensor = catalog.get('77680921');
     expect(sensor?.elevation_m).toBe(201.6);
     expect(sensor?.lat).toBe(48.879593);
-    expect(sensor?.colorIndex).toBe(1);
     expect(sensor?.hasData).toBe(true);
     expect(catalog.get('77800065')?.latest?.stale).toBe(true);
     expect(catalog.get('77799986')?.placedSince).toBe('2026-06-03T08:00:00Z');
@@ -70,7 +76,7 @@ describe('ChartDataLoader', () => {
     const window = new TimeWindow(utc(2026, 7, 1), utc(2026, 7, 2), 'hourly');
     const data = await loader().load(['77678271', '77680921'], window);
     expect(data.sensors.map((s) => s.temp_c.length)).toEqual([24, 24]);
-    expect(data.sensors[0]?.rh_pct.t[0]).toBe(utc(2026, 7, 1));
+    expect(data.sensors[0]?.rh_pct.t[0]).toBe(utc(2026, 7, 1, 0, 30));
   });
 
   it('shows the 7-hour gap of 14 Jul 2026 as empty hours', async () => {
@@ -86,6 +92,33 @@ describe('ChartDataLoader', () => {
     const index = daily.date.indexOf('2026-08-01');
     expect(data.sensors[0]?.temp_c.t).toEqual([utc(2026, 7, 31, 22), utc(2026, 8, 1, 22), utc(2026, 8, 2, 22)]);
     expect(data.sensors[0]?.temp_c.values[0]).toBe(daily.temp_mean[index]);
+  });
+});
+
+describe('ChartDataLoader failure handling', () => {
+  it('reports a failing sensor and still returns the others', async () => {
+    const window = new TimeWindow(utc(2026, 7, 1), utc(2026, 7, 2), 'raw');
+    const data = await loader().load(['77678271', '00000000'], window);
+    expect(data.sensors.map((s) => s.sensorId)).toEqual(['77678271']);
+    expect(data.failures).toEqual([{ sensorId: '00000000', message: 'Sensor 00000000 is not listed in manifest.json' }]);
+  });
+
+  it('treats a missing or invalid events file as no events and warns', async () => {
+    const { fetcher } = fakeFetcher(BASE, new Proxy({}, {
+      has: (_, path: string) => path !== 'events/77678271.json' && fixtureExists(path),
+      get: (_, path: string) =>
+        path === 'events/77680921.json' ? { sensor_id: '77680921', events: [{ type: 'moved', t: 1, source: 'x' }] } : fixtureJson(path),
+    }));
+    const warnings = new Warnings();
+    const window = new TimeWindow(utc(2026, 8, 22), utc(2026, 8, 23), 'raw');
+    const data = await loader(warnings, new DataClient(BASE, fetcher)).load(['77678271', '77680921'], window);
+    expect(data.failures).toEqual([]);
+    expect(data.sensors.map((s) => s.events.length)).toEqual([0, 0]);
+    expect(data.sensors.every((s) => s.temp_c.validCount > 0)).toBe(true);
+    expect(warnings.messages).toEqual([
+      'Events of sensor 77678271 ignored: Cannot load data/events/77678271.json: HTTP 404',
+      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].type must be one of ["deployment","retrieval","step"], got "moved"',
+    ]);
   });
 });
 
@@ -117,13 +150,38 @@ describe('ChartPresenter', () => {
     expect(view.shown[0]?.window.endT).toBe(utc(2026, 9, 30, 22));
   });
 
-  it('shows an error message when loading fails', async () => {
+  it('passes per-sensor failures to the view', async () => {
     const view = new RecordingView();
     const presenter = new ChartPresenter(loader(), factory, i18n, view, anchor);
     await presenter.refresh(DEFAULT_APP_STATE, ['00000000']);
-    // Raw data and events load in parallel; whichever fails first is reported.
-    expect(view.errors.at(-1)).toMatch(/^Could not load data: .*00000000/);
-    expect(view.shown).toHaveLength(0);
+    expect(view.shown[0]?.failures.map((f) => f.sensorId)).toEqual(['00000000']);
+  });
+
+  it('shows an error when the whole load fails', async () => {
+    const view = new RecordingView();
+    const broken = new DataClient(BASE, () => Promise.reject(new Error('offline')));
+    const presenter = new ChartPresenter(loader(new Warnings(), broken), factory, i18n, view, anchor);
+    await presenter.refresh(DEFAULT_APP_STATE, ['77678271']);
+    expect(view.shown[0]?.failures[0]?.message).toBe('Cannot load data/manifest.json: offline');
+  });
+
+  it('falls back to the default window when the spec cannot be resolved', () => {
+    const presenter = new ChartPresenter(loader(), factory, i18n, new RecordingView(), anchor);
+    const window = presenter.windowFor({ ...DEFAULT_APP_STATE, window: { kind: 'custom', from: '2026-13-45', to: '2026-06-01' } });
+    expect([window.startT, window.endT]).toEqual([utc(2026, 9, 23, 22), utc(2026, 9, 30, 22)]);
+  });
+
+  it('rethrows unexpected errors from the window factory', () => {
+    const failing = { create: () => { throw new TypeError('bug'); } } as unknown as TimeWindowFactory;
+    const presenter = new ChartPresenter(loader(), failing, i18n, new RecordingView(), anchor);
+    expect(() => presenter.windowFor(DEFAULT_APP_STATE)).toThrow('bug');
+  });
+
+  it('shows an error message when the loader itself rejects', async () => {
+    const view = new RecordingView();
+    const rejecting = { load: () => Promise.reject(new Error('boom')) } as unknown as ChartDataLoader;
+    await new ChartPresenter(rejecting, factory, i18n, view, anchor).refresh(DEFAULT_APP_STATE, ['77678271']);
+    expect(view.errors).toEqual(['Could not load data: boom']);
   });
 
   it('drops a response superseded by a newer request and ignores an empty selection', async () => {

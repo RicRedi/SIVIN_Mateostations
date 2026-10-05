@@ -1,16 +1,16 @@
 import uPlot, { type AlignedData, type Options, type Series } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import type { ChartData, SensorChartData } from '../app/ChartDataLoader';
-import type { SensorCatalog } from '../app/SensorCatalog';
 import type { ChartView } from '../app/ChartPresenter';
-import type { SensorEvent, VariableSpec } from '../contract';
+import type { SensorCatalog } from '../app/SensorCatalog';
+import type { VariableSpec } from '../contract';
 import { alignSeries } from '../domain/alignSeries';
 import type { TimeZone } from '../domain/TimeZone';
 import { MS_PER_SECOND, SECONDS_PER_DAY } from '../domain/units';
-import type { MessageKey } from '../i18n/cs';
 import type { I18n } from '../i18n/I18n';
 import { el } from './dom';
-import { sensorColor } from './palette';
+import { EventMarkers } from './EventMarkers';
+import type { SensorColors } from './SensorColors';
 
 /** Chart height in px on wide and on narrow containers. */
 const CHART_HEIGHT_PX = 300;
@@ -22,36 +22,30 @@ const RH_RANGE_PCT: [number, number] = [0, 100];
 const TEMP_LINE_WIDTH_PX = 2;
 const RH_LINE_WIDTH_PX = 1.5;
 const RH_DASH_PX = [6, 4];
-const EVENT_LINE_DASH_PX = [3, 3];
-const EVENT_LINE_COLOR = '#52514e';
 const VALUE_DECIMALS = 1;
-const PERCENT = 100;
+const FALLBACK_COLOR = '#52514e';
 /** `uPlot.Axis.Side.Right`; the ambient const enum cannot be referenced under `isolatedModules`. */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment -- numeric value of Side.Right
 const AXIS_SIDE_RIGHT = 1 as uPlot.Axis.Side;
 
-const EVENT_LABELS: Readonly<Record<SensorEvent['type'], MessageKey>> = {
-  deployment: 'eventDeployment',
-  retrieval: 'eventRetrieval',
-  step: 'eventStep',
-};
-
 /**
  * uPlot chart of temperature (left axis, °C) and relative humidity (right axis, %) for one or
- * more sensors, with sensor events as dashed vertical markers. Times are shown in the display
- * time zone; `null` values are drawn as gaps.
+ * more sensors, with sensor events as markers. Times are shown in the display time zone; `null`
+ * values are drawn as gaps. Sensors that failed to load are listed with their error.
  */
 export class SeriesChart implements ChartView {
   private readonly message = el('p', { class: 'chart__message', role: 'status' });
+  private readonly failures = el('ul', { class: 'chart__failures' });
   private readonly plotHost = el('div', { class: 'chart__plot' });
-  private readonly markers = el('div', { class: 'chart__events' });
+  private readonly markers: EventMarkers;
   private plot: uPlot | null = null;
   private data: ChartData | null = null;
 
   /**
    * @param root - Container element; the chart follows its width.
    * @param i18n - Translations and number formatting.
-   * @param catalog - Sensor labels and colours.
+   * @param catalog - Sensor labels.
+   * @param colors - Line colours of the compared sensors.
    * @param variables - Variable specs from the manifest (labels and units).
    * @param zone - Display time zone (from the manifest).
    */
@@ -59,11 +53,12 @@ export class SeriesChart implements ChartView {
     private readonly root: HTMLElement,
     private readonly i18n: I18n,
     private readonly catalog: SensorCatalog,
+    private readonly colors: SensorColors,
     private readonly variables: readonly VariableSpec[],
     private readonly zone: TimeZone,
   ) {
-    this.plotHost.setAttribute('role', 'img');
-    root.append(this.message, this.plotHost);
+    this.markers = new EventMarkers(i18n, catalog, zone);
+    root.append(this.message, this.failures, this.plotHost);
     new ResizeObserver(() => {
       this.resize();
     }).observe(root);
@@ -76,8 +71,8 @@ export class SeriesChart implements ChartView {
 
   showError(text: string): void {
     this.data = null;
-    this.plot?.destroy();
-    this.plot = null;
+    this.destroyPlot();
+    this.failures.replaceChildren();
     this.showMessage(text);
   }
 
@@ -88,21 +83,38 @@ export class SeriesChart implements ChartView {
 
   /** Redraw with the current language. */
   render(): void {
-    this.plot?.destroy();
-    this.plot = null;
+    this.destroyPlot();
     const data = this.data;
-    if (data === null || data.sensors.length === 0) {
+    if (data === null) {
       return;
     }
+    this.renderFailures(data);
     const hasValues = data.sensors.some((s) => s.temp_c.validCount + s.rh_pct.validCount > 0);
-    this.showMessage(hasValues ? '' : this.i18n.t('noData'));
-    this.message.hidden = hasValues;
-    this.plotHost.setAttribute('aria-label', this.i18n.t('chartLabel'));
+    this.message.textContent = hasValues ? '' : this.i18n.t('noData');
+    this.message.hidden = hasValues || data.sensors.length === 0;
+    if (data.sensors.length === 0) {
+      return;
+    }
     const aligned = alignSeries(data.sensors.flatMap((s) => [s.temp_c, s.rh_pct]));
     const plotData = [aligned.t, ...aligned.columns] as unknown as AlignedData;
+    this.markers.setEvents(data.sensors.flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId }))));
     this.plot = new uPlot(this.options(data), plotData, this.plotHost);
-    this.plot.over.append(this.markers);
-    this.placeEventMarkers();
+    this.plot.ctx.canvas.setAttribute('role', 'img');
+    this.plot.ctx.canvas.setAttribute('aria-label', this.i18n.t('chartLabel'));
+    this.markers.attach(this.plot);
+  }
+
+  private renderFailures(data: ChartData): void {
+    this.failures.replaceChildren(
+      ...data.failures.map((failure) =>
+        el('li', { class: 'chart__failure', role: 'alert' }, [
+          this.i18n.t('sensorLoadError', {
+            sensor: this.catalog.get(failure.sensorId)?.label ?? failure.sensorId,
+            message: failure.message,
+          }),
+        ]),
+      ),
+    );
   }
 
   private options(data: ChartData): Options {
@@ -131,12 +143,12 @@ export class SeriesChart implements ChartView {
       hooks: {
         draw: [
           (u) => {
-            this.drawEventLines(u);
+            this.markers.drawLines(u);
           },
         ],
         setSize: [
-          () => {
-            this.placeEventMarkers();
+          (u) => {
+            this.markers.place(u);
           },
         ],
       },
@@ -145,79 +157,14 @@ export class SeriesChart implements ChartView {
   }
 
   private sensorSeries(sensor: SensorChartData, tempUnit: string, rhUnit: string): Series[] {
-    const info = this.catalog.get(sensor.sensorId);
-    const name = info?.label ?? sensor.sensorId;
-    const color = sensorColor(info?.colorIndex ?? 0);
+    const name = this.catalog.get(sensor.sensorId)?.label ?? sensor.sensorId;
+    const color = this.colors.colorFor(sensor.sensorId) ?? FALLBACK_COLOR;
     const value = (unit: string) => (_: uPlot, v: number | null) =>
-      v === null ? '–' : `${this.format(v)} ${unit}`;
+      v === null ? '–' : `${this.i18n.formatNumber(v, VALUE_DECIMALS)} ${unit}`;
     return [
-      {
-        label: `${name} · ${this.variableLabel('temp_c')}`,
-        scale: 'temp',
-        stroke: color,
-        width: TEMP_LINE_WIDTH_PX,
-        spanGaps: false,
-        value: value(tempUnit),
-      },
-      {
-        label: `${name} · ${this.variableLabel('rh_pct')}`,
-        scale: 'rh',
-        stroke: color,
-        width: RH_LINE_WIDTH_PX,
-        dash: RH_DASH_PX,
-        spanGaps: false,
-        value: value(rhUnit),
-      },
+      { label: `${name} · ${this.variableLabel('temp_c')}`, scale: 'temp', stroke: color, width: TEMP_LINE_WIDTH_PX, spanGaps: false, value: value(tempUnit) },
+      { label: `${name} · ${this.variableLabel('rh_pct')}`, scale: 'rh', stroke: color, width: RH_LINE_WIDTH_PX, dash: RH_DASH_PX, spanGaps: false, value: value(rhUnit) },
     ];
-  }
-
-  private drawEventLines(u: uPlot): void {
-    const { ctx } = u;
-    const { top, height } = u.bbox;
-    ctx.save();
-    ctx.setLineDash(EVENT_LINE_DASH_PX.map((px) => px * uPlot.pxRatio));
-    ctx.strokeStyle = EVENT_LINE_COLOR;
-    ctx.lineWidth = uPlot.pxRatio;
-    for (const { event } of this.events()) {
-      const x = Math.round(u.valToPos(event.t, 'x', true));
-      ctx.beginPath();
-      ctx.moveTo(x, top);
-      ctx.lineTo(x, top + height);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  private placeEventMarkers(): void {
-    const plot = this.plot;
-    if (plot === null) {
-      return;
-    }
-    const markers = this.events().map(({ event, sensorId }) => {
-      const text = this.eventText(event, sensorId);
-      const marker = el('button', { type: 'button', class: 'event-marker', 'aria-label': text, 'data-tip': text });
-      marker.style.left = `${plot.valToPos(event.t, 'x')}px`;
-      return marker;
-    });
-    this.markers.replaceChildren(...markers);
-  }
-
-  private events(): readonly { event: SensorEvent; sensorId: string }[] {
-    return (this.data?.sensors ?? []).flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId })));
-  }
-
-  private eventText(event: SensorEvent, sensorId: string): string {
-    const parts = [
-      `${this.i18n.t(EVENT_LABELS[event.type])} – ${this.catalog.get(sensorId)?.label ?? sensorId}`,
-      this.i18n.formatDateTime(event.t, this.zone.name),
-    ];
-    if (event.confidence !== null) {
-      parts.push(this.i18n.t('eventConfidence', { pct: Math.round(event.confidence * PERCENT) }));
-    }
-    if (event.detail !== null) {
-      parts.push(event.detail);
-    }
-    return parts.join(' · ');
   }
 
   /** Day and month at local midnight or for steps of a day and more, otherwise HH:MM. */
@@ -238,8 +185,9 @@ export class SeriesChart implements ChartView {
     return this.variables.find((v) => v.id === id)?.unit ?? fallback;
   }
 
-  private format(value: number): string {
-    return this.i18n.formatNumber(value, VALUE_DECIMALS);
+  private destroyPlot(): void {
+    this.plot?.destroy();
+    this.plot = null;
   }
 
   private width(): number {

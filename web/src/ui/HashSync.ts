@@ -1,4 +1,4 @@
-import { DEFAULT_APP_STATE, type AppState, type AppStore } from '../state/AppState';
+import { DEFAULT_APP_STATE, type AppStore } from '../state/AppState';
 import type { HashStateCodec } from '../state/HashStateCodec';
 
 /**
@@ -14,8 +14,8 @@ export class HashSync {
     private readonly history: History,
     target: Window,
   ) {
-    store.subscribe((state) => {
-      this.write(state);
+    store.subscribe(() => {
+      this.write();
     });
     target.addEventListener('hashchange', () => {
       const { language } = this.store.state;
@@ -23,9 +23,9 @@ export class HashSync {
     });
   }
 
-  /** Write the current state, e.g. once after start-up. */
-  write(state: AppState = this.store.state): void {
-    const hash = this.codec.encode(state);
+  /** Write the store's current state (never a notified snapshot, which may be outdated). */
+  write(): void {
+    const hash = this.codec.encode(this.store.state);
     if (hash !== this.location.hash) {
       this.history.replaceState(null, '', hash);
     }

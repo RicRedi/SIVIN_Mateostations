@@ -43,6 +43,8 @@ export const cs = {
   hidePanel: 'Skrýt panel',
   mapLabel: 'Mapa čidel',
   time: 'Čas',
+  sensorLoadError: 'Čidlo {sensor}: data se nepodařilo načíst ({message})',
+  windowShown: 'Zobrazeno {from} – {to}',
   chartLabel: 'Graf teploty a relativní vlhkosti',
 } as const;
 

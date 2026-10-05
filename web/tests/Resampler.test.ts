@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EXCLUDE_MASK, QcFlag, QcMask } from '../src/domain/QcFlags';
+import { DEFAULT_EXCLUDE_MASK, DISPLAY_EXCLUDE_MASK, QcFlag, QcMask } from '../src/domain/QcFlags';
 import { RawSeries } from '../src/domain/RawSeries';
 import { RAW_GAP_THRESHOLD_S, Resampler } from '../src/domain/Resampler';
 import { utc } from './helpers';
@@ -29,6 +29,22 @@ describe('QcMask', () => {
     expect(mask.excludes(QcFlag.STEP | QcFlag.MANUAL_EXCLUDE)).toBe(true);
     expect(mask.excludes(0)).toBe(false);
   });
+
+  it('display mask leaves MISSING to null values and keeps all other excluding flags', () => {
+    expect(DISPLAY_EXCLUDE_MASK).toBe(2 | 4 | 16 | 32 | 256);
+    const display = new QcMask(DISPLAY_EXCLUDE_MASK);
+    expect(display.excludes(QcFlag.MISSING)).toBe(false);
+    expect(display.excludes(QcFlag.MISSING | QcFlag.PRE_DEPLOYMENT)).toBe(true);
+  });
+
+  it('with the display mask a valid temperature survives a row whose RH is null', () => {
+    const raw = RawSeries.merge(ID, [{ sensor_id: ID, t: [H0, H0 + 1825], temp_c: [10, 11], rh_pct: [null, 60], qc: [QcFlag.MISSING, 0] }]);
+    const display = new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK));
+    expect(display.raw(raw, 'temp_c').values).toEqual([10, 11]);
+    expect(display.raw(raw, 'rh_pct').values).toEqual([null, 60]);
+    // hour 0 temperature mean (10 + 11) / 2, stamped at the bin centre 00:30
+    expect(display.hourlyMeans(raw, 'temp_c', H0, H0 + 3600).values).toEqual([10.5]);
+  });
 });
 
 describe('Resampler.hourlyMeans', () => {
@@ -45,7 +61,8 @@ describe('Resampler.hourlyMeans', () => {
 
   it('averages valid values per UTC hour, skipping nulls and excluded flags', () => {
     const hourly = resampler.hourlyMeans(raw, 'temp_c', H0, H4);
-    expect(hourly.t).toEqual([H0, H0 + 3600, H0 + 7200, H0 + 10_800]);
+    // stamped at bin centres 00:30, 01:30, 02:30, 03:30
+    expect(hourly.t).toEqual([H0 + 1800, H0 + 5400, H0 + 9000, H0 + 12_600]);
     // hour 0: 10 (12 is a SPIKE, the third value is null); hour 1: (14 + 16) / 2;
     // hour 2: no samples; hour 3: 20 (STEP is informative only); 04:10 is outside the window.
     expect(hourly.values).toEqual([10, 15, null, 20]);
@@ -54,7 +71,7 @@ describe('Resampler.hourlyMeans', () => {
   it('aligns bins to full hours when the window starts mid-hour', () => {
     const hourly = resampler.hourlyMeans(raw, 'temp_c', H0 + 1800, H0 + 7200);
     // 00:00 lies before the window start, so hour 0 is empty.
-    expect(hourly.t).toEqual([H0, H0 + 3600]);
+    expect(hourly.t).toEqual([H0 + 1800, H0 + 5400]);
     expect(hourly.values).toEqual([null, 15]);
   });
 

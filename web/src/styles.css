@@ -175,6 +175,10 @@ input {
   vertical-align: -0.05rem;
 }
 
+.swatch--empty {
+  border: 1px dashed var(--ink-muted);
+}
+
 .sensor-list {
   display: flex;
   flex-wrap: wrap;
@@ -324,6 +328,32 @@ input {
   font-weight: 400;
 }
 
+.chart__failures {
+  margin: 0 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.chart__failure {
+  margin-bottom: 0.25rem;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid #c62f2f;
+  background: #fdf0ef;
+  font-size: 0.85rem;
+}
+
+.window-control__shown {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-secondary);
+}
+
+.leaflet-interactive:focus-visible {
+  outline: none;
+  stroke: var(--accent);
+  stroke-width: 4px;
+}
+
 .chart__events {
   position: absolute;
   inset: 0;
@@ -373,8 +403,12 @@ input {
 }
 
 .map-legend__title {
-  margin-bottom: 0.2rem;
   font-weight: 600;
+  cursor: pointer;
+}
+
+.map-legend[open] .map-legend__title {
+  margin-bottom: 0.2rem;
 }
 
 .map-legend ul {

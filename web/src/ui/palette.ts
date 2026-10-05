@@ -1,26 +1,28 @@
 /**
- * Categorical colours for compared sensors, assigned by registry position (never by selection
- * order) so a sensor keeps its colour. Order and steps from the colour-blind-validated
- * reference palette of the dataviz guidelines (adjacent-pair CVD ΔE ≥ 8 on a light surface).
+ * Categorical line colours for compared sensors, in assignment order.
+ *
+ * Validated with the dataviz palette checker (light mode, surface #fcfcfb): every adjacent pair
+ * is separated under simulated protan/deutan vision (worst ΔE 8.6, OKLab ×100) and under normal
+ * vision (worst ΔE 15.8). WCAG contrast against white, all ≥ 3:1 (1.4.11 non-text contrast):
+ * #2a78d6 4.42, #c4501f 4.65, #0e8a5f 4.36, #9a6b00 4.69, #c2457a 4.74, #008300 4.95,
+ * #4a3aa7 8.56, #c62f2f 5.46.
  */
 export const SENSOR_COLORS = [
   '#2a78d6',
-  '#eb6834',
-  '#1baf7a',
-  '#eda100',
-  '#e87ba4',
+  '#c4501f',
+  '#0e8a5f',
+  '#9a6b00',
+  '#c2457a',
   '#008300',
   '#4a3aa7',
-  '#e34948',
+  '#c62f2f',
 ] as const;
 
-/** Colour of sensor number `colorIndex` (wraps around after {@link SENSOR_COLORS}). */
-export function sensorColor(colorIndex: number): string {
-  return SENSOR_COLORS[colorIndex % SENSOR_COLORS.length] ?? SENSOR_COLORS[0];
-}
-
-/** Fill for markers without a current value (stale or missing); paired with a dashed outline. */
-export const STALE_COLOR = '#9a9890';
+/**
+ * Fill for markers without a current value (stale or missing); always paired with a dashed
+ * outline. Contrast against white 4.24:1.
+ */
+export const STALE_COLOR = '#7d7b74';
 
 /** One class of the temperature legend: `[lowerC, upperC)`, open-ended where `null`. */
 export interface TemperatureClass {
@@ -30,29 +32,30 @@ export interface TemperatureClass {
 }
 
 /**
- * Class edges in °C. The neutral middle class 10–15 °C contains 10 °C, the base temperature of
- * grapevine growing-degree days (MIGRATION_PLAN.md §3.1), so blue reads "below vine growth
- * base", red "warm".
+ * Class edges in °C. The split between blue and warm classes is 10 °C, the base temperature of
+ * grapevine growing-degree days (MIGRATION_PLAN.md §3.1): blue reads "below vine growth base".
  */
 export const TEMPERATURE_EDGES_C = [-5, 0, 5, 10, 15, 20, 25, 30] as const;
 
 /**
- * ColorBrewer RdBu, 9 classes, reversed (cold = blue). Diverging, colour-blind safe, with a
- * neutral light-grey midpoint (Brewer & Harrower, colorbrewer2.org).
+ * Diverging scale without a near-white class, so a marker never looks empty: four blues from
+ * ColorBrewer "Blues" below 10 °C and five yellow-orange-browns from ColorBrewer "YlOrBr" from
+ * 10 °C up (colorbrewer2.org, Brewer & Harrower). Blue against orange is the pair best preserved
+ * under colour-vision deficiency, and lightness is monotonic within each arm.
  */
 export const TEMPERATURE_COLORS = [
-  '#2166ac',
-  '#4393c3',
-  '#92c5de',
-  '#d1e5f0',
-  '#f7f7f7',
-  '#fddbc7',
-  '#f4a582',
-  '#d6604d',
-  '#b2182b',
+  '#08519c',
+  '#3182bd',
+  '#6baed6',
+  '#9ecae1',
+  '#fec44f',
+  '#fe9929',
+  '#ec7014',
+  '#cc4c02',
+  '#8c2d04',
 ] as const;
 
-/** Diverging, classed colour scale for the latest temperature on the map. */
+/** Classed diverging colour scale for the latest temperature on the map. */
 export class TemperatureScale {
   readonly classes: readonly TemperatureClass[];
 

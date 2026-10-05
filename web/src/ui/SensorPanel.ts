@@ -3,7 +3,7 @@ import { MS_PER_SECOND } from '../domain/units';
 import type { MessageKey } from '../i18n/cs';
 import type { I18n } from '../i18n/I18n';
 import { el } from './dom';
-import { sensorColor } from './palette';
+import type { SensorColors } from './SensorColors';
 
 const VALUE_DECIMALS = 1;
 const ELEVATION_DECIMALS = 0;
@@ -32,12 +32,14 @@ export class SensorPanel {
    * @param root - The panel element.
    * @param i18n - Translations and formatting.
    * @param timeZone - Display time zone.
+   * @param colors - Line colours of the compared sensors.
    * @param onToggle - Called after the panel was expanded or collapsed (map must resize).
    */
   constructor(
     root: HTMLElement,
     private readonly i18n: I18n,
     private readonly timeZone: string,
+    private readonly colors: SensorColors,
     onToggle: () => void,
   ) {
     this.toggle.addEventListener('click', () => {
@@ -68,7 +70,7 @@ export class SensorPanel {
 
   private card(sensor: SensorInfo): HTMLElement {
     const swatch = el('span', { class: 'swatch', 'aria-hidden': 'true' });
-    swatch.style.background = sensorColor(sensor.colorIndex);
+    swatch.style.background = this.colors.colorFor(sensor.id) ?? 'transparent';
     const rows: [MessageKey, string | null][] = [
       ['sensorId', sensor.id],
       ['elevation', sensor.elevation_m === null ? null : `${this.i18n.formatNumber(sensor.elevation_m, ELEVATION_DECIMALS)} m`],

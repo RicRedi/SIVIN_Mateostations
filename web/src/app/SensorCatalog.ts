@@ -11,8 +11,6 @@ export interface SensorInfo {
   readonly placedSince: string | null;
   readonly site: string | null;
   readonly variety: string | null;
-  /** Position in the registry; gives each sensor a stable chart colour. */
-  readonly colorIndex: number;
   readonly latest: LatestSample | null;
   /** True when the manifest lists data for the sensor. */
   readonly hasData: boolean;
@@ -28,7 +26,7 @@ export class SensorCatalog {
 
   /** Join the registry copy with manifest availability and `latest.json`. */
   static build(registry: SensorsGeoJSON, manifest: Manifest, latest: LatestFile): SensorCatalog {
-    const sensors = registry.features.map((feature, index): SensorInfo => {
+    const sensors = registry.features.map((feature): SensorInfo => {
       const p = feature.properties;
       const current = p.placements.find((placement) => placement.to === null) ?? p.placements.at(-1);
       const [lon, lat] = feature.geometry.coordinates;
@@ -41,7 +39,6 @@ export class SensorCatalog {
         placedSince: current?.from ?? null,
         site: p.site,
         variety: p.variety,
-        colorIndex: index,
         latest: latest.sensors[p.id] ?? null,
         hasData: p.id in manifest.sensors,
       };

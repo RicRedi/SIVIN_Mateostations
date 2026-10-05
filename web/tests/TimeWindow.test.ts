@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_HOURLY_WINDOW_S, MAX_RAW_WINDOW_S, ResolutionPolicy } from '../src/domain/ResolutionPolicy';
+import {
+  MAX_EXPLICIT_HOURLY_WINDOW_S,
+  MAX_EXPLICIT_RAW_WINDOW_S,
+  MAX_HOURLY_WINDOW_S,
+  MAX_RAW_WINDOW_S,
+  ResolutionPolicy,
+} from '../src/domain/ResolutionPolicy';
 import { TimeWindow } from '../src/domain/TimeWindow';
 import { TimeWindowFactory } from '../src/domain/TimeWindowFactory';
 import { TimeZone } from '../src/domain/TimeZone';
@@ -71,7 +77,7 @@ describe('TimeWindowFactory presets', () => {
 
   it('an explicit resolution overrides the automatic one', () => {
     expect(factory.create({ kind: '24h' }, ANCHOR, 'daily').resolution).toBe('daily');
-    expect(factory.create({ kind: 'season', year: 2026 }, ANCHOR, 'raw').resolution).toBe('raw');
+    expect(factory.create({ kind: '30d' }, ANCHOR, 'raw').resolution).toBe('raw');
   });
 });
 
@@ -82,5 +88,20 @@ describe('ResolutionPolicy', () => {
     expect(policy.resolutionFor(MAX_RAW_WINDOW_S + 1)).toBe('hourly');
     expect(policy.resolutionFor(MAX_HOURLY_WINDOW_S)).toBe('hourly');
     expect(policy.resolutionFor(MAX_HOURLY_WINDOW_S + 1)).toBe('daily');
+  });
+
+  it('honours an explicit choice up to the point caps, then gets coarser', () => {
+    const policy = new ResolutionPolicy();
+    expect(policy.resolve('auto', MAX_RAW_WINDOW_S)).toBe('raw');
+    expect(policy.resolve('raw', MAX_EXPLICIT_RAW_WINDOW_S)).toBe('raw');
+    expect(policy.resolve('raw', MAX_EXPLICIT_RAW_WINDOW_S + 1)).toBe('hourly');
+    expect(policy.resolve('raw', MAX_EXPLICIT_HOURLY_WINDOW_S + 1)).toBe('daily');
+    expect(policy.resolve('hourly', MAX_EXPLICIT_HOURLY_WINDOW_S)).toBe('hourly');
+    expect(policy.resolve('hourly', MAX_EXPLICIT_HOURLY_WINDOW_S + 1)).toBe('daily');
+    expect(policy.resolve('daily', 1)).toBe('daily');
+  });
+
+  it('caps an explicit hourly season to daily values', () => {
+    expect(factory.create({ kind: 'season', year: 2026 }, ANCHOR, 'hourly').resolution).toBe('daily');
   });
 });

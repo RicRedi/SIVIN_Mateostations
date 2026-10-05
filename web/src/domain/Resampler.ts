@@ -14,6 +14,8 @@ export const NOMINAL_STEP_S = 1825;
  */
 export const RAW_GAP_THRESHOLD_S = 3 * NOMINAL_STEP_S;
 
+const HALF_HOUR_S = SECONDS_PER_HOUR / 2;
+
 /**
  * Turns raw samples into chart series: QC-masked raw values or hourly means. Daily values are
  * not computed here; they come from `daily.json` (see {@link dailyColumnSeries}).
@@ -30,7 +32,8 @@ export class Resampler {
   /**
    * Hourly means over UTC hours `[h, h + 3600)` covering `[startT, endT)`.
    *
-   * Each output time is the start of its hour. An hour without a valid (non-null, not excluded)
+   * Each output time is the centre of its hour (`h + 1800`), so hourly means line up with raw
+   * samples when the resolution changes. An hour without a valid (non-null, not excluded)
    * value is `null`, so gaps stay visible.
    *
    * @param series - Raw samples.
@@ -53,7 +56,7 @@ export class Resampler {
       sums[bin] = (sums[bin] ?? 0) + value;
       counts[bin] = (counts[bin] ?? 0) + 1;
     });
-    const t = sums.map((_, bin) => firstHourT + bin * SECONDS_PER_HOUR);
+    const t = sums.map((_, bin) => firstHourT + bin * SECONDS_PER_HOUR + HALF_HOUR_S);
     const means = sums.map((sum, bin) => {
       const count = counts[bin] ?? 0;
       return count === 0 ? null : sum / count;

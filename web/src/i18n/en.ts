@@ -45,5 +45,7 @@ export const en: Dictionary = {
   hidePanel: 'Hide panel',
   mapLabel: 'Map of the sensors',
   time: 'Time',
+  sensorLoadError: 'Sensor {sensor}: could not load data ({message})',
+  windowShown: 'Showing {from} – {to}',
   chartLabel: 'Chart of temperature and relative humidity',
 };

@@ -2,6 +2,7 @@ import type { AppState } from '../state/AppState';
 import type { I18n } from '../i18n/I18n';
 import type { TimeWindow } from '../domain/TimeWindow';
 import type { TimeWindowFactory } from '../domain/TimeWindowFactory';
+import { DEFAULT_WINDOW } from '../domain/WindowSpec';
 import type { ChartData, ChartDataLoader } from './ChartDataLoader';
 
 /** What the presenter needs from the chart UI. */
@@ -13,11 +14,17 @@ export interface ChartView {
   showData(data: ChartData): void;
 }
 
+/** What the application needs from the presenter. */
+export interface ChartController {
+  windowFor(state: AppState): TimeWindow;
+  refresh(state: AppState, sensorIds: readonly string[]): Promise<void>;
+}
+
 /**
  * Keeps the chart in sync with the application state: resolves the time window, loads data and
  * shows it, a "loading" message, or an error. Responses of superseded requests are dropped.
  */
-export class ChartPresenter {
+export class ChartPresenter implements ChartController {
   private latestRequest = 0;
 
   /**
@@ -31,9 +38,20 @@ export class ChartPresenter {
     private readonly anchorEndT: number,
   ) {}
 
-  /** The concrete window for the state's window spec and resolution choice. */
+  /**
+   * The concrete window for the state's window spec and resolution choice. A spec that cannot
+   * be turned into a window (e.g. an invalid date) falls back to the default window, so the
+   * application never fails on a bad URL.
+   */
   windowFor(state: AppState): TimeWindow {
-    return this.factory.create(state.window, this.anchorEndT, state.resolution);
+    try {
+      return this.factory.create(state.window, this.anchorEndT, state.resolution);
+    } catch (error) {
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+      return this.factory.create(DEFAULT_WINDOW, this.anchorEndT, state.resolution);
+    }
   }
 
   /** Load and show data for `sensorIds` in the state's window. Resolves when done. */

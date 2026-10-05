@@ -4,7 +4,7 @@ import { ChartPresenter } from './app/ChartPresenter';
 import { SensorCatalog } from './app/SensorCatalog';
 import type { Manifest } from './contract';
 import { DataClient } from './data/DataClient';
-import { QcMask } from './domain/QcFlags';
+import { DISPLAY_EXCLUDE_MASK, QcMask } from './domain/QcFlags';
 import { Resampler } from './domain/Resampler';
 import { ResolutionPolicy } from './domain/ResolutionPolicy';
 import { TimeWindowFactory } from './domain/TimeWindowFactory';
@@ -23,6 +23,7 @@ import { HashSync } from './ui/HashSync';
 import { HeaderView } from './ui/HeaderView';
 import { MapView } from './ui/MapView';
 import { TemperatureScale } from './ui/palette';
+import { SensorColors } from './ui/SensorColors';
 import { SensorList } from './ui/SensorList';
 import { SensorPanel } from './ui/SensorPanel';
 import { SeriesChart } from './ui/SeriesChart';
@@ -32,6 +33,8 @@ import { TimeWindowControl } from './ui/TimeWindowControl';
 const DATA_BASE_URL = `${import.meta.env.BASE_URL}data/`;
 /** Build-time flag: the bundled data are the synthetic fixture unless set to `"false"`. */
 const IS_DEMO_DATA = import.meta.env.VITE_DEMO_DATA !== 'false';
+/** Below this viewport width the map legend starts collapsed so it does not cover the map. */
+const COMPACT_LEGEND_QUERY = '(max-width: 600px)';
 
 function requireElement(id: string): HTMLElement {
   const element = document.getElementById(id);
@@ -70,20 +73,22 @@ async function start(): Promise<void> {
   store.update({ selectedSensorIds: catalog.knownIds(store.state.selectedSensorIds) });
 
   const factory = new TimeWindowFactory(zone, new ResolutionPolicy());
-  const panel = new SensorPanel(requireElement('panel'), i18n, zone.name, () => {
+  const colors = new SensorColors();
+  const panel = new SensorPanel(requireElement('panel'), i18n, zone.name, colors, () => {
     map.invalidateSize();
   });
-  const chart = new SeriesChart(panel.chartSlot, i18n, catalog, manifest.variables, zone);
-  const loader = new ChartDataLoader(client, new Resampler(new QcMask()), zone);
+  const chart = new SeriesChart(panel.chartSlot, i18n, catalog, colors, manifest.variables, zone);
+  const loader = new ChartDataLoader(client, new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK)), zone, console);
   const presenter = new ChartPresenter(loader, factory, i18n, chart, dataEndT(manifest));
-  const map = new MapView(requireElement('map'), catalog, i18n, new TemperatureScale(), zone.name, (id, compare) =>
+  const legendCollapsed = window.matchMedia(COMPACT_LEGEND_QUERY).matches;
+  const map = new MapView(requireElement('map'), catalog, i18n, new TemperatureScale(), zone.name, legendCollapsed, (id, compare) =>
     app?.onSensorClick(id, compare),
   );
-  const list = new SensorList(panel.listSlot, catalog, i18n, (id) => app?.onSensorToggle(id));
+  const list = new SensorList(panel.listSlot, catalog, i18n, colors, (id) => app?.onSensorToggle(id));
   const windowControl = new TimeWindowControl(panel.windowSlot, i18n, zone, manifest.seasons, (change) =>
     app?.onWindowChange(change),
   );
-  app = new App(store, catalog, i18n, preference, presenter, { header, map, panel, list, windowControl, chart });
+  app = new App(store, catalog, i18n, preference, colors, presenter, { header, map, panel, list, windowControl, chart });
   new HashSync(store, codec, window.location, window.history, window).write();
   app.start();
 }

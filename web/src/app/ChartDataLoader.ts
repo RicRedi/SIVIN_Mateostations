@@ -1,8 +1,8 @@
 import type { SensorEvent } from '../contract';
 import type { DataClient } from '../data/DataClient';
 import { dailyColumnSeries } from '../domain/dailyColumnSeries';
-import type { Resampler } from '../domain/Resampler';
 import type { RawVariable } from '../domain/RawSeries';
+import type { Resampler } from '../domain/Resampler';
 import type { TimeSeries } from '../domain/TimeSeries';
 import type { TimeWindow } from '../domain/TimeWindow';
 import type { TimeZone } from '../domain/TimeZone';
@@ -20,10 +20,22 @@ export interface SensorChartData {
   readonly events: readonly SensorEvent[];
 }
 
-/** Chart input for all selected sensors. */
+/** A sensor whose series could not be loaded. */
+export interface SensorLoadFailure {
+  readonly sensorId: string;
+  readonly message: string;
+}
+
+/** Chart input for all selected sensors; a failing sensor does not hide the others. */
 export interface ChartData {
   readonly window: TimeWindow;
   readonly sensors: readonly SensorChartData[];
+  readonly failures: readonly SensorLoadFailure[];
+}
+
+/** Where non-fatal problems (e.g. an unreadable events file) are reported. */
+export interface WarningSink {
+  warn(message: string): void;
 }
 
 const DAILY_COLUMN: Readonly<Record<RawVariable, 'temp_mean' | 'rh_mean'>> = {
@@ -32,28 +44,54 @@ const DAILY_COLUMN: Readonly<Record<RawVariable, 'temp_mean' | 'rh_mean'>> = {
 };
 
 /**
- * Loads what the chart needs for a window: raw samples, hourly means or daily means per the
- * window's resolution, plus the sensors' events.
+ * Loads what the chart needs for a window, sensor by sensor: raw samples, hourly means or daily
+ * means per the window's resolution, plus the sensor's events.
+ *
+ * A sensor whose series fail to load becomes a {@link SensorLoadFailure}; the other sensors are
+ * still returned. Events are decoration: a missing or invalid events file is reported to the
+ * warning sink and treated as "no events".
  */
 export class ChartDataLoader {
   constructor(
     private readonly client: DataClient,
     private readonly resampler: Resampler,
     private readonly zone: TimeZone,
+    private readonly warnings: WarningSink,
   ) {}
 
   async load(sensorIds: readonly string[], window: TimeWindow): Promise<ChartData> {
-    const sensors = await Promise.all(sensorIds.map((id) => this.loadSensor(id, window)));
-    return { window, sensors };
+    const results = await Promise.allSettled(sensorIds.map((id) => this.loadSensor(id, window)));
+    const sensors: SensorChartData[] = [];
+    const failures: SensorLoadFailure[] = [];
+    results.forEach((result, i) => {
+      const sensorId = sensorIds[i] ?? '';
+      if (result.status === 'fulfilled') {
+        sensors.push(result.value);
+      } else {
+        const reason: unknown = result.reason;
+        failures.push({ sensorId, message: reason instanceof Error ? reason.message : String(reason) });
+      }
+    });
+    return { window, sensors, failures };
   }
 
   private async loadSensor(sensorId: string, window: TimeWindow): Promise<SensorChartData> {
-    const [series, eventsFile] = await Promise.all([
+    const [series, events] = await Promise.all([
       this.loadSeries(sensorId, window),
-      this.client.getEvents(sensorId),
+      this.loadEvents(sensorId, window),
     ]);
-    const events = eventsFile.events.filter((event) => window.contains(event.t));
     return { sensorId, ...series, events };
+  }
+
+  private async loadEvents(sensorId: string, window: TimeWindow): Promise<readonly SensorEvent[]> {
+    try {
+      const file = await this.client.getEvents(sensorId);
+      return file.events.filter((event) => window.contains(event.t));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.warnings.warn(`Events of sensor ${sensorId} ignored: ${message}`);
+      return [];
+    }
   }
 
   private async loadSeries(

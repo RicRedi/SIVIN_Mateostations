@@ -1,28 +1,24 @@
-import type { ChartPresenter } from '../app/ChartPresenter';
+import type { ChartController } from '../app/ChartPresenter';
 import type { SensorCatalog, SensorInfo } from '../app/SensorCatalog';
 import type { I18n } from '../i18n/I18n';
 import type { LanguagePreference } from '../i18n/LanguagePreference';
 import { selectOnly, toggleInSelection, type AppState, type AppStore } from '../state/AppState';
-import type { HeaderView } from './HeaderView';
-import type { MapView } from './MapView';
-import type { SensorList } from './SensorList';
-import type { SensorPanel } from './SensorPanel';
-import type { SeriesChart } from './SeriesChart';
-import type { TimeWindowControl, WindowChange } from './TimeWindowControl';
+import type { SensorColors } from './SensorColors';
+import type { WindowChange, WindowControlState } from './TimeWindowControl';
 
-/** The UI components the application coordinates. */
+/** The parts of the UI components the application coordinates (implemented by the views). */
 export interface AppViews {
-  readonly header: HeaderView;
-  readonly map: MapView;
-  readonly panel: SensorPanel;
-  readonly list: SensorList;
-  readonly windowControl: TimeWindowControl;
-  readonly chart: SeriesChart;
+  readonly header: { render(): void };
+  readonly map: { render(selectedIds: readonly string[]): void; invalidateSize(): void; fitToSensors(): void };
+  readonly panel: { render(selected: readonly SensorInfo[], limitReached: boolean): void };
+  readonly list: { render(selectedIds: readonly string[]): void };
+  readonly windowControl: { render(state: WindowControlState): void };
+  readonly chart: { render(): void };
 }
 
 /**
  * Coordinates state and views: user actions update the store, store changes re-render the views
- * and reload the chart when the selection or the window changed.
+ * and reload the chart when the selection, window or resolution changed.
  */
 export class App {
   private limitReached = false;
@@ -32,7 +28,8 @@ export class App {
     private readonly catalog: SensorCatalog,
     private readonly i18n: I18n,
     private readonly preference: LanguagePreference,
-    private readonly presenter: ChartPresenter,
+    private readonly colors: SensorColors,
+    private readonly presenter: ChartController,
     private readonly views: AppViews,
   ) {
     store.subscribe((state, previous) => {
@@ -42,6 +39,7 @@ export class App {
 
   /** Render everything once and load the chart for the initial state. */
   start(): void {
+    this.colors.update(this.store.state.selectedSensorIds);
     this.renderAll(this.store.state);
     this.views.map.invalidateSize();
     this.views.map.fitToSensors();
@@ -87,6 +85,7 @@ export class App {
       this.store.update({ selectedSensorIds: known });
       return;
     }
+    this.colors.update(state.selectedSensorIds);
     if (state.language !== previous.language) {
       this.i18n.setLanguage(state.language);
       this.preference.save(state.language);

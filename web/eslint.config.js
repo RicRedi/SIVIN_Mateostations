@@ -16,7 +16,7 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
       '@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'no-public' }],
-      'no-console': 'error',
+      'no-console': ['error', { allow: ['warn'] }],
     },
   },
   {

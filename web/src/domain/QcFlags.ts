@@ -26,6 +26,16 @@ export const DEFAULT_EXCLUDE_MASK =
   QcFlag.PRE_DEPLOYMENT |
   QcFlag.MANUAL_EXCLUDE;
 
+/**
+ * Mask used for display in the web portal: {@link DEFAULT_EXCLUDE_MASK} without MISSING.
+ *
+ * `qc` is one flag set per row (§2.5/§2.6), so MISSING on a row may mean that only one of the
+ * variables is null. For display a `null` value already means "missing", so MISSING is handled
+ * per value through `null`, and a valid temperature is not hidden because humidity is null.
+ * All other excluding flags still hide the whole row.
+ */
+export const DISPLAY_EXCLUDE_MASK = DEFAULT_EXCLUDE_MASK & ~QcFlag.MISSING;
+
 /** Decides whether a sample's QC flags exclude it. */
 export class QcMask {
   /** @param excludeBits - OR-ed {@link QcFlag} values that exclude a sample. */

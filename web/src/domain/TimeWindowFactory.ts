@@ -34,12 +34,12 @@ export class TimeWindowFactory {
   /**
    * @param spec - Requested window.
    * @param anchorEndT - End of available data, Unix seconds UTC.
-   * @param choice - Requested resolution or `auto`.
+   * @param choice - Requested resolution or `auto` (subject to the policy's point caps).
+   * @throws RangeError for a custom date that is not a valid `YYYY-MM-DD`.
    */
   create(spec: WindowSpec, anchorEndT: number, choice: ResolutionChoice): TimeWindow {
     const [startT, endT] = this.bounds(spec, anchorEndT);
-    const resolution = choice === 'auto' ? this.policy.resolutionFor(endT - startT) : choice;
-    return new TimeWindow(startT, endT, resolution);
+    return new TimeWindow(startT, endT, this.policy.resolve(choice, endT - startT));
   }
 
   private bounds(spec: WindowSpec, anchorEndT: number): readonly [number, number] {

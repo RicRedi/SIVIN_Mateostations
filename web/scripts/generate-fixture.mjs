@@ -5,7 +5,8 @@
  * The values are invented by a seeded pseudo-random model; they are NOT measurements. The output
  * is deterministic: the same SEED always produces byte-identical files.
  *
- * Model, per sensor and sample (step 1825 s, 1 Jun – 30 Sep 2026 UTC):
+ * Model, per sensor and sample (step 1825 s with a per-sensor phase and ±3 s Gaussian clock
+ * jitter, 1 Jun – 30 Sep 2026 UTC):
  *   temp_c = seasonal mean(day of year) + shared daily weather anomaly (AR(1))
  *            + diurnal cosine (maximum at 15:00 local solar time) + elevation/inversion offset
  *            + white noise
@@ -28,6 +29,8 @@ const GENERATED_AT = '2026-10-01T00:00:00Z';
 const SEASON = 2026;
 
 const STEP_S = 1825;
+/** Standard deviation of the simulated clock jitter of each sample, seconds. */
+const CLOCK_JITTER_S = 3;
 const HOUR_S = 3600;
 const DAY_S = 86_400;
 const START_T = Date.UTC(2026, 5, 1) / 1000;
@@ -173,7 +176,8 @@ function isInGap(sensor, t) {
 function sensorSamples(sensor, weather) {
   const endT = sensor.id === STALE_SENSOR ? STALE_END_T : END_T;
   const rows = [];
-  for (let t = START_T + sensor.phaseS; t < endT; t += STEP_S) {
+  for (let nominalT = START_T + sensor.phaseS; nominalT < endT; nominalT += STEP_S) {
+    const t = Math.max(START_T, nominalT + Math.round(CLOCK_JITTER_S * gaussian()));
     if (isInGap(sensor, t)) {
       continue;
     }
