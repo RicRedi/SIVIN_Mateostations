@@ -10,9 +10,9 @@ paths:
   output_dir: vystupy                     # plots and other outputs for people
 
 time:
-  source_timezone: Europe/Prague    # zone of the export timestamps (not yet confirmed, Q2)
+  source_timezone: Europe/Prague    # zone of the export timestamps (local time, owner Q2)
   display_timezone: Europe/Prague   # zone for display and local calendar days
-  expected_interval_s: 1825.0       # nominal sampling interval [s], from the legacy configs
+  expected_interval_s: 1830.0       # nominal sampling interval [s], median of the first real export
 
 analytics:
   min_daily_coverage: 0.9    # share of a day covered by valid samples [0-1]; project default

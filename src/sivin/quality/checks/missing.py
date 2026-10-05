@@ -34,12 +34,11 @@ class MissingValueSettings(CheckSettings):
         description="Variables whose NaN values count as missing (column names, no unit).",
     )
     rule: MissingRule = Field(
-        MissingRule.ALL,
+        MissingRule.ANY,
         description=(
-            "'all': flag a row only when every checked variable is NaN; 'any': flag it when one "
-            "is. Project default 'all', because the qc field is shared by both variables "
-            "(MIGRATION_PLAN §2.5) and 'any' would exclude a valid temperature whenever only "
-            "the humidity is missing. A single NaN value is ignored by the aggregates anyway."
+            "'any': flag a row when one checked variable is NaN; 'all': only when every one "
+            "is. Default 'any' by owner decision 2026-10-05 (MIGRATION_PLAN §0.5): if one "
+            "variable is missing at a given time, the whole measurement is invalid."
         ),
     )
 
@@ -49,7 +48,8 @@ class MissingValueCheck(QualityCheck[MissingValueSettings]):
     """Flag rows without a measured value.
 
     A value is missing when it is ``NaN``. The row gets ``MISSING`` according to
-    :attr:`MissingValueSettings.rule`.
+    :attr:`MissingValueSettings.rule`; by default (``any``) a row lacking the temperature
+    **or** the humidity is flagged, because the whole measurement is then invalid.
     """
 
     check_id = "missing"

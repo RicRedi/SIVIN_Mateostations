@@ -4,9 +4,11 @@ import { TimeSeries } from './TimeSeries';
 import { SECONDS_PER_HOUR } from './units';
 
 /**
- * Nominal sampling step of the sensors (MIGRATION_PLAN.md §2.7: "periodou ~1825 s").
+ * Nominal sampling step of the sensors: 1830 s, the median step of the first real export
+ * (sensor 77799986, MIGRATION_PLAN.md §0.6.1; the legacy estimate was 1825 s). Mirrors the
+ * default of `time.expected_interval_s` in `config/sivin.yaml`.
  */
-export const NOMINAL_STEP_S = 1825;
+export const NOMINAL_STEP_S = 1830;
 
 /**
  * Raw samples farther apart than this are drawn with a gap: two missed samples plus slack for

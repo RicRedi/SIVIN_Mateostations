@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDE_MASK, DISPLAY_EXCLUDE_MASK, QcFlag, QcMask } from '../src/domain/QcFlags';
 import { RawSeries } from '../src/domain/RawSeries';
-import { RAW_GAP_THRESHOLD_S, Resampler } from '../src/domain/Resampler';
+import { NOMINAL_STEP_S, RAW_GAP_THRESHOLD_S, Resampler } from '../src/domain/Resampler';
 import { utc } from './helpers';
 
 const ID = '11111111';
@@ -30,20 +30,22 @@ describe('QcMask', () => {
     expect(mask.excludes(0)).toBe(false);
   });
 
-  it('display mask leaves MISSING to null values and keeps all other excluding flags', () => {
-    expect(DISPLAY_EXCLUDE_MASK).toBe(2 | 4 | 16 | 32 | 256);
+  it('display mask is the full DEFAULT_EXCLUDE mask, so MISSING hides the row (owner decision 2026-10-05)', () => {
+    expect(DISPLAY_EXCLUDE_MASK).toBe(DEFAULT_EXCLUDE_MASK);
+    expect(DISPLAY_EXCLUDE_MASK).toBe(311);
     const display = new QcMask(DISPLAY_EXCLUDE_MASK);
-    expect(display.excludes(QcFlag.MISSING)).toBe(false);
-    expect(display.excludes(QcFlag.MISSING | QcFlag.PRE_DEPLOYMENT)).toBe(true);
+    expect(display.excludes(QcFlag.MISSING)).toBe(true);
+    expect(display.excludes(QcFlag.MISSING | QcFlag.STEP)).toBe(true);
+    expect(display.excludes(QcFlag.STEP | QcFlag.TIMESTAMP_SUSPECT)).toBe(false);
   });
 
-  it('with the display mask a valid temperature survives a row whose RH is null', () => {
-    const raw = RawSeries.merge(ID, [{ sensor_id: ID, t: [H0, H0 + 1825], temp_c: [10, 11], rh_pct: [null, 60], qc: [QcFlag.MISSING, 0] }]);
+  it('with the display mask a row whose RH is null (MISSING) also hides its temperature', () => {
+    const raw = RawSeries.merge(ID, [{ sensor_id: ID, t: [H0, H0 + 1830], temp_c: [10, 11], rh_pct: [null, 60], qc: [QcFlag.MISSING, 0] }]);
     const display = new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK));
-    expect(display.raw(raw, 'temp_c').values).toEqual([10, 11]);
+    expect(display.raw(raw, 'temp_c').values).toEqual([null, 11]);
     expect(display.raw(raw, 'rh_pct').values).toEqual([null, 60]);
-    // hour 0 temperature mean (10 + 11) / 2, stamped at the bin centre 00:30
-    expect(display.hourlyMeans(raw, 'temp_c', H0, H0 + 3600).values).toEqual([10.5]);
+    // hour 0: only the 00:30:30 temperature of 11 is valid; stamped at the bin centre 00:30
+    expect(display.hourlyMeans(raw, 'temp_c', H0, H0 + 3600).values).toEqual([11]);
   });
 });
 
@@ -86,12 +88,25 @@ describe('Resampler.raw', () => {
     const resampler = new Resampler(new QcMask());
     const raw = series([
       [H0, 10, 0],
-      [H0 + 1825, 11, QcFlag.PRE_DEPLOYMENT],
-      [H0 + 1825 + RAW_GAP_THRESHOLD_S + 1, 12, 0],
+      [H0 + 1830, 11, QcFlag.PRE_DEPLOYMENT],
+      [H0 + 1830 + RAW_GAP_THRESHOLD_S + 1, 12, 0],
     ]);
     const result = resampler.raw(raw, 'temp_c');
-    const gapT = Math.round((2 * H0 + 2 * 1825 + RAW_GAP_THRESHOLD_S + 1) / 2);
-    expect(result.t).toEqual([H0, H0 + 1825, gapT, H0 + 1825 + RAW_GAP_THRESHOLD_S + 1]);
+    const gapT = Math.round((2 * H0 + 2 * 1830 + RAW_GAP_THRESHOLD_S + 1) / 2);
+    expect(result.t).toEqual([H0, H0 + 1830, gapT, H0 + 1830 + RAW_GAP_THRESHOLD_S + 1]);
     expect(result.values).toEqual([10, null, null, 12]);
+  });
+
+  it('pins the gap threshold: 3 x 1830 s = 5490 s, a longer step breaks the line', () => {
+    expect(NOMINAL_STEP_S).toBe(1830);
+    expect(RAW_GAP_THRESHOLD_S).toBe(5490);
+    const resampler = new Resampler(new QcMask());
+    // Steps of exactly 5490 s (two missed samples) stay connected; 5491 s gets a break.
+    const connected = resampler.raw(series([[H0, 10, 0], [H0 + 5490, 11, 0]]), 'temp_c');
+    expect(connected.t).toEqual([H0, H0 + 5490]);
+    const broken = resampler.raw(series([[H0, 10, 0], [H0 + 5491, 11, 0]]), 'temp_c');
+    // break stamped at the midpoint, rounded: H0 + 2745.5 -> H0 + 2746
+    expect(broken.t).toEqual([H0, H0 + 2746, H0 + 5491]);
+    expect(broken.values).toEqual([10, null, 11]);
   });
 });

@@ -30,9 +30,8 @@ def two_days(make_series: SeriesFactory) -> DailyWeather:
     Day 2026-01-10: 4 valid samples           -> coverage 4 * 6 h / 24 h = 1.0
     Day 2026-01-11: 00:00 valid (STEP flag is informative), 03:00 valid,
                     06:00 SPIKE (excluded), 12:00 absent (gap),
-                    18:00 temperature NaN but humidity 50 % valid
-                    -> 2 valid temperatures   -> coverage 2 * 6 h / 24 h = 0.5
-                    -> 3 valid humidities     -> rh_coverage 3 * 6 h / 24 h = 0.75
+                    18:00 temperature NaN, humidity 50 % (the whole row is invalid)
+                    -> 2 valid samples        -> coverage 2 * 6 h / 24 h = 0.5
     Day 2026-01-12: no sample                 -> coverage 0
     Day 2026-01-13: 00:00 valid               -> coverage 0.25
     """
@@ -65,19 +64,34 @@ def test_hand_computed_aggregates(two_days: DailyWeather) -> None:
     assert (day1["rh_min"], day1["rh_mean"], day1["rh_max"]) == (60.0, 75.0, 90.0)
     assert (day1["n_samples"], day1["coverage"]) == (4, 1.0)
     assert (day2["temp_min"], day2["temp_mean"], day2["temp_max"]) == (1.0, 2.0, 3.0)
-    # (95 + 85 + 50) / 3 = 76.666...
-    assert (day2["rh_min"], day2["rh_max"]) == (50.0, 95.0)
-    assert day2["rh_mean"] == pytest.approx(230.0 / 3)
+    # The 18:00 humidity of 50 % is dropped with its row: (95 + 85) / 2 = 90.
+    assert (day2["rh_min"], day2["rh_mean"], day2["rh_max"]) == (85.0, 90.0, 95.0)
     assert (day2["temp_n_samples"], day2["temp_coverage"]) == (2, 0.5)
-    assert (day2["rh_n_samples"], day2["rh_coverage"]) == (3, 0.75)
+    assert (day2["rh_n_samples"], day2["rh_coverage"]) == (2, 0.5)
     assert (day2["n_samples"], day2["coverage"]) == (2, 0.5)
 
 
-def test_missing_humidity_keeps_temperature(make_series: SeriesFactory) -> None:
-    series = make_series(["2026-01-10 00:00", "2026-01-10 12:00"], [1.0, 30.0], [50.0, np.nan])
-    day = DailyWeather.from_series(series, PRAGUE, SIX_HOURS_S, EXCLUDE).frame.iloc[0]
-    assert (day["temp_min"], day["temp_max"], day["temp_n_samples"]) == (1.0, 30.0, 2)
-    assert (day["rh_max"], day["rh_n_samples"], day["rh_coverage"]) == (50.0, 1, 0.25)
+@pytest.mark.parametrize(
+    ("temp_c", "rh_pct"),
+    [([1.0, 30.0], [50.0, np.nan]), ([1.0, np.nan], [50.0, 80.0])],
+    ids=["humidity-missing", "temperature-missing"],
+)
+def test_one_missing_variable_invalidates_the_whole_row(
+    make_series: SeriesFactory, temp_c: list[float], rh_pct: list[float]
+) -> None:
+    # Owner decision 2026-10-05: the 12:00 row lacks one variable, so neither of its values
+    # counts, even with an exclusion mask of 0 (no MISSING flag needed).
+    series = make_series(["2026-01-10 00:00", "2026-01-10 12:00"], temp_c, rh_pct)
+    for exclude_mask in (EXCLUDE, 0):
+        day = DailyWeather.from_series(series, PRAGUE, SIX_HOURS_S, exclude_mask).frame.iloc[0]
+        assert (day["temp_min"], day["temp_max"], day["rh_min"], day["rh_max"]) == (
+            1.0,
+            1.0,
+            50.0,
+            50.0,
+        )
+        for prefix in ("", "temp_", "rh_"):
+            assert (day[f"{prefix}n_samples"], day[f"{prefix}coverage"]) == (1, 0.25)
 
 
 def test_day_without_samples_is_present_and_empty(two_days: DailyWeather) -> None:
@@ -164,7 +178,9 @@ def test_invalid_arguments(sensor_id: SensorId, two_days: DailyWeather) -> None:
         ("coverage", 5.0, "within 0-1"),
         ("rh_coverage", -0.1, "within 0-1"),
         ("rh_n_samples", -1, "must not be negative"),
-        ("coverage", 0.3, "must equal the temperature"),
+        ("coverage", 0.3, "'temp_n_samples' and 'temp_coverage' must equal"),
+        ("rh_coverage", 0.3, "'rh_n_samples' and 'rh_coverage' must equal"),
+        ("rh_n_samples", 3, "whole-row validity"),
     ]:
         broken = frame.copy()
         broken.loc[date(2026, 1, 10), column] = value

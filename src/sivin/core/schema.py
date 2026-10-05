@@ -286,7 +286,8 @@ class MeasurementSeries:
     def valid_mask(self, exclude_mask: int) -> pd.Series:
         """Tell which rows are not excluded by the flags in ``exclude_mask``.
 
-        Only the ``qc`` flags are considered; ``NaN`` values are not checked here.
+        Only the ``qc`` flags are considered; ``NaN`` values are not checked here. For the
+        whole-row validity rule (both variables present) use :meth:`complete_mask`.
 
         Parameters
         ----------
@@ -300,6 +301,27 @@ class MeasurementSeries:
         """
         is_excluded = excluded(self._frame[Column.QC].to_numpy(), exclude_mask)
         return pd.Series(~is_excluded, index=self._frame.index, name="valid", dtype=bool)
+
+    def complete_mask(self, exclude_mask: int) -> pd.Series:
+        """Tell which rows are valid measurements under the whole-row rule.
+
+        A measurement is valid only if **both** temperature and humidity are present and no
+        flag of ``exclude_mask`` is set (owner decision 2026-10-05, MIGRATION_PLAN §0.5: if one
+        variable is missing at a given time, the whole measurement is invalid).
+
+        Parameters
+        ----------
+        exclude_mask : int
+            Exclusion mask, e.g. ``QcFlag.DEFAULT_EXCLUDE``.
+
+        Returns
+        -------
+        pandas.Series of bool
+            ``True`` for rows with both values present and not excluded, aligned with
+            :attr:`frame`.
+        """
+        present = self._frame[Column.TEMP].notna() & self._frame[Column.RH].notna()
+        return (self.valid_mask(exclude_mask) & present).rename("complete")
 
     def to_frame(self) -> pd.DataFrame:
         """Return the data in the long format of MIGRATION_PLAN §2.5.

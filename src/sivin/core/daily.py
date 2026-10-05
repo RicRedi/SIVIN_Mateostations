@@ -43,13 +43,17 @@ DATE_INDEX_NAME: Final = "date"
 _VARIABLES: Final = (("temp", Column.TEMP), ("rh", Column.RH))
 """Column-name prefix and source column of each aggregated variable."""
 
+_ROW_LEVEL_ALIAS_PREFIXES: Final = ("temp_", "rh_")
+"""Prefixes of the per-variable count and coverage columns, which equal the row-level ones."""
+
 
 class DailyWeather:
     """Daily aggregates of one sensor, by local calendar day of a display time zone.
 
-    Temperature and humidity are aggregated **independently**: a value is *valid* when it is
-    present (not ``NaN``) and no flag of the exclusion mask is set on its row. A missing
-    humidity value therefore does not discard the temperature of the same sample.
+    **Whole-row validity** (owner decision 2026-10-05, MIGRATION_PLAN §0.5): a sample counts
+    only if **both** its temperature and its humidity are present (not ``NaN``) and no flag of
+    the exclusion mask is set on its row (:meth:`MeasurementSeries.complete_mask`). A missing
+    humidity value therefore also discards the temperature of the same sample, and vice versa.
 
     The frame is indexed by local date (:class:`datetime.date`, index name ``date``) and covers
     every day from the first to the last sample; days without valid values are present with
@@ -58,25 +62,27 @@ class DailyWeather:
     ===================  =====  ==========================================================
     column               unit   meaning
     ===================  =====  ==========================================================
-    ``temp_min``         °C     minimum of the valid temperatures
-    ``temp_mean``        °C     **arithmetic mean of the valid temperatures**
+    ``temp_min``         °C     minimum of the temperatures of the valid samples
+    ``temp_mean``        °C     **arithmetic mean of the temperatures of the valid samples**
                                 (not ``(min + max) / 2``)
-    ``temp_max``         °C     maximum of the valid temperatures
-    ``rh_min``           %      minimum of the valid humidities
-    ``rh_mean``          %      arithmetic mean of the valid humidities
-    ``rh_max``           %      maximum of the valid humidities
-    ``temp_n_samples``   —      number of valid temperatures
-    ``rh_n_samples``     —      number of valid humidities
-    ``temp_coverage``    0-1    ``min(1, temp_n_samples * expected_interval_s / day_length_s)``
-    ``rh_coverage``      0-1    the same for humidity
-    ``n_samples``        —      equal to ``temp_n_samples``
-    ``coverage``         0-1    equal to ``temp_coverage``
+    ``temp_max``         °C     maximum of the temperatures of the valid samples
+    ``rh_min``           %      minimum of the humidities of the valid samples
+    ``rh_mean``          %      arithmetic mean of the humidities of the valid samples
+    ``rh_max``           %      maximum of the humidities of the valid samples
+    ``n_samples``        —      number of valid samples
+    ``coverage``         0-1    ``min(1, n_samples * expected_interval_s / day_length_s)``
+    ``temp_n_samples``   —      equal to ``n_samples``
+    ``rh_n_samples``     —      equal to ``n_samples``
+    ``temp_coverage``    0-1    equal to ``coverage``
+    ``rh_coverage``      0-1    equal to ``coverage``
     ===================  =====  ==========================================================
 
-    ``n_samples`` and ``coverage`` are the temperature values because nearly all indices are
-    temperature-based; ``coverage`` is the column of the site contract (§2.6) and the one
-    :meth:`complete_days` uses. ``day_length_s`` is the real length of the local day, i.e.
-    23 h or 25 h on daylight-saving transition days.
+    The per-variable columns ``temp_*``/``rh_*`` of counts and coverage are kept for API
+    stability (they were independent before 2026-10-05); under the whole-row rule they always
+    equal ``n_samples`` and ``coverage``, and the constructor enforces that. ``coverage`` is
+    the column of the site contract (§2.6) and the one :meth:`complete_days` uses.
+    ``day_length_s`` is the real length of the local day, i.e. 23 h or 25 h on daylight-saving
+    transition days.
 
     Parameters
     ----------
@@ -117,9 +123,10 @@ class DailyWeather:
         timezone : str
             IANA zone defining the calendar days, e.g. ``"Europe/Prague"``.
         expected_interval_s : float
-            Nominal sampling interval in seconds (e.g. 1825 s), used for ``coverage``.
+            Nominal sampling interval in seconds (e.g. 1830 s), used for ``coverage``.
         exclude_mask : int
-            :class:`~sivin.core.flags.QcFlag` bits that exclude a sample.
+            :class:`~sivin.core.flags.QcFlag` bits that exclude a sample. A sample without
+            temperature or without humidity is excluded regardless of its flags.
 
         Returns
         -------
@@ -138,24 +145,23 @@ class DailyWeather:
             return cls(series.sensor_id, _empty_daily_frame(), timezone)
         frame = series.frame
         dates = converter.local_dates(frame[Column.TIMESTAMP])
-        not_excluded = series.valid_mask(exclude_mask)
+        valid = series.complete_mask(exclude_mask)
         all_days = pd.Index(
             pd.date_range(dates.iloc[0], dates.iloc[-1], freq="D").date, name=DATE_INDEX_NAME
         )
         day_length_s = np.array([converter.day_length_s(day) for day in all_days])
         daily = pd.DataFrame(index=all_days)
+        valid_dates = dates.loc[valid]
         for prefix, column in _VARIABLES:
-            valid = not_excluded & frame[column].notna()
-            grouped = frame.loc[valid, column].groupby(dates.loc[valid])
+            grouped = frame.loc[valid, column].groupby(valid_dates)
             for statistic in ("min", "mean", "max"):
                 daily[f"{prefix}_{statistic}"] = grouped.agg(statistic).astype(np.float64)
-            counts = grouped.size().reindex(all_days, fill_value=0).astype(np.int64)
-            daily[f"{prefix}_n_samples"] = counts
-            daily[f"{prefix}_coverage"] = np.minimum(
-                1.0, counts.to_numpy() * expected_interval_s / day_length_s
-            )
-        daily["n_samples"] = daily["temp_n_samples"]
-        daily["coverage"] = daily["temp_coverage"]
+        counts = valid_dates.groupby(valid_dates).size()
+        n_samples = counts.reindex(all_days, fill_value=0).astype(np.int64)
+        coverage = np.minimum(1.0, n_samples.to_numpy() * expected_interval_s / day_length_s)
+        for prefix in (*_ROW_LEVEL_ALIAS_PREFIXES, ""):
+            daily[f"{prefix}n_samples"] = n_samples
+            daily[f"{prefix}coverage"] = coverage
         return cls(series.sensor_id, daily[list(DAILY_COLUMNS)], timezone)
 
     @property
@@ -252,11 +258,15 @@ def _validated_daily(frame: pd.DataFrame) -> pd.DataFrame:
     coverages = frame[list(COVERAGE_COLUMNS)].to_numpy()
     if np.isnan(coverages).any() or (coverages < 0).any() or (coverages > 1).any():
         raise SchemaError("Daily coverage must be within 0-1.")
-    if not (
-        frame["n_samples"].equals(frame["temp_n_samples"])
-        and frame["coverage"].equals(frame["temp_coverage"])
-    ):
-        raise SchemaError("'n_samples' and 'coverage' must equal the temperature columns.")
+    for prefix in _ROW_LEVEL_ALIAS_PREFIXES:
+        if not (
+            frame["n_samples"].equals(frame[f"{prefix}n_samples"])
+            and frame["coverage"].equals(frame[f"{prefix}coverage"])
+        ):
+            raise SchemaError(
+                f"'{prefix}n_samples' and '{prefix}coverage' must equal 'n_samples' and "
+                "'coverage' (whole-row validity)."
+            )
     copy = frame.copy()
     copy.columns = pd.Index([str(column) for column in frame.columns])
     copy.index = pd.Index(list(frame.index), dtype=object, name=DATE_INDEX_NAME)

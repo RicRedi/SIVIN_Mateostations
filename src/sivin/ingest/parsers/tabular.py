@@ -213,8 +213,9 @@ class TabularExportReader:
 
         Rows without a UTC timestamp and rows whose daylight-saving conversion is unresolved
         are dropped; a repeated timestamp keeps its last row (``MeasurementSeries.from_records``
-        does that and logs it); rows without any measured value get ``MISSING`` and
-        daylight-saving rows get ``TIMESTAMP_SUSPECT``.
+        does that and logs it); rows without a temperature **or** without a humidity get
+        ``MISSING`` (whole-row validity, owner decision 2026-10-05) and daylight-saving rows
+        get ``TIMESTAMP_SUSPECT``.
 
         Parameters
         ----------
@@ -237,8 +238,8 @@ class TabularExportReader:
             raise ValueError(f"Table {table.name!r} was not validated successfully.")
         utc = table.times.utc
         keep = utc.notna().to_numpy() & ~table.times.unresolved
-        all_missing = np.isnan(table.temp.parsed) & np.isnan(table.rh.parsed)
-        qc = np.where(all_missing, int(QcFlag.MISSING), int(QcFlag.OK)) | np.where(
+        incomplete = np.isnan(table.temp.parsed) | np.isnan(table.rh.parsed)
+        qc = np.where(incomplete, int(QcFlag.MISSING), int(QcFlag.OK)) | np.where(
             table.times.suspect, int(QcFlag.TIMESTAMP_SUSPECT), int(QcFlag.OK)
         )
         return MeasurementSeries.from_records(

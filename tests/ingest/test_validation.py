@@ -192,11 +192,17 @@ def test_values_present() -> None:
         ExportInspection(SOURCE, 10, tables=(table([1.0, 2.0], [nan, nan]),))
     )
     (issue,) = one.issues
-    assert (issue.rule, issue.severity) == ("values-present", Severity.WARNING)
+    # Whole-row validity (owner decision 2026-10-05): one empty variable is an ERROR.
+    assert (issue.rule, issue.severity) == ("values-present", Severity.ERROR)
     assert issue.message == (
         "Column(s) 'RH' contain no value in 2 data row(s) "
-        "(empty cells, or formulas without cached results)."
+        "(empty cells, or formulas without cached results); a measurement needs both "
+        "variables, so the export holds no valid measurement."
     )
+    temp_only_missing = InputValidator().validate(
+        ExportInspection(SOURCE, 10, tables=(table([nan, nan], [50.0, 60.0]),))
+    )
+    assert temp_only_missing.rules(Severity.ERROR) == {"values-present"}
     none = InputValidator().validate(ExportInspection(SOURCE, 10, tables=(table([nan], [nan]),)))
     assert none.rules(Severity.ERROR) == {"values-present"}
 

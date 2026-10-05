@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import random
 
 import pytest
 
@@ -27,6 +28,81 @@ from sivin.core.ids import SensorId
 )
 def test_parse_accepts_every_known_spelling(text: str) -> None:
     assert SensorId.parse(text) == SensorId("77678271")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT_20260301_223842.xlsx",
+        "MeteoData_8615620_77799986_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT.csv",
+        "MeteoData_8615620_77799986.xlsx",
+        "MeteoData_77799986_VUT_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT_20260301_223842 (1).csv",
+        "/home/user/data/MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        r"C:\Users\someone\Downloads\MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        "  MeteoData_8615620_77799986_VUT_20260301_223842.csv  ",
+        "MeteoData_8615620_77799986_VÚT_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT_Brno_20260301_223842.csv",
+        "MeteoData_8615620_77799986_Vinice_Žabčice-2_20260301_223842.xlsx",
+        "MeteoData_8615620_77799986_vut2.csv",
+    ],
+)
+def test_parse_accepts_file_names_with_underscores(text: str) -> None:
+    # Spelling of the first real export (owner question Q8).
+    assert SensorId.parse(text) == SensorId("77799986")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The export time must never be read as a serial.
+        "MeteoData_8615620_20260301_223842.csv",
+        "MeteoData_20260301_223842.csv",
+        "MeteoData_77799986_20260301.csv",
+        # The device number is shorter than a serial; two 8-digit runs are ambiguous.
+        "MeteoData_12345678_77799986_VUT.csv",
+        # Every label word starts with a letter.
+        "MeteoData_8615620_77799986_1VUT.csv",
+        "MeteoData_8615620_77799986_VUT_1Brno.csv",
+        "MeteoData_8615620_77799986__VUT.csv",
+        "MeteoData_8615620_77799986_VUT_.csv",
+        # Underscores without the export prefix are not a known spelling.
+        "8615620_77799986",
+        "77799986_VUT",
+        "MeteoData_8615620_77799986_VUT_20260301.csv",
+    ],
+)
+def test_parse_rejects_ambiguous_underscore_names(text: str) -> None:
+    with pytest.raises(ValueError, match="Cannot recognise"):
+        SensorId.parse(text)
+
+
+UNDERSCORE_LABELS = ("", "VUT", "VÚT", "VUT_Brno", "Vinice_Žabčice-2", "V2", "ö")
+"""Labels of the generated underscore names: none, plain, diacritics, inner underscores."""
+
+
+def test_generated_underscore_names_resolve_to_their_serial() -> None:
+    """300 seeded random underscore names; the export time is never taken as the serial."""
+    rng = random.Random(20261005)
+    for _ in range(300):
+        serial = "".join(rng.choices("0123456789", k=8))
+        device = "".join(rng.choices("0123456789", k=rng.randint(0, 7)))
+        label = rng.choice(UNDERSCORE_LABELS)
+        stamp = rng.choice(("", "20260301_223842", "19991231_000000"))
+        name = "".join(
+            (
+                "MeteoData_",
+                f"{device}_" if device else "",
+                serial,
+                f"_{label}" if label else "",
+                f"_{stamp}" if stamp else "",
+                rng.choice(("", " (1)", " (12)")),
+                rng.choice(("", ".csv", ".xlsx", ".CSV")),
+            )
+        )
+        assert SensorId.parse(name) == SensorId(serial), name
 
 
 @pytest.mark.parametrize(

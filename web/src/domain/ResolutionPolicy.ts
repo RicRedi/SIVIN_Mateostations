@@ -12,8 +12,8 @@ export const MAX_RAW_WINDOW_S = 8 * SECONDS_PER_DAY;
 export const MAX_HOURLY_WINDOW_S = 62 * SECONDS_PER_DAY + SECONDS_PER_HOUR;
 
 /**
- * Point cap for an explicitly chosen raw resolution: 31 days (+1 h for DST), about 1470 samples
- * per sensor at the nominal 1825 s step. Longer windows fall back to hourly means.
+ * Point cap for an explicitly chosen raw resolution: 31 days (+1 h for DST), about 1466 samples
+ * per sensor at the nominal 1830 s step. Longer windows fall back to hourly means.
  */
 export const MAX_EXPLICIT_RAW_WINDOW_S = 31 * SECONDS_PER_DAY + SECONDS_PER_HOUR;
 

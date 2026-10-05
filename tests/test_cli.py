@@ -44,7 +44,7 @@ def test_config_show_with_explicit_file(tmp_path: Path, no_global_logging_setup:
     assert result.exit_code == 0, result.output
     shown = yaml.safe_load(result.output)
     assert shown["analytics"]["min_daily_coverage"] == 0.8
-    assert shown["time"]["expected_interval_s"] == 1825.0
+    assert shown["time"]["expected_interval_s"] == 1830.0
     assert no_global_logging_setup == ["debug"]
 
 

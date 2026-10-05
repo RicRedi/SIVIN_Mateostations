@@ -143,8 +143,9 @@ class ValidationReport:
 class ValidationSettings(BaseModel):
     """Thresholds of the input validation (proposed configuration section ``ingest.validation``).
 
-    The defaults are project defaults, not taken from literature, and are to be tuned once real
-    exports are available (owner question Q1).
+    The defaults are project defaults, not taken from literature. The first real export
+    (MIGRATION_PLAN §0.6.1) passes them without findings; they are to be tuned once exports of
+    more sensors are available (owner question Q11).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -863,12 +864,12 @@ class TimestampsParseableRule(TableRule):
 
 @validation_rules.register
 class ValuesPresentRule(TableRule):
-    """A table must contain measured values.
+    """A table must contain measured values of both variables.
 
-    No temperature **and** no humidity value at all (empty columns, or formula cells without
-    cached results, which openpyxl reads as empty) is an ERROR: the export holds no data. One
-    variable without any value is a WARNING: the other is still usable (e.g. a failed humidity
-    channel).
+    A temperature or humidity column without any value (empty cells, or formula cells without
+    cached results, which openpyxl reads as empty) is an ERROR. Under the whole-row validity
+    rule (owner decision 2026-10-05, MIGRATION_PLAN §0.5) every row of such a table would be
+    ``MISSING``, so the export holds no valid measurement (e.g. a failed humidity channel).
     """
 
     rule_id = "values-present"
@@ -880,12 +881,12 @@ class ValuesPresentRule(TableRule):
         empty = [column.header for column in (table.temp, table.rh) if not len(column.present)]
         if not empty:
             return
-        both = len(empty) == 2
         yield self._issue(
-            Severity.ERROR if both else Severity.WARNING,
+            Severity.ERROR,
             f"Column(s) {', '.join(repr(name) for name in empty)} contain no value in "
             f"{table.n_data_rows} data row(s) (empty cells, or formulas without cached "
-            "results)" + ("; the export holds no measurement." if both else "."),
+            "results); a measurement needs both variables, so the export holds no valid "
+            "measurement.",
             table.header_row,
             table.name,
         )

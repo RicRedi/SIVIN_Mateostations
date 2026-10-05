@@ -1,4 +1,7 @@
-"""The committed SYNTHETIC fixtures are exactly what make_fixtures.py generates."""
+"""The committed SYNTHETIC fixtures are exactly what make_fixtures.py generates.
+
+The real export below ``real/`` is not generated and is tested in ``test_real_export.py``.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +10,17 @@ from types import ModuleType
 
 import openpyxl
 
-from .conftest import EXPORTS
+from .conftest import EXPORTS, REAL_EXPORTS
 
 
 def committed_files() -> list[Path]:
+    """The committed synthetic fixtures (the real export is excluded)."""
     return sorted(
         path.relative_to(EXPORTS)
         for path in EXPORTS.rglob("*")
-        if path.is_file() and path.suffix in {".csv", ".xlsx"}
+        if path.is_file()
+        and path.suffix in {".csv", ".xlsx"}
+        and not path.is_relative_to(REAL_EXPORTS)
     )
 
 
