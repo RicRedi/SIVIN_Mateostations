@@ -19,6 +19,9 @@ EVENTS_DIR: Final = "events"
 INDICES_DIR: Final = "indices"
 """Directory below ``paths.derived_dir`` with one indices file per season."""
 
+SITE_DATA_DIR: Final = "data"
+"""Directory below ``paths.site_dir`` with the static site data (MIGRATION_PLAN §2.6)."""
+
 
 class ProjectNotFoundError(SetupError):
     """Raised when the command does not run inside a project (no ``pyproject.toml`` found)."""
@@ -88,6 +91,11 @@ class Workspace:
     def indices_dir(self) -> Path:
         """Index results per season (``<paths.derived_dir>/indices``)."""
         return self.paths.resolve(self.config.paths.derived_dir) / INDICES_DIR
+
+    @property
+    def site_data_dir(self) -> Path:
+        """Static site data of the web portal (``<paths.site_dir>/data``)."""
+        return self.paths.resolve(self.config.paths.site_dir) / SITE_DATA_DIR
 
     @property
     def quarantine_dir(self) -> Path:
