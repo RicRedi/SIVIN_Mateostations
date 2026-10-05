@@ -37,11 +37,14 @@ class ExportingPortalDriver(FakePortalDriver):
             return
         self.export_counter += 1
         serial = name.split()[-1]
+        # Like the portal, every download gets a new export time in its name; files of earlier
+        # downloads in the same directory are counted so that a second run gets new names.
+        earlier = len(list(self.settings.download_dir.glob("MeteoData_*.csv")))
         write_synthetic_export(
             self.settings.download_dir,
             serial=serial,
             days=2,
-            stamp=f"20260605_06000{self.export_counter}",
+            stamp=f"20260605_0600{earlier + 1:02d}",
         )
 
 
