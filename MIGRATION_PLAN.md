@@ -11,7 +11,7 @@ a statický mapový portál na GitHub Pages.
   vlastníkovi (§0.6, v hand-off note sekce *Open questions for the owner*) a pracuje se na něčem jiném.
 
 Vlastník projektu: **Richard Redina** (GitHub `RicRedi`).
-Verze plánu: 2 (2026-10-05, po merge vlny 1).
+Verze plánu: 2.1 (2026-10-05, Q8–Q10 zodpovězeny).
 
 ---
 
@@ -109,6 +109,9 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | 2026-10-05 | Sloupec `source` v úložišti: **krátký identifikátor exportu** (časová značka exportu), plný název souboru jen v `RunRecord`. |
 | 2026-10-05 | Q5: aktualizace **1× denně v 6:00 místního času**. |
 | 2026-10-05 | Q7: owner přidá Secrets `SIVIN_USER`, `SIVIN_PASSWORD`; lokálně `.env` podle `.env.example`. |
+| 2026-10-05 | Q8: portál pojmenovává soubory **s mezerami a závorkou** (`MeteoData_8615620 77799986 (VUT)_….csv`); podtržítka vznikla až při nahrání. Podpora podtržítek z WP-0.2 zůstává jako tolerance. |
+| 2026-10-05 | Q9: **srážky, kumulativní srážky a napětí baterie se převezmou do dat** (rozšíření §2.5/§2.6, WP-1.9); modely chorob se srážkami ve WP-2.5. Pravidlo platnosti řádku se týká jen teploty a vlhkosti. |
+| 2026-10-05 | Q10: čidlo 77799986 bylo v celém exportu (30. 7. 2025 – 1. 3. 2026) mimo vinici → první záznam `service` v logu mimo-vinici (WP-1.8). |
 
 ### 0.6 Otevřené otázky na ownera
 
@@ -121,9 +124,9 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | Q5 | ✅ 1× denně v 6:00 místního času. | — | — |
 | Q6 | Zveřejnit repozitář a zapnout GitHub Pages se zdrojem „GitHub Actions" (owner, před dokončením WP-4.1). | Nasazení webu. | Deploy ve WP-4.1 |
 | Q7 | Přidat Secrets `SIVIN_USER`, `SIVIN_PASSWORD` (owner). | Automatické stahování. | První ostrý běh WP-4.1 |
-| Q8 | Jmenuje portál soubory s podtržítky (`MeteoData_8615620_77799986_VUT_…csv`), nebo je přejmenovalo nahrání? | Rozpoznání čidla z názvu; WP-0.2 přijme obě varianty. | Nic |
-| Q9 | Export obsahuje navíc **srážky, kumulativní srážky a napětí baterie**. Převzít je do kanonického schématu? | Umožní modely plísně révové (srážky) a QC baterie; je to změna kontraktu §2.5/§2.6. | Návrh WP-1.9 |
-| Q10 | Čidlo 77799986 má 17. 12. 2025 – 1. 3. 2026 typicky pokojový průběh (18–24 °C, denní rozsah < 2 °C, RH ~30 %). Bylo v budově? Pokud ano, zapsat do logu mimo-vinici. | Jinak se pokojová data započtou do indexů. | Správnost indexů |
+| Q8 | ✅ Portál: mezery a závorka; podtržítka z nahrání. | — | — |
+| Q9 | ✅ Převzít (WP-1.9, WP-2.5). | — | — |
+| Q10 | ✅ Ano; záznam v logu odvozen z dat. | — | — |
 | Q11 | Exporty zbývajících tří čidel (stačí jednou), případně XLSX variantu. | Ověření parserů na všech čidlech. | Nic |
 
 ### 0.6.1 Zjištění z reálného exportu (Q1, 2026-10-05)
@@ -389,13 +392,17 @@ vytvoření validuje:
 | `timestamp_utc` | `datetime64[ns, UTC]` | — | vzestupně, bez duplicit |
 | `temp_c` | `float64` | °C | `NaN` = chybí |
 | `rh_pct` | `float64` | % | `NaN` = chybí |
+| `precip_mm` | `float64` | mm | srážky za interval od předchozího vzorku (sloupec `Srážky (mm)`); `NaN` = chybí; od WP-1.9 |
+| `precip_total_mm` | `float64` | mm | čítač kumulativních srážek (`Celkové srážky (mm)`); slouží ke kontrole a doplnění mezer; od WP-1.9 |
+| `battery_v` | `float64` | V | napětí baterie (`Nabití baterie (V)`); od WP-1.9 |
 | `qc` | `int32` (`QcFlag`) | — | 0 = bez nálezu; doplňuje QC |
 | `source` | `str` | — | volitelné, název zdrojového souboru |
 
 **Úložiště** (WP-1.4) na větvi `data`:
 
 ```
-data/raw/<sensor_id>/<YYYY>.csv     # timestamp_utc,temp_c,rh_pct,source  (ISO 8601 se Z)
+data/raw/<sensor_id>/<YYYY>.csv     # timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source
+                                    # (ISO 8601 se Z; starší soubory bez nových sloupců se čtou s NaN)
 data/derived/events/<sensor_id>.json
 data/runs/<YYYY-MM-DD>.jsonl        # souhrn běhu: stažené soubory, validace, počty nových řádků
 ```
@@ -440,7 +447,8 @@ site/data/indices/<season>.json
 
 // series/<id>/raw/<YYYY-MM>.json
 { "sensor_id": "77678271", "t": [1767225600, 1767227425], "temp_c": [1.2, 1.1],
-  "rh_pct": [92.0, null], "qc": [0, 1] }
+  "rh_pct": [92.0, null], "precip_mm": [0.0, 0.2], "battery_v": [3.6, 3.6], "qc": [0, 1] }
+// precip_mm a battery_v od WP-1.9 (volitelná pole, web je musí tolerovat chybějící)
 
 // series/<id>/daily.json   (den = místní kalendářní den Europe/Prague)
 { "sensor_id": "77678271", "date": ["2026-01-01"], "temp_min": [-2.1], "temp_mean": [0.4],
@@ -578,7 +586,7 @@ deník (BBCH) jako soubor v repozitáři (návrh, mimo tento plán).
 |---|---|---|---|---|
 | `powdery_mildew_gt` | Padlí — Gubler-Thomasův index | jen teplota (souvislé hodiny 21–30 °C, přerušení ≥ 35 °C), index 0–100 | **plná** | Gubler et al. (1999) |
 | `botrytis_broome` | Šedá hniloba — Broomeův model | délka ovlhčení a teplota během ní; ovlhčení **odhadnuté** jako RH ≥ práh | **orientační** | Broome et al. (1995) |
-| — | Plíseň révová | modely potřebují srážky a ovlhčení listu; **neimplementuje se**, v `docs/` se zdůvodní | — | Rossi et al. (2008) |
+| `downy_mildew_310` | Plíseň révová — pravidlo 3-10 (primární infekce) | ≥ 10 °C, ≥ 10 mm srážek za 24–48 h, letorosty ≥ 10 cm; od Q9 jsou srážky k dispozici (WP-2.5) | **orientační** (bez délky letorostů a ovlhčení listu) | Baldacci (1947); Rossi et al. (2008) |
 
 ### 3.4 Mikroklima a prostorové srovnání (WP-2.4, pozdější vlna)
 
@@ -800,8 +808,27 @@ zapojení do CLI a konfigurace dělá integrační WP-1.7 (vlna 2).
   `sensors/offsite_log.yaml` přes GitHub API (fine-grained token ownera jen v prohlížeči),
   validace proti schématům před odesláním.
 
-**Návrh (čeká na Q9):** WP-1.9 — srážky a napětí baterie v kanonickém schématu, QC baterie,
-model plísně révové.
+**Vlna 2a-bis (rozhodnutí Q9, paralelně s dokončením 2a, před WP-1.7):**
+
+#### WP-1.9 — Srážky a baterie v datech (`wp/1.9-precip-battery`)
+- **Files:** `src/sivin/core/schema.py` (+ `daily.py` pro denní součet srážek a min. napětí),
+  `src/sivin/ingest/parsers/**`, `src/sivin/ingest/validation.py`, `src/sivin/storage/**`,
+  `src/sivin/quality/checks/{range_check,battery,precip}.py` (+ registrace), `web/src/contract/**`,
+  `web/src/domain/**` (jen tolerance nových polí), odpovídající testy a fixtures,
+  `docs/data-format.md`, `docs/storage.md`, `docs/quality-control.md`, `docs/architecture.md`,
+  `docs/wp_log/WP-1.9.md`.
+- **Úkoly:** nové sloupce v `MeasurementSeries` (volitelné, `NaN` = chybí; netýká se jich pravidlo
+  platnosti řádku); aliasy sloupců v parserech (reálný export); úložiště zapisuje a čte nové sloupce
+  zpětně kompatibilně (starší CSV bez nich); `DailyWeather` přidá `precip_sum_mm`
+  a `battery_min_v`; QC: rozsah srážek (≥ 0, horní mez za interval), konzistence intervalových
+  srážek s čítačem (reset čítače = událost, ne chyba), `BatteryCheck` (pod prahem → varovná
+  událost „slabá baterie", bez vyřazení dat); web kontrakt toleruje nová pole (zobrazení až WP-3.4).
+- **Akceptace:** reálný export načte všech 6 sloupců; staré soubory úložiště se čtou beze změny;
+  test resetu čítače; web gates zelené.
+
+**Vlna 3 doplněna o:**
+- **WP-2.5 — Modely chorob se srážkami:** pravidlo 3-10 pro plíseň révovou (orientační),
+  zpřesnění Broomeova modelu (déšť jako začátek ovlhčení), dokumentace v `docs/indices/`.
 
 ### Vlna 3
 
@@ -833,7 +860,8 @@ WP-0.1 ─┬─ WP-1.1 ─┐
 ```
 
 Vlna 0 a 1 jsou mergnuté. Vlna 2 je rozdělená na 2a (WP-0.2, WP-1.8, WP-L.1 paralelně),
-2b (WP-1.7, WP-3.2) a 2c (WP-4.1, WP-3.3); každá podvlna začíná po merge předchozí.
+2a-bis (WP-1.9), 2b (WP-1.7, WP-3.2) a 2c (WP-4.1, WP-3.3); každá podvlna začíná po merge
+předchozí. WP-2.5 (choroby se srážkami) patří do vlny 3.
 
 ---
 
