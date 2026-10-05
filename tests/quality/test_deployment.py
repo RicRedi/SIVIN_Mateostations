@@ -174,6 +174,7 @@ class TestKnownDeployments:
     def test_ignore_mask_must_be_qc_flags(self) -> None:
         with pytest.raises(ValidationError, match="not QcFlag values"):
             DeploymentSettings(ignore_mask=1024)
+        assert DeploymentSettings(ignore_mask=int(QcFlag.MISSING)).ignore_mask == 1
 
     def test_naive_known_time_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="timezone-aware"):
