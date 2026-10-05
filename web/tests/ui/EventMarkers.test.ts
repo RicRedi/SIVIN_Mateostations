@@ -153,4 +153,18 @@ describe('EventMarkers with off-site bands', () => {
     markersIn('de').attach(german.plot);
     expect(german.plot.over.querySelectorAll('button')[1]?.getAttribute('aria-label')).toMatch(/^Nicht im Weinberg – .* – bis heute$/);
   });
+
+  it('stacks the handles of bands at the same place so none hides another', () => {
+    const { plot } = fakePlot();
+    const same = [offSite(T + HOUR, T + 3 * HOUR), { ...offSite(T + HOUR, T + 3 * HOUR), sensorId: '77678271' }, offSite(T + 4 * HOUR, T + 5 * HOUR)];
+    const markers = new EventMarkers(new I18n({ cs, de, en }, 'en'), catalog, new TimeZone('Europe/Prague'));
+    markers.setBands(offSiteBands(same, ...window));
+    markers.attach(plot);
+    const buttons = [...plot.over.querySelectorAll<HTMLButtonElement>('button.event-marker--off-site')];
+    expect(buttons.map((b) => [b.style.left, b.style.top])).toEqual([
+      ['170px', '-2px'],
+      ['170px', '12px'],
+      ['320px', '-2px'],
+    ]);
+  });
 });

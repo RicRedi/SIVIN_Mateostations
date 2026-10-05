@@ -198,7 +198,11 @@ class TestPipelineWithLog:
         assert abs(warning.t_utc - trace.timestamp(service_start)) <= HOUR
         assert warning.end_utc is not None
         assert abs(warning.end_utc - trace.timestamp(service_end)) <= HOUR
-        assert warning.detail.startswith("possible unlogged off-site period 2026-04-13 23:")
+        # Local time (CEST) first, UTC in brackets, plus ready-to-paste log values.
+        assert warning.detail.startswith("possible unlogged off-site period 2026-04-14 01:")
+        assert "CEST (2026-04-13 23:" in warning.detail
+        assert 'from: "2026-04-14T01:' in warning.detail
+        assert '+02:00" and to: "2026-04-17T01:' in warning.detail
         assert "sensors/offsite_log.yaml" in warning.detail
         assert not {EventKind.DEPLOYMENT, EventKind.RETRIEVAL} & set(_kinds(result.events))
 
@@ -327,6 +331,15 @@ class TestAdvisoryDetector:
     def test_invalid_mode(self) -> None:
         with pytest.raises(ValueError, match="mode"):
             DeploymentSettings.model_validate({"mode": "loud"})
+
+    def test_display_timezone(self) -> None:
+        trace = SyntheticSensor(1).trace([("indoor", 3), ("outdoor", 10)])
+        settings = DeploymentSettings(display_timezone="UTC")
+        (warning,) = DeploymentDetector(settings).detect(trace.series()).events
+        assert "UTC (" in warning.detail
+        assert "+00:00" in warning.detail
+        with pytest.raises(ValueError, match="unknown IANA time zone"):
+            DeploymentSettings(display_timezone="Mars/Olympus")
 
 
 class TestLoggedCoverage:

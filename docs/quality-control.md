@@ -242,6 +242,17 @@ advisory mode transitions and `deployment_mismatch` warnings are not reported: t
 flags that this mode does not set. The modes are `DetectionPolicy` subclasses registered per
 mode (`AdvisoryPolicy`, `EnforcePolicy`).
 
+The `unlogged_off_site` warning is written for the owner: times in local time of
+`display_timezone` (default Europe/Prague, the zone of the log) with UTC in brackets, followed
+by ready-to-paste values with offset, e.g.
+
+```text
+possible unlogged off-site period 2026-04-14 01:44 CEST (2026-04-13 23:44 UTC) - 2026-04-17
+01:44 CEST (2026-04-16 23:44 UTC) (<detection detail>); if the sensor was not in the vineyard,
+add an entry to sensors/offsite_log.yaml with from: "2026-04-14T01:44+02:00" and
+to: "2026-04-17T01:44+02:00"
+```
+
 **Guiding principle: when the evidence is not clear, do not exclude data.** Wrongly flagging
 vineyard data `PRE_DEPLOYMENT` is worse than missing a short service visit. Every step below
 therefore needs positive evidence before samples are flagged, and incomplete evidence produces a
@@ -452,6 +463,7 @@ take the state of their timestamp. In `advisory` mode these intervals only feed 
 | `transport.reference_s` / `min_reference_samples` | 1 day / 12 | s / count | project default |
 | `mode` | `advisory` | — | owner decision 2026-10-05 (`enforce` = WP-1.5 behaviour) |
 | `log_tolerance_s` | 21 600 (6 h) | s | project default *[to be tuned]*, advisory coverage by the log |
+| `display_timezone` | Europe/Prague | — | zone of the times in the advisory warning (the log's zone) |
 | `known_tolerance_s` | 21 600 (6 h) | s | project default *[to be tuned with Q3]* |
 | `ignore_mask` | 259 | bit mask | `MISSING \| OUT_OF_RANGE \| MANUAL_EXCLUDE` |
 
@@ -470,6 +482,7 @@ quality:
   deployment:
     mode: advisory            # advisory | enforce
     log_tolerance_s: 21600
+    display_timezone: Europe/Prague
     known_tolerance_s: 21600
     change_points: { min_segment_s: 86400, window_s: 2592000, stride_s: 1296000 }
     regime: { room_min_c: 5.0, room_max_c: 35.0, indoor_max_rh_spread_pct: 8.0 }

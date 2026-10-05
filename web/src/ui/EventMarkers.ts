@@ -14,6 +14,10 @@ const OFF_SITE_BAND_COLOR = 'rgba(82, 81, 78, 0.16)';
 /** The band's focusable handle: grey square instead of the round point marker. */
 const OFF_SITE_HANDLE_COLOR = '#8c8a85';
 const OFF_SITE_HANDLE_RADIUS = '2px';
+/** Handles closer than this (px, the handle size of `.event-marker`) are stacked downwards. */
+const HANDLE_SIZE_PX = 14;
+/** Top of the first handle, as `.event-marker` in styles.css; each stacked one moves down by its size. */
+const HANDLE_TOP_PX = -2;
 const PERCENT = 100;
 
 const EVENT_LABELS: Readonly<Record<PointSensorEvent['type'], MessageKey>> = {
@@ -163,12 +167,16 @@ export class EventMarkers {
     const markers = this.points.map(({ event, sensorId }) =>
       this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x')),
     );
+    const placed: number[] = [];
     const handles = this.bands.map((band) => {
-      const middleT = (band.startT + band.endT) / 2;
-      const button = this.button(this.describeBand(band), plot.valToPos(middleT, 'x'));
+      const leftPx = plot.valToPos((band.startT + band.endT) / 2, 'x');
+      const button = this.button(this.describeBand(band), leftPx);
       button.classList.add('event-marker--off-site');
       button.style.background = OFF_SITE_HANDLE_COLOR;
       button.style.borderRadius = OFF_SITE_HANDLE_RADIUS;
+      const stacked = placed.filter((other) => Math.abs(other - leftPx) < HANDLE_SIZE_PX).length;
+      button.style.top = `${HANDLE_TOP_PX + stacked * HANDLE_SIZE_PX}px`;
+      placed.push(leftPx);
       return button;
     });
     this.element.replaceChildren(...handles, ...markers);

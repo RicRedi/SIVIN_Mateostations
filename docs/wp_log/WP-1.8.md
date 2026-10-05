@@ -133,9 +133,7 @@ Web (in `web/`, Node 22):
 
 ## What did not work / what was not verified
 
-- **No real data.** Everything is tested on synthetic series. I did **not** add an entry for
-  Q10 (77799986 indoor-looking 17 Dec 2025 – 1 Mar 2026): only the owner knows whether and
-  exactly when the sensor was in the building.
+- **No real data** in the QC tests (synthetic series). (Round 1 did not add a Q10 entry; round 2 added it after the owner's decision, see *Round 2 changes*.)
 - The JSON Schema was not run through a JSON Schema validator (no such dependency; the
   `pattern` is only tested to match the Python regex). WP-3.3 should validate YAML → JSON against
   it.
@@ -181,14 +179,43 @@ Web (in `web/`, Node 22):
 
 ## Open questions for the owner
 
-1. **Q10:** was 77799986 in the building from 17 Dec 2025 to 1 Mar 2026? If yes, add the entry
-   (the commented example in `sensors/offsite_log.yaml` uses these dates as a template, with a
-   guessed end 15 Mar 2026 from plan §2.8 — please correct).
+1. ~~Q10~~ answered (round 2): entry added as decided by the owner.
 2. The `detail` of the site event is `"<reason>: <note>"` with the reason in English (plan
    §2.8); the web shows it as is, untranslated. Translate the reason on the web (needs a contract
    statement that `detail` starts with the reason), or keep it?
 3. Should the site (WP-3.2) list *all* logged periods of a sensor, also those outside its data?
    This check only reports periods overlapping the series.
+
+## Round 2 changes
+
+- Merged `origin/wp/0.2-owner-decisions` and `origin/claude/funny-sagan-jge9is` (plan v2.1)
+  into the branch before the gates; no conflicts (`docs/web.md` merged automatically, both
+  sections kept: WP-0.2's display mask 311 and *Off-site periods*). The fixture regenerates
+  byte for byte after the merge.
+- **Q10 (owner decision):** first real entry in `sensors/offsite_log.yaml`: 77799986,
+  `2025-07-30 10:00` – `2026-03-01 22:30` local, `service`, note as decided. It loads against
+  the real registry; tests check its UTC bounds and that the first (10:22) and last (22:27)
+  sample of the real export are inside it.
+- `sivin.registry.offsite`: `StrictLogLoader` (duplicate keys, blank values as `BlankValue`,
+  unquoted serial kept as text, line numbers via `LocatedMapping`); `_EntryReader` validates entry
+  by entry and turns pydantic errors into messages with a fix; `OffSiteLog(..., timezone=,
+  labels=)` for cross-entry messages; `format_local`, `format_local_iso`,
+  `unknown_sensor_message`; `to: open`. Schema regenerated (`to` accepts `open`).
+- `DeploymentSettings.display_timezone` (default Europe/Prague) for the advisory warning text.
+- Web: `parseEventsFile(value, file, warn = console.warn)` ignores `t_end` on point events;
+  stacked band handles.
+- Docs: `docs/sensors.md` (*Off-site log*: `open`, strict reading, Q10 entry, new message table),
+  `docs/quality-control.md` (warning format, `display_timezone`), `docs/web.md` (tolerant `t_end`,
+  stacked handles).
+- Gates after round 2: `make lint type test` → ruff clean, mypy --strict clean (118 files),
+  **1424 passed**; `make cov` → `registry/offsite.py` 99 % (1 line: a defensive message branch
+  for mappings without line numbers),
+  `quality/checks/offsite.py` 100 %, `quality/pipeline.py` 100 %, `quality/deployment.py` 99 %
+  (WP-1.5 lines only). Web: lint, typecheck OK, **145 tests passed** (lines 99.46 %), build OK.
+- Q10 answered; open questions 2 and 3 above remain. `registry/offsite.py` is now ~1000 lines
+  (loader, entry reader, model, log); splitting the YAML reading into its own module
+  (`registry/offsite_yaml.py`) would help readability but is outside the file list — proposal
+  for the owner.
 
 ## Review
 
@@ -210,15 +237,15 @@ Reviewer: independent Claude reviewer, 2026-10-05. Diff reviewed: `11f71ef...550
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `sensors/offsite_log.yaml:24-38`, `src/sivin/registry/offsite.py:635` | Following the header instruction ("remove the leading `# `") produces a file with two top-level `entries:` keys; `yaml.safe_load` keeps the last one (`entries: []`) and the log loads **silently empty**. Duplicate keys inside an entry are also silently resolved (last wins). The example also contains an open `service` period for 77678271 that would exclude all its data if uncommented as is. | open |
-| minor | `src/sivin/registry/offsite.py:281-286`, `docs/sensors.md` (*Format* table) | `to:` with no value (YAML null) is accepted as an open period, the same as `to: null`. The docs say "the key must be written even then, so an open end is never an accident", but a half-filled entry (`to:` left blank to fill in later) silently excludes every sample from `from` onwards. | open |
-| minor | `src/sivin/registry/offsite.py:199-205, 685-688` | Several messages name entry and field but do not say how to fix it: an unquoted serial (`sensor: 77799986`, YAML int) → "expected a sensor name as text, got int" (the int could simply be accepted, or the message could say "put the serial in quotes"); missing key → bare pydantic "Field required" (for `to` it should say "write `to: null` if the sensor is still off site"); a typo key → "Extra inputs are not permitted" without the list of allowed keys; unknown sensor → "is not in the registry." without "check the serial or add the sensor to sensors/sensors.geojson". Most of these are explained in the `docs/sensors.md` table, but the brief requires the message itself to say it. | open |
-| minor | `src/sivin/registry/offsite.py:294-298, 529-541` | `from >= to`, overlap and open-period messages print the times in UTC (`2025-12-17T11:00:00Z`) while the owner wrote local time (`2025-12-17 12:00`); with two overlapping entries the owner has to convert back to find them. Print the times in the log's zone (or the original text) as well. | open |
-| minor | `web/src/contract/validateMeta.ts:104-106` | `t_end` on a point event is a hard contract error that drops the **whole** events file of the sensor. A SiteBuilder that serialises `QualityEvent.end_utc` uniformly (`t_end: null` on every event) would lose all markers. The owner approved tolerant reading of optional contract fields (§0.5); accept `t_end: null` (or ignore `t_end`) on point events, or state the strict rule explicitly for WP-3.2. The brief asked for "only allowed for off_site", so this is a contract-level choice for the owner. | open |
-| minor | `src/sivin/quality/deployment.py:495` | The advisory warning gives the period in UTC (`2026-04-13 23:.. UTC`), but the log is written in local time; the owner must convert before adding the entry. Give local time (or a ready-to-paste entry with offset). | open |
-| nit | `src/sivin/registry/offsite.py:532, 538` vs `:688` | Two index formats in one error report: `entries.0.from` (pydantic) and `entries[0].from` (cross-entry rules), both 0-based. Documented in `docs/sensors.md`, but one 1-based form ("entry 1 (entries[0])") would be friendlier for a non-programmer. | open |
-| nit | `src/sivin/registry/offsite.py:170-179` | For a nonexistent local time (spring forward) the message suggests both `+02:00` and `+01:00`; both are valid instants (01:30 CET / 03:30 CEST), which is confusing. The docs advise "use 03:00"; the message could say the same. | open |
-| nit | `web/src/ui/EventMarkers.ts:166-173` | Bands of several sensors with the same period put their handles on the same x position (one hides the other visually; both stay focusable). All bands have the same grey, so which sensor a band belongs to is only in the tooltip. Acceptable for now. | open |
+| major | `sensors/offsite_log.yaml:24-38`, `src/sivin/registry/offsite.py:635` | Following the header instruction ("remove the leading `# `") produces a file with two top-level `entries:` keys; `yaml.safe_load` keeps the last one (`entries: []`) and the log loads **silently empty**. Duplicate keys inside an entry are also silently resolved (last wins). The example also contains an open `service` period for 77678271 that would exclude all its data if uncommented as is. | fixed in round 2: `StrictLogLoader` rejects duplicate keys at any level (key and both lines named); example now commented list items under the one real `entries:`, closed period in the year 2000; tests `TestStrictYaml`, `test_uncommenting_the_example_is_harmless`, `test_uncommenting_every_comment_line_fails_loudly` |
+| minor | `src/sivin/registry/offsite.py:281-286`, `docs/sensors.md` (*Format* table) | `to:` with no value (YAML null) is accepted as an open period, the same as `to: null`. The docs say "the key must be written even then, so an open end is never an accident", but a half-filled entry (`to:` left blank to fill in later) silently excludes every sample from `from` onwards. | fixed in round 2: blank `to:` (empty plain scalar, detected by the loader as `BlankValue`) is an error with a hint; `to: open` (recommended) and `to: null` mean open; docs and YAML header recommend `open` |
+| minor | `src/sivin/registry/offsite.py:199-205, 685-688` | Several messages name entry and field but do not say how to fix it: an unquoted serial (`sensor: 77799986`, YAML int) → "expected a sensor name as text, got int" (the int could simply be accepted, or the message could say "put the serial in quotes"); missing key → bare pydantic "Field required" (for `to` it should say "write `to: null` if the sensor is still off site"); a typo key → "Extra inputs are not permitted" without the list of allowed keys; unknown sensor → "is not in the registry." without "check the serial or add the sensor to sensors/sensors.geojson". Most of these are explained in the `docs/sensors.md` table, but the brief requires the message itself to say it. | fixed in round 2: unquoted serial accepted as written (loader keeps the digits, so no octal surprise); missing key → example line; unknown key → list of allowed keys; unknown sensor → known serials + fix; type errors → "put the text in quotes" |
+| minor | `src/sivin/registry/offsite.py:294-298, 529-541` | `from >= to`, overlap and open-period messages print the times in UTC (`2025-12-17T11:00:00Z`) while the owner wrote local time (`2025-12-17 12:00`); with two overlapping entries the owner has to convert back to find them. Print the times in the log's zone (or the original text) as well. | fixed in round 2: all owner-facing times local with UTC in brackets (`format_local`) |
+| minor | `web/src/contract/validateMeta.ts:104-106` | `t_end` on a point event is a hard contract error that drops the **whole** events file of the sensor. A SiteBuilder that serialises `QualityEvent.end_utc` uniformly (`t_end: null` on every event) would lose all markers. The owner approved tolerant reading of optional contract fields (§0.5); accept `t_end: null` (or ignore `t_end`) on point events, or state the strict rule explicitly for WP-3.2. The brief asked for "only allowed for off_site", so this is a contract-level choice for the owner. | fixed in round 2 (orchestrator decision: tolerant): `t_end` on a point event is ignored with a `console.warn`; documented in `docs/web.md` |
+| minor | `src/sivin/quality/deployment.py:495` | The advisory warning gives the period in UTC (`2026-04-13 23:.. UTC`), but the log is written in local time; the owner must convert before adding the entry. Give local time (or a ready-to-paste entry with offset). | fixed in round 2: warning in local time (`display_timezone`, default Europe/Prague) with UTC in brackets and ready-to-paste `from`/`to` with offset |
+| nit | `src/sivin/registry/offsite.py:532, 538` vs `:688` | Two index formats in one error report: `entries.0.from` (pydantic) and `entries[0].from` (cross-entry rules), both 0-based. Documented in `docs/sensors.md`, but one 1-based form ("entry 1 (entries[0])") would be friendlier for a non-programmer. | fixed in round 2: one format `entry #N` (1-based) plus line number everywhere |
+| nit | `src/sivin/registry/offsite.py:170-179` | For a nonexistent local time (spring forward) the message suggests both `+02:00` and `+01:00`; both are valid instants (01:30 CET / 03:30 CEST), which is confusing. The docs advise "use 03:00"; the message could say the same. | fixed in round 2: only the pre-change offset (`+01:00`) is suggested, plus "write a time after the change" |
+| nit | `web/src/ui/EventMarkers.ts:166-173` | Bands of several sensors with the same period put their handles on the same x position (one hides the other visually; both stay focusable). All bands have the same grey, so which sensor a band belongs to is only in the tooltip. Acceptable for now. | fixed in round 2: handles of bands at the same place are stacked downwards (test) |
 
 Details of the major finding (reproduced with a throw-away script outside the repo):
 

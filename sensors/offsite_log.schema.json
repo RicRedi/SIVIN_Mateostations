@@ -24,10 +24,13 @@
               "type": "string"
             },
             {
+              "const": "open"
+            },
+            {
               "type": "null"
             }
           ],
-          "description": "End, exclusive, same formats as 'from'; null while still off site.",
+          "description": "End, exclusive, same formats as 'from'; 'open' (or null) while still off site.",
           "title": "To"
         },
         "reason": {

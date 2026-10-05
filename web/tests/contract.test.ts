@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ContractError,
   eventInWindow,
@@ -70,11 +70,28 @@ describe('off_site events (MIGRATION_PLAN §2.8)', () => {
     expect(() => parse({ type: 'off_site', t: 100, t_end: '200', source: 'log' })).toThrow('$.events[0].t_end must be a finite number');
   });
 
-  it('rejects t_end on point events', () => {
-    expect(() => parse({ type: 'deployment', t: 100, t_end: 200, source: 'detected' })).toThrow(
-      '$.events[0].t_end is only allowed for "off_site" events, not "deployment"',
+  it('ignores t_end on point events with a warning (tolerant reading)', () => {
+    const warnings: string[] = [];
+    const file = parseEventsFile(
+      { sensor_id: SENSOR, events: [{ type: 'deployment', t: 100, t_end: 200, source: 'detected' }, { type: 'step', t: 300, t_end: null, source: 'detected' }] },
+      'e.json',
+      (message) => warnings.push(message),
     );
-    expect(() => parse({ type: 'step', t: 100, t_end: null, source: 'detected' })).toThrow('$.events[0].t_end is only allowed');
+    expect(file.events).toEqual([
+      { type: 'deployment', t: 100, source: 'detected', confidence: null, detail: null },
+      { type: 'step', t: 300, source: 'detected', confidence: null, detail: null },
+    ]);
+    expect(warnings).toEqual([
+      'e.json: $.events[0].t_end ignored: only "off_site" events have an end, not "deployment"',
+      'e.json: $.events[1].t_end ignored: only "off_site" events have an end, not "step"',
+    ]);
+  });
+
+  it('warns on the console by default', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    parse({ type: 'step', t: 100, t_end: 200, source: 'detected' });
+    expect(spy).toHaveBeenCalledOnce();
+    spy.mockRestore();
   });
 
   it('tells whether an event belongs to a window', () => {

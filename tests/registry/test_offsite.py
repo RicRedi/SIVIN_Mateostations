@@ -25,6 +25,7 @@ from sivin.registry.offsite import (
     JSON_SCHEMA_DIALECT,
     TIME_TEXT_PATTERN,
     TIMEZONE_CONTEXT_KEY,
+    BlankValue,
     LocalTimeReader,
     OffSiteLog,
     OffSiteLogError,
@@ -32,6 +33,8 @@ from sivin.registry.offsite import (
     OffSiteLogStore,
     OffSitePeriod,
     build_json_schema,
+    format_local,
+    format_local_iso,
     render_json_schema,
 )
 from sivin.registry.registry import SensorRegistry
@@ -111,18 +114,43 @@ class TestSchemaAndCommittedFile:
         assert "?P<" not in period["properties"]["from"]["pattern"]
         assert json.loads(render_json_schema()) == schema
 
-    def test_committed_log_is_empty_and_valid(self, store: OffSiteLogStore) -> None:
+    def test_committed_log_holds_the_q10_entry(self, store: OffSiteLogStore) -> None:
+        # Owner decision Q10 (2026-10-05): 77799986 was off site for the whole real export.
         registry = GeoJsonRegistryStore().load(ROOT / "sensors" / "sensors.geojson")
-        assert len(store.load(LOG_FILE, registry)) == 0
+        log = store.load(LOG_FILE, registry)
+        assert log.sensors() == (OFFICE,)
+        (period,) = log.periods_for(OFFICE)
+        assert period.from_utc == _utc(2025, 7, 30, 8, 0)  # 10:00 CEST
+        assert period.to_utc == _utc(2026, 3, 1, 21, 30)  # 22:30 CET
+        assert period.reason == "service"
+        assert period.note is not None
+        assert period.note.startswith("Derived from the real export")
 
-    def test_commented_example_in_the_committed_log_is_valid(self, store: OffSiteLogStore) -> None:
+    def test_q10_entry_covers_the_real_export(self, store: OffSiteLogStore) -> None:
+        # First and last sample of the real export: 2025-07-30 10:22 and 2026-03-01 22:27 local.
         registry = GeoJsonRegistryStore().load(ROOT / "sensors" / "sensors.geojson")
-        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
-        start = lines.index("# entries:")
-        example = [line.removeprefix("# ") for line in lines[start:] if line.startswith("# ")]
-        log = store.loads("\n".join(example), registry)
-        assert [str(p.sensor) for p in log] == ["77799986", "77678271"]
-        assert log.periods_for(SensorId("77678271"))[0].is_open
+        log = store.load(LOG_FILE, registry)
+        assert log.is_off_site(OFFICE, pd.Timestamp("2025-07-30 10:22", tz="Europe/Prague"))
+        assert log.is_off_site(OFFICE, pd.Timestamp("2026-03-01 22:27", tz="Europe/Prague"))
+        assert not log.is_off_site(OFFICE, pd.Timestamp("2026-03-01 22:30", tz="Europe/Prague"))
+
+    def test_uncommenting_the_example_is_harmless(self, store: OffSiteLogStore) -> None:
+        registry = GeoJsonRegistryStore().load(ROOT / "sensors" / "sensors.geojson")
+        text = LOG_FILE.read_text(encoding="utf-8")
+        uncommented = re.sub(r"(?m)^  # (?=- |  )", "  ", text)
+        assert uncommented != text
+        log = store.loads(uncommented, registry)
+        assert len(log) == 2
+        (example,) = log.periods_for(FIELD)
+        # A closed period in the year 2000: no data exist then, nothing is excluded.
+        assert example.to_utc is not None
+        assert example.to_utc < _utc(2001, 1, 1)
+
+    def test_uncommenting_every_comment_line_fails_loudly(self, store: OffSiteLogStore) -> None:
+        registry = GeoJsonRegistryStore().load(ROOT / "sensors" / "sensors.geojson")
+        text = LOG_FILE.read_text(encoding="utf-8")
+        with pytest.raises(OffSiteLogError):
+            store.loads(re.sub(r"(?m)^(\s*)# ?", r"\1", text), registry)
 
 
 class TestTimes:
@@ -163,11 +191,14 @@ class TestTimes:
             LocalTimeReader("Europe/Prague").read("2026-10-25 02:30")
         message = str(error.value)
         assert "explicit offset" in message
-        assert "'2026-10-25T02:30+02:00' or '2026-10-25T02:30+01:00'" in message
+        assert "'2026-10-25T02:30+02:00' for the first one (summer time)" in message
+        assert "'2026-10-25T02:30+01:00' for the second one (winter time)" in message
 
-    def test_nonexistent_local_time_asks_for_an_offset(self) -> None:
-        with pytest.raises(ValueError, match=r"does not exist.*explicit offset"):
+    def test_nonexistent_local_time_suggests_one_offset(self) -> None:
+        with pytest.raises(ValueError, match=r"does not exist.*time after the change") as error:
             LocalTimeReader("Europe/Prague").read("2026-03-29 02:30")
+        assert "'2026-03-29T02:30+01:00'" in str(error.value)
+        assert "+02:00" not in str(error.value)
 
     def test_explicit_offsets_resolve_the_repeated_hour(self) -> None:
         reader = LocalTimeReader("Europe/Prague")
@@ -247,10 +278,13 @@ class TestPeriod:
         ("values", "match"),
         [
             ({"reason": "holiday"}, "reason"),
-            ({"sensor": 77799986}, "expected a sensor name as text"),
+            ({"sensor": 7779998}, "8-digit serial"),
+            ({"sensor": 1.5}, "write the serial in quotes"),
             ({"sensor": "9986"}, "legacy"),
             ({"colour": "red"}, "Extra inputs"),
-            ({"note": ""}, "at least 1 character"),
+            ({"note": ""}, "is empty - write a note or delete the line"),
+            ({"to": "   "}, "is empty - write a date/time, or 'open'"),
+            ({"from": None}, "is empty - write when the sensor left the vineyard"),
         ],
     )
     def test_invalid_entries(self, values: dict[str, object], match: str) -> None:
@@ -294,8 +328,13 @@ class TestLogRules:
 
     def test_unknown_sensor(self, registry: SensorRegistry) -> None:
         stranger = _period(sensor="12345678", **{"from": "2026-01-01T00:00Z"})
-        with pytest.raises(OffSiteLogError, match=r"entries\[0\]\.sensor: sensor 12345678 is not"):
+        with pytest.raises(OffSiteLogError) as error:
             OffSiteLog([stranger], registry)
+        assert (
+            "entry #1, 'sensor': sensor '12345678' is not in sensors/sensors.geojson (known "
+            "sensors: 77799986, 77678271); check the serial, or add the sensor to the registry "
+            "first"
+        ) in str(error.value)
 
     def test_overlap(self, registry: SensorRegistry) -> None:
         first = _period(**{"from": "2026-01-01T00:00Z", "to": "2026-01-05T00:00Z"})
@@ -303,8 +342,9 @@ class TestLogRules:
         with pytest.raises(OffSiteLogError) as error:
             OffSiteLog([second, first], registry)
         assert (
-            "entries[0].from: period of sensor 77799986 starting 2026-01-04T23:00:00Z overlaps "
-            "entries[1] (2026-01-01T00:00:00Z - 2026-01-05T00:00:00Z, UTC)"
+            "entry #1, 'from': the period of sensor 77799986 starting 2026-01-05 00:00 CET "
+            "(2026-01-04 23:00 UTC) overlaps entry #2 (2026-01-01 01:00 CET (00:00 UTC) - "
+            "2026-01-05 01:00 CET (00:00 UTC)); periods of one sensor must not overlap"
         ) in str(error.value)
 
     def test_periods_of_different_sensors_may_overlap(self, registry: SensorRegistry) -> None:
@@ -315,8 +355,11 @@ class TestLogRules:
     def test_open_period_must_be_last(self, registry: SensorRegistry) -> None:
         still_off = _period(**{"from": "2026-01-01T00:00Z"})
         later = _period(**{"from": "2026-02-01T00:00Z", "to": "2026-02-02T00:00Z"})
-        with pytest.raises(OffSiteLogError, match=r"entries\[0\]\.to: .* open period"):
-            OffSiteLog([still_off, later], registry)
+        pattern = r"entry #1 \(line 2\), 'to': .* open period"
+        with pytest.raises(OffSiteLogError, match=pattern) as error:
+            OffSiteLog([still_off, later], registry, labels=["entry #1 (line 2)"])
+        assert "entry #1 (line 2), 'to'" in str(error.value)
+        assert "write the end time into entry #1 (line 2)" in str(error.value)
 
     def test_two_open_periods(self, registry: SensorRegistry) -> None:
         periods = [
@@ -409,44 +452,83 @@ class TestStore:
             store.loads(text, registry)
         lines = str(error.value).splitlines()
         assert lines[0] == "Invalid off-site log:"
-        assert lines[1].startswith("  entries.1.sensor: Sensor 12345678 (from '12345678') is not")
-        assert lines[2].startswith("  entries.2.from: Value error, local time '2026-10-25 02:30'")
-        assert lines[3].startswith("  entries.3: Value error, 'from' (2026-05-01T06:00:00Z)")
-        assert lines[4].startswith("  entries.4.reason: Input should be 'office'")
+        # Entries start on lines 2, 6, 10, 14, 18; 'from' is the line after 'sensor'.
+        assert lines[1].startswith("  entry #2, 'sensor' (line 6): sensor '12345678' is not in")
+        assert lines[2].startswith("  entry #3, 'from' (line 11): local time '2026-10-25 02:30'")
+        assert lines[3] == (
+            "  entry #4 (line 14): 'from' (2026-05-01 08:00 CEST (06:00 UTC)) must be before "
+            "'to' (2026-05-01 08:00 CEST (06:00 UTC)); swap or correct the times"
+        )
+        assert lines[4].startswith("  entry #5, 'reason' (line 21): Input should be 'office'")
+        assert lines[4].endswith("(lower case, exactly one of these)")
         assert len(lines) == 5
 
     def test_rule_errors_after_parsing(
         self, store: OffSiteLogStore, registry: SensorRegistry
     ) -> None:
         text = _log_text(_entry(), _entry(start="2026-03-01 00:00", end="2026-04-01 00:00"))
-        with pytest.raises(OffSiteLogError, match=r"entries\[1\]\.from: .* overlaps entries\[0\]"):
+        with pytest.raises(
+            OffSiteLogError, match=r"entry #2 \(line 6\), 'from': .* overlaps entry #1 \(line 2\)"
+        ):
             store.loads(text, registry)
 
     def test_ambiguous_legacy_name(
         self, store: OffSiteLogStore, make_sensor: SensorFactory
     ) -> None:
         registry = SensorRegistry([make_sensor("11119986"), make_sensor("22229986")])
-        with pytest.raises(OffSiteLogError, match=r"entries\.0\.sensor: Legacy short name"):
+        with pytest.raises(OffSiteLogError, match=r"entry #1, 'sensor' \(line 2\): Legacy short"):
             store.loads(_log_text(_entry(sensor="9986")), registry)
 
-    def test_non_string_sensor_is_left_to_the_model(
+    def test_unquoted_serial_keeps_its_text(
         self, store: OffSiteLogStore, registry: SensorRegistry
     ) -> None:
         text = "entries:\n  - sensor: 77799986\n    from: '2026-01-01 00:00'\n    to: null\n"
-        with pytest.raises(OffSiteLogError) as error:
-            store.loads(text + "    reason: office\n", registry)
-        assert "entries.0.sensor: Value error, expected a sensor name as text" in str(error.value)
-        with pytest.raises(OffSiteLogError, match=r"entries\.0: Input should be"):
+        (period,) = store.loads(text + "    reason: office\n", registry)
+        assert period.sensor == OFFICE
+        # YAML would read 01234567 as an octal number; the loader keeps the written digits.
+        with pytest.raises(OffSiteLogError, match="sensor '01234567' is not in"):
+            store.loads(text.replace("77799986", "01234567") + "    reason: office\n", registry)
+
+    def test_entry_that_is_not_a_mapping(
+        self, store: OffSiteLogStore, registry: SensorRegistry
+    ) -> None:
+        with pytest.raises(OffSiteLogError, match=r"entry #1: must be a list item of keys"):
             store.loads("entries:\n  - just text\n", registry)
+
+    def test_missing_and_mistyped_keys_say_how_to_fix(
+        self, store: OffSiteLogStore, registry: SensorRegistry
+    ) -> None:
+        text = (
+            "entries:\n  - sensor: '77799986'\n    form: '2026-01-01 00:00'\n    reason: office\n"
+        )
+        with pytest.raises(OffSiteLogError) as error:
+            store.loads(text, registry)
+        message = str(error.value)
+        assert (
+            "entry #1 (line 2): the key 'from' is missing - add a line like "
+            'from: "2026-03-01 08:00"'
+        ) in message
+        assert "entry #1 (line 2): the key 'to' is missing" in message
+        assert "to: open  if the sensor is still off site" in message
+        assert (
+            "entry #1, 'form' (line 3): unknown key 'form' - allowed keys are sensor, from, to, "
+            "reason, note (check the spelling)"
+        ) in message
+
+    def test_note_that_is_not_text(self, store: OffSiteLogStore, registry: SensorRegistry) -> None:
+        text = _log_text(_entry(end=None)) + "    note: 12\n"
+        with pytest.raises(OffSiteLogError, match="put the text in quotes"):
+            store.loads(text, registry)
 
     @pytest.mark.parametrize(
         ("text", "match"),
         [
-            ("", "must be a mapping with a list 'entries'"),
-            ("entries:\n", "must be a mapping with a list 'entries'"),
-            ("- a\n", "must be a mapping"),
-            ("entries: [\n", "not valid YAML"),
-            ("entries: []\nextra: 1\n", r"extra: Extra inputs are not permitted"),
+            ("", "must contain one key 'entries:'"),
+            ("entries:\n", "write 'entries: \\[\\]' when there are no periods"),
+            ("- a\n", "must contain one key 'entries:'"),
+            ("entries: [\n", "not valid YAML \\(indent with spaces"),
+            ("entries: []\nextra: 1\n", r"unknown top-level key\(s\) 'extra' \(line 2\)"),
+            ("entires: []\n", r"unknown top-level key\(s\) 'entires' \(line 1\)"),
         ],
     )
     def test_file_structure(
@@ -483,3 +565,93 @@ class TestSettings:
             OffSiteLogSettings(timezone="Mars/Olympus")
         with pytest.raises(ValidationError, match="Extra inputs"):
             OffSiteLogSettings.model_validate({"zone": "UTC"})
+
+
+class TestStrictYaml:
+    """The traps of a hand-edited YAML file must fail loudly, never be read silently."""
+
+    def test_second_entries_key_is_rejected(
+        self, store: OffSiteLogStore, registry: SensorRegistry
+    ) -> None:
+        # The round-1 trap: an uncommented example added a second 'entries:' and the log
+        # loaded silently empty (YAML keeps the last key).
+        text = _log_text(_entry()) + "entries: []\n"
+        with pytest.raises(OffSiteLogError) as error:
+            store.loads(text, registry)
+        assert (
+            "line 6: the key 'entries' appears a second time (first on line 1); keep only one"
+        ) in str(error.value)
+        assert "under one 'entries:'" in str(error.value)
+
+    def test_duplicate_key_inside_an_entry_is_rejected(
+        self, store: OffSiteLogStore, registry: SensorRegistry
+    ) -> None:
+        text = _log_text(_entry()) + '    from: "2026-01-01 00:00"\n'
+        with pytest.raises(OffSiteLogError, match=r"line 6: the key 'from' appears a second time"):
+            store.loads(text, registry)
+
+    def test_blank_to_is_an_error(self, store: OffSiteLogStore, registry: SensorRegistry) -> None:
+        text = (
+            'entries:\n  - sensor: "77799986"\n    from: "2025-12-17 12:00"\n    to:\n'
+            "    reason: office\n"
+        )
+        with pytest.raises(OffSiteLogError) as error:
+            store.loads(text, registry)
+        assert (
+            "entry #1, 'to' (line 4): is empty - write a date/time, or 'open' if the sensor is "
+            "still off site"
+        ) in str(error.value)
+
+    def test_blank_value_at_the_end_of_the_file(
+        self, store: OffSiteLogStore, registry: SensorRegistry
+    ) -> None:
+        text = 'entries:\n  - sensor: "77799986"\n    from: "2025-12-17 12:00"\n    to: open\n'
+        with pytest.raises(OffSiteLogError, match=r"'reason' \(line 5\): is empty"):
+            store.loads(text + "    reason:", registry)
+
+    @pytest.mark.parametrize("value", ["open", "OPEN", "null", "~"])
+    def test_open_and_null_mean_still_off_site(
+        self, store: OffSiteLogStore, registry: SensorRegistry, value: str
+    ) -> None:
+        text = (
+            f'entries:\n  - sensor: "77799986"\n    from: "2025-12-17 12:00"\n    to: {value}\n'
+            "    reason: office\n"
+        )
+        (period,) = store.loads(text, registry)
+        assert period.is_open
+
+    def test_open_is_only_a_value_of_to(self) -> None:
+        with pytest.raises(ValidationError, match="must be local"):
+            _period(**{"from": "open"})
+
+    def test_blank_sensor(self, store: OffSiteLogStore, registry: SensorRegistry) -> None:
+        text = 'entries:\n  - sensor:\n    from: "2025-12-17 12:00"\n    to: open\n    reason: x\n'
+        with pytest.raises(OffSiteLogError) as error:
+            store.loads(text, registry)
+        assert "entry #1, 'sensor' (line 2): is empty - write the 8-digit serial in quotes" in str(
+            error.value
+        )
+
+    def test_blank_value_repr(self) -> None:
+        assert repr(BlankValue()) == "BlankValue()"
+
+
+class TestFormatting:
+    def test_local_time_with_utc(self) -> None:
+        assert format_local(_utc(2025, 12, 17, 11), "Europe/Prague") == (
+            "2025-12-17 12:00 CET (11:00 UTC)"
+        )
+        assert format_local(_utc(2026, 7, 1, 23, 30), "Europe/Prague") == (
+            "2026-07-02 01:30 CEST (2026-07-01 23:30 UTC)"
+        )
+
+    def test_ready_to_paste_text(self) -> None:
+        assert format_local_iso(_utc(2026, 10, 25, 0, 30), "Europe/Prague") == (
+            "2026-10-25T02:30+02:00"
+        )
+        assert format_local_iso(_utc(2026, 10, 25, 1, 30), "Europe/Prague") == (
+            "2026-10-25T02:30+01:00"
+        )
+        assert LocalTimeReader("Europe/Prague").read("2026-10-25T02:30+01:00") == _utc(
+            2026, 10, 25, 1, 30
+        )

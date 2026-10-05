@@ -40,6 +40,7 @@ import numpy.typing as npt
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+from sivin.core.defaults import DEFAULT_TIMEZONE
 from sivin.core.flags import QcFlag, excluded
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.boundaries import BoundaryRefiner, TransportSettings, TransportTrimmer
@@ -58,7 +59,12 @@ from sivin.quality.timeline import (
     indoor_mask,
 )
 from sivin.quality.windows import WindowedChangePoints
-from sivin.registry.offsite import OffSitePeriod
+from sivin.registry.offsite import (
+    LocalTimeReader,
+    OffSitePeriod,
+    format_local,
+    format_local_iso,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +176,13 @@ class DeploymentSettings(BaseModel):
             "[to be tuned on real data]."
         ),
     )
+    display_timezone: str = Field(
+        DEFAULT_TIMEZONE,
+        description=(
+            "IANA zone (no unit) of the times in owner-facing warnings; the zone of the "
+            "off-site log, so a suggested period can be pasted into it."
+        ),
+    )
 
     change_points: ChangePointSettings = Field(
         default_factory=ChangePointSettings, description="Change-point search."
@@ -199,6 +212,12 @@ class DeploymentSettings(BaseModel):
             "Default MISSING|OUT_OF_RANGE|MANUAL_EXCLUDE = 259."
         ),
     )
+
+    @field_validator("display_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        LocalTimeReader(value)
+        return value
 
     @field_validator("ignore_mask")
     @classmethod
@@ -431,7 +450,7 @@ class AdvisoryPolicy(DetectionPolicy):
             start = interval.start_utc if interval.start_utc is not None else detection.first_t_utc
             if start is None or coverage.covers(start, interval.end_utc):
                 continue
-            warnings.append(_unlogged_warning(interval, start))
+            warnings.append(_unlogged_warning(interval, start, self._settings.display_timezone))
         warnings += [
             event for event in detection.unapplied if not coverage.covers(event.t_utc, event.t_utc)
         ]
@@ -484,28 +503,29 @@ class LoggedCoverage:
         return any(low <= start and (high is None or end <= high) for low, high in self._spans)
 
 
-def _unlogged_warning(interval: IndoorInterval, start: pd.Timestamp) -> QualityEvent:
-    """The advisory warning for one detected indoor interval missing in the log."""
+def _unlogged_warning(interval: IndoorInterval, start: pd.Timestamp, timezone: str) -> QualityEvent:
+    """The advisory warning for one detected indoor interval missing in the log.
+
+    Times are local (``timezone``) with UTC in brackets, plus ready-to-paste log values.
+    """
     deployment = interval.deployment
+    start_dt, end_dt = start, interval.end_utc
     return QualityEvent(
         kind=EventKind.UNLOGGED_OFF_SITE,
         t_utc=start,
         end_utc=interval.end_utc,
         detail=(
-            f"possible unlogged off-site period {_minutes(start)} - "
-            f"{_minutes(interval.end_utc)} UTC ({deployment.detail}); if the sensor was not "
-            "in the vineyard, add the period to sensors/offsite_log.yaml"
+            f"possible unlogged off-site period {format_local(start_dt, timezone)} - "
+            f"{format_local(end_dt, timezone)} ({deployment.detail}); if the sensor was not "
+            "in the vineyard, add an entry to sensors/offsite_log.yaml with "
+            f'from: "{format_local_iso(start_dt, timezone)}" and '
+            f'to: "{format_local_iso(end_dt, timezone)}"'
         ),
         severity=Severity.WARNING,
         source=EventSource.DETECTED,
         confidence=deployment.confidence,
         origin=ORIGIN,
     )
-
-
-def _minutes(t_utc: pd.Timestamp) -> str:
-    """Format a UTC time as ``YYYY-MM-DD HH:MM``."""
-    return str(t_utc.tz_convert("UTC").strftime("%Y-%m-%d %H:%M"))
 
 
 class DeploymentDetector:

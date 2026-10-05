@@ -90,7 +90,14 @@ export function parseLatestFile(value: unknown, file = 'latest.json'): LatestFil
   };
 }
 
-function readEvent(reader: FieldReader, value: unknown, path: string): SensorEvent {
+/** Receives non-fatal contract findings (tolerantly ignored fields). */
+export type ContractWarning = (message: string) => void;
+
+const warnOnConsole: ContractWarning = (message) => {
+  console.warn(message);
+};
+
+function readEvent(reader: FieldReader, value: unknown, path: string, warn: ContractWarning, file: string): SensorEvent {
   const event = reader.object(value, path);
   const type = reader.literal(event.type, SENSOR_EVENT_TYPES, `${path}.type`);
   const t = reader.integer(event.t, `${path}.t`);
@@ -102,7 +109,7 @@ function readEvent(reader: FieldReader, value: unknown, path: string): SensorEve
   };
   if (type !== OFF_SITE_EVENT_TYPE) {
     if ('t_end' in event) {
-      reader.fail(`${path}.t_end`, `is only allowed for "${OFF_SITE_EVENT_TYPE}" events, not "${type}"`);
+      warn(`${file}: ${path}.t_end ignored: only "${OFF_SITE_EVENT_TYPE}" events have an end, not "${type}"`);
     }
     return { type, ...common };
   }
@@ -116,13 +123,19 @@ function readEvent(reader: FieldReader, value: unknown, path: string): SensorEve
   return { type, ...common, t_end: tEnd };
 }
 
-/** Validate `events/<sensor_id>.json`. @throws ContractError on mismatch. */
-export function parseEventsFile(value: unknown, file: string): EventsFile {
+/**
+ * Validate `events/<sensor_id>.json`. A `t_end` on a point event is ignored with a warning
+ * (tolerant reading of optional fields, plan §0.5); `off_site` events require it.
+ *
+ * @param warn - Receives the warnings; default `console.warn`.
+ * @throws ContractError on mismatch.
+ */
+export function parseEventsFile(value: unknown, file: string, warn: ContractWarning = warnOnConsole): EventsFile {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   return {
     sensor_id: reader.string(root.sensor_id, '$.sensor_id'),
-    events: reader.list(root.events, '$.events', (item, path) => readEvent(reader, item, path)),
+    events: reader.list(root.events, '$.events', (item, path) => readEvent(reader, item, path, warn, file)),
   };
 }
 

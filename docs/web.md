@@ -146,7 +146,9 @@ STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 ```
 
 `t_end` (Unix seconds, exclusive) is required for `off_site` and is `null` while the sensor is
-still off site; it is rejected on every other event type. The contract types model this as a
+still off site. On a point event (`deployment`, `retrieval`, `step`) a `t_end` is **ignored with
+a console warning** instead of rejecting the file (tolerant reading of optional fields, owner
+decision 2026-10-05), so a SiteBuilder that writes `t_end: null` on every event loses no markers. The contract types model this as a
 union (`PointSensorEvent | OffSiteEvent`, `isOffSiteEvent`), and `eventInWindow` keeps an
 `off_site` period that merely overlaps the chart window (a point event must lie inside it).
 
@@ -157,7 +159,9 @@ values with `startT <= t < endT` and inserts a break at the band start, so no li
 band even when it holds no sample (daily means). This works from the event times alone; the
 samples are also `PRE_DEPLOYMENT`-flagged and hidden by the display mask, but the band does not
 depend on the flags. Lines of other compared sensors continue through the band. Each band has a
-focusable grey square handle at its centre, whose accessible name and tooltip read
+focusable grey square handle at its centre (handles of bands at the same place, e.g. two
+compared sensors serviced together, are stacked downwards), whose accessible name and tooltip
+read
 "Mimo vinici: <detail> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
 vineyard"; open end "dosud" / "bis heute" / "ongoing"). The logic is in
 `src/ui/EventMarkers.ts` (`offSiteBands`, `withoutBands`, `EventMarkers.drawBands`).
