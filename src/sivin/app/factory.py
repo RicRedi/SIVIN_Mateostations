@@ -23,13 +23,16 @@ from sivin.app.ingest import (
     Quarantine,
     export_files,
 )
-from sivin.app.quality import EventsWriter, QualityService
+from sivin.app.json_files import ErrorText, JsonFileWriter
+from sivin.app.quality import EventsWriter, KnownSensors, QualityService
 from sivin.app.run import Clock, ExportSource, RunRecorder, RunService
 from sivin.app.workspace import Workspace
+from sivin.config.sections import QuarantineMode
 from sivin.ingest.parsers import base as parser_base
 from sivin.ingest.portal.credentials import PortalCredentials
 from sivin.ingest.validation import InputValidator
 from sivin.quality.pipeline import QualityPipeline
+from sivin.redaction import SecretRedactor
 from sivin.registry.geojson import GeoJsonRegistryStore
 from sivin.registry.offsite import OffSiteLogStore
 from sivin.storage.config import build_store
@@ -78,9 +81,21 @@ class ServiceFactory:
         Returns the portal credentials; read from the environment when omitted.
     clock : Clock, optional
         Current time; UTC system time when omitted.
+    redactor : SecretRedactor, optional
+        Hides the credentials in everything the services write (derived JSON files, the run
+        record, error texts); built from the environment when omitted.
     """
 
-    __slots__ = ("_catalog", "_clock", "_credentials", "_drivers", "_workspace")
+    __slots__ = (
+        "_catalog",
+        "_clock",
+        "_credentials",
+        "_drivers",
+        "_error_text",
+        "_json",
+        "_redactor",
+        "_workspace",
+    )
 
     def __init__(
         self,
@@ -88,8 +103,12 @@ class ServiceFactory:
         drivers: DriverFactoryBuilder | None = None,
         credentials: Callable[[], PortalCredentials] | None = None,
         clock: Clock | None = None,
+        redactor: SecretRedactor | None = None,
     ) -> None:
         self._workspace = workspace
+        self._redactor = redactor if redactor is not None else SecretRedactor.from_environment()
+        self._json = JsonFileWriter(redactor=self._redactor)
+        self._error_text = ErrorText(workspace.paths.root, self._redactor)
         self._drivers = drivers
         self._credentials = credentials if credentials is not None else PortalCredentials.from_env
         self._clock = clock if clock is not None else utc_now
@@ -104,6 +123,11 @@ class ServiceFactory:
     def clock(self) -> Clock:
         """The clock of the services."""
         return self._clock
+
+    @property
+    def redactor(self) -> SecretRedactor:
+        """The redactor of the credentials."""
+        return self._redactor
 
     def catalog_loader(self) -> SensorCatalogLoader:
         """Return the loader of the registry and the off-site log.
@@ -154,13 +178,17 @@ class ServiceFactory:
         """
         return build_store(self._workspace.data_dir, self._workspace.config.storage)
 
-    def ingest_service(self, dry_run: bool = False) -> IngestService:
+    def ingest_service(
+        self, dry_run: bool = False, quarantine_mode: QuarantineMode | None = None
+    ) -> IngestService:
         """Return the ingest service.
 
         Parameters
         ----------
         dry_run : bool, optional
             Parse and validate only.
+        quarantine_mode : QuarantineMode, optional
+            Move or copy rejected files; ``ingest.quarantine_mode`` when omitted.
 
         Returns
         -------
@@ -171,7 +199,8 @@ class ServiceFactory:
         reader = ExportReader(
             parser_base.parser_registry, ingest.parsers, InputValidator(ingest.validation)
         )
-        quarantine = Quarantine(self._workspace.quarantine_dir, ingest.quarantine_mode, self._clock)
+        mode = quarantine_mode if quarantine_mode is not None else ingest.quarantine_mode
+        quarantine = Quarantine(self._workspace.quarantine_dir, mode, self._clock, self._json)
         return IngestService(reader, self.store(), self.catalog().registry, quarantine, dry_run)
 
     def export_paths(self, files: Sequence[Path], from_dir: Path | None = None) -> list[Path]:
@@ -213,13 +242,16 @@ class ServiceFactory:
         pipeline = QualityPipeline.from_settings(
             self._workspace.config.quality, off_site_log=self.catalog().offsite_log
         )
+        store = self.store()
+        registry = self.catalog().registry
         return QualityService(
-            self.store(),
+            store,
             pipeline,
-            self.catalog().registry,
-            EventsWriter(self._workspace.events_dir),
+            registry,
+            EventsWriter(self._workspace.events_dir, self._json, KnownSensors(registry, store)),
             self._clock,
             dry_run,
+            self._error_text,
         )
 
     def indices_service(self, dry_run: bool = False) -> IndicesService:
@@ -240,9 +272,15 @@ class ServiceFactory:
             self.quality_service(dry_run=True),
             IndexContextFactory(config.time, config.analytics, self.catalog().registry),
             IndexSelection(index_registry, config.analytics.indices),
-            IndicesWriter(self._workspace.indices_dir),
+            IndicesWriter(
+                self._workspace.indices_dir,
+                self._json,
+                KnownSensors(self.catalog().registry, self.store()),
+                index_registry.ids(),
+            ),
             self._clock,
             dry_run=dry_run,
+            error_text=self._error_text,
         )
 
     def portal_settings(
@@ -292,7 +330,9 @@ class ServiceFactory:
         from sivin.ingest.portal.driver import driver_factory_registry
 
         drivers = self._drivers if self._drivers is not None else driver_factory_registry.create
-        return FetchService(self.portal_settings(headed, download_dir), self._credentials, drivers)
+        return FetchService(
+            self.portal_settings(headed, download_dir), self._credentials, drivers, self._redactor
+        )
 
     def run_service(
         self, dry_run: bool = False, skip_fetch: bool = False, headed: bool = False
@@ -344,4 +384,4 @@ class ServiceFactory:
         RunRecorder
             Appends to ``<paths.data_dir>/runs/<YYYY-MM-DD>.jsonl``.
         """
-        return RunRecorder(RunLog(self._workspace.data_dir))
+        return RunRecorder(RunLog(self._workspace.data_dir), self._error_text)

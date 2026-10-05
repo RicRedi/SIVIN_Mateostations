@@ -18,8 +18,10 @@ from sivin.cli.commands.config import config_app
 from sivin.cli.commands.fetch import fetch
 from sivin.cli.commands.pipeline import indices, ingest, qc, run
 from sivin.cli.commands.sensors import sensors_app
+from sivin.cli.console import console
 from sivin.cli.state import CliOverrides, CliState
 from sivin.logging_setup import setup_logging
+from sivin.redaction import SecretRedactor
 
 app = typer.Typer(
     name="sivin",
@@ -38,7 +40,7 @@ app.command("run")(run)
 
 def _print_version(value: bool) -> None:
     if value:
-        typer.echo(f"sivin {__version__}")
+        console.echo(f"sivin {__version__}")
         raise typer.Exit
 
 
@@ -67,6 +69,7 @@ def main(
     ] = "INFO",
 ) -> None:
     """Vineyard weather stations: data collection, quality control and climate indices."""
+    console.use(SecretRedactor.from_environment())
     try:
         setup_logging(log_level)
     except ValueError as error:

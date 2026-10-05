@@ -8,6 +8,7 @@ import typer
 import yaml
 
 from sivin.cli.common import handled, state_of
+from sivin.cli.console import console
 from sivin.cli.state import CliState
 
 config_app = typer.Typer(help="Inspect the configuration.", no_args_is_help=True)
@@ -21,7 +22,7 @@ def show(ctx: typer.Context) -> None:
     """
     with handled():
         resolved = state_of(ctx).config()
-    typer.echo(
+    console.echo(
         yaml.safe_dump(resolved.model_dump(mode="json"), sort_keys=False, allow_unicode=True),
         nl=False,
     )
@@ -38,4 +39,4 @@ def schema(
     ] = False,
 ) -> None:
     """Print the JSON schema of config/sivin.yaml (with every registered check and index)."""
-    typer.echo(CliState.schema_text(markdown), nl=False)
+    console.echo(CliState.schema_text(markdown), nl=False)

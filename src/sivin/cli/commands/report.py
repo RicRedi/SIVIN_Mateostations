@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-import typer
-
 from sivin.cli.common import echo_failures
+from sivin.cli.console import console
 
 NO_STORED_DATA: Final = "No stored data."
 """Printed when there is nothing to check or compute (e.g. the data branch is not checked out)."""
@@ -34,17 +33,17 @@ def echo_ingest(report: IngestReport) -> None:
                 for sensor, counts in item.appends.items()
             )
             status = "VALID" if report.dry_run else "IMPORTED"
-            typer.echo(
+            console.echo(
                 f"{status} {item.path.name}: {rows}" + (f" ({appended})" if appended else "")
             )
             for issue in item.report.warnings:
-                typer.echo(f"  {issue}")
+                console.echo(f"  {issue}")
         else:
             where = f" -> {item.quarantined}" if item.quarantined is not None else ""
-            typer.echo(f"REJECTED {item.path.name}{where}")
+            console.echo(f"REJECTED {item.path.name}{where}")
     echo_failures(report.failures)
     if report.dry_run:
-        typer.echo("Dry run: nothing was written.")
+        console.echo("Dry run: nothing was written.")
 
 
 def echo_quality(report: QualityReport) -> None:
@@ -56,11 +55,11 @@ def echo_quality(report: QualityReport) -> None:
         Result of the QC step.
     """
     if not report.sensors:
-        typer.echo(NO_STORED_DATA)
+        console.echo(NO_STORED_DATA)
     for sensor, item in report.sensors.items():
         if item.result is None:
             if item.failure is None:
-                typer.echo(f"{sensor}: no stored data")
+                console.echo(f"{sensor}: no stored data")
             continue
         result = item.result
         flags = ", ".join(
@@ -72,7 +71,7 @@ def echo_quality(report: QualityReport) -> None:
             f"{len(result.events)} event(s) ({warnings} warning(s)), "
             f"{result.values_set_aside} value(s) set aside"
         )
-        typer.echo(line + (f" -> {item.events_file}" if item.events_file is not None else ""))
+        console.echo(line + (f" -> {item.events_file}" if item.events_file is not None else ""))
     echo_failures(report.failures)
 
 
@@ -84,16 +83,18 @@ def echo_indices(report: IndicesReport) -> None:
     report : IndicesReport
         Result of the indices step.
     """
-    typer.echo(f"Season {report.window.season} (data {report.window.first}..{report.window.last})")
+    console.echo(
+        f"Season {report.window.season} (data {report.window.first}..{report.window.last})"
+    )
     if not report.changes:
-        typer.echo(f"{NO_STORED_DATA[:-1]} for this season; nothing written.")
+        console.echo(f"{NO_STORED_DATA[:-1]} for this season; nothing written.")
     for sensor, results in report.results.items():
         for index_id, result in results.items():
             value = "-" if result.value is None else f"{result.value:.6g} {result.unit}"
             completeness = "complete" if result.complete else "incomplete"
-            typer.echo(
+            console.echo(
                 f"{sensor} {index_id}: {value} (coverage {result.coverage:.2f}, {completeness})"
             )
     if report.file is not None:
-        typer.echo(f"Written: {report.file}")
+        console.echo(f"Written: {report.file}")
     echo_failures(report.failures)

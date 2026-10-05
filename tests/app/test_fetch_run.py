@@ -11,11 +11,13 @@ from tests.app.fake_portal import credentials, drivers
 from tests.app.project import OUTDOOR_SENSOR, Project, write_synthetic_export
 
 from sivin.app.factory import ServiceFactory, utc_now
-from sivin.app.fetch import FetchService, PortalExports
+from sivin.app.fetch import FetchReport, FetchService, PortalExports
 from sivin.app.outcome import Outcome, SetupError
 from sivin.app.workspace import Workspace
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.errors import MissingCredentialsError
+from sivin.ingest.portal.models import DeviceFailure, PortalDevice, SessionResult
+from sivin.redaction import SecretRedactor
 from sivin.storage.runlog import RunLog
 
 OUTDOOR = SensorId(OUTDOOR_SENSOR)
@@ -136,3 +138,11 @@ class TestRun:
 
     def test_utc_now_is_aware(self) -> None:
         assert utc_now().utcoffset() is not None
+
+
+def test_device_failures_are_redacted() -> None:
+    failure = DeviceFailure(PortalDevice("VUT 77678271"), "timeout as synthetic-user")
+    report = FetchReport(
+        SessionResult((), (failure,)), SecretRedactor.of({"SIVIN_USER": "synthetic-user"})
+    )
+    assert report.failures == ("fetch VUT 77678271: timeout as ***",)

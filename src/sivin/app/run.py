@@ -48,22 +48,33 @@ class ExportSource(Protocol):
         ...
 
 
+def _same(text: str) -> str:
+    return text
+
+
 class RunRecorder:
     """Append the summary of a run to the run log (``data/runs/<YYYY-MM-DD>.jsonl``).
+
+    The record is committed to the public ``data`` branch, so every failure text passes the
+    error-text guard (paths relative to the project root, credentials redacted) and the file
+    names pass the redactor.
 
     Parameters
     ----------
     run_log : RunLog
         The store's run log.
+    error_text : callable, optional
+        Makes a text publishable (relative paths, redacted credentials); identity by default.
     """
 
-    __slots__ = ("_run_log",)
+    __slots__ = ("_error_text", "_run_log")
 
-    def __init__(self, run_log: RunLog) -> None:
+    def __init__(self, run_log: RunLog, error_text: Callable[[str], str] | None = None) -> None:
         self._run_log = run_log
+        self._error_text = error_text if error_text is not None else _same
 
-    @staticmethod
     def record(
+        self,
         started_at: datetime,
         finished_at: datetime,
         ingest: IngestReport,
@@ -89,10 +100,10 @@ class RunRecorder:
         return RunRecord(
             started_at=started_at,
             finished_at=finished_at,
-            files=tuple(item.path.name for item in ingest.files),
+            files=tuple(self._error_text(item.path.name) for item in ingest.files),
             appends=ingest.appends,
             validation_issues=ingest.validation_counts,
-            failures=(*failures, *ingest.failures),
+            failures=tuple(self._error_text(text) for text in (*failures, *ingest.failures)),
             conflicts=ingest.conflicts,
         )
 
@@ -250,7 +261,7 @@ class RunService:
             sensor: item.whole for sensor, item in quality.sensors.items() if item.whole is not None
         }
         indices = self._indices.run(season, sensors, checked=checked)
-        record = RunRecorder.record(
+        record = self._recorder.record(
             started_at,
             self._clock(),
             ingest,

@@ -47,8 +47,21 @@ partial failure (1).
 
 **Logging and secrets.** `--log-level DEBUG` never reaches the loggers of Selenium, urllib3
 and webdriver-manager: they are pinned to WARNING (Selenium logs WebDriver command bodies,
-i.e. the typed password, at DEBUG). In addition every log record passes a filter that
-replaces the current values of `SIVIN_PASSWORD` and `SIVIN_USER` by `***`.
+i.e. the typed password, at DEBUG). In addition one `SecretRedactor`
+(`sivin.redaction`), built from `SIVIN_USER` and `SIVIN_PASSWORD` after `.env` is loaded,
+replaces their values by `***` wherever text leaves the process:
+
+- every log record (message and traceback);
+- everything a command prints to standard output or standard error (`Error: …`,
+  `FAILED …`, every report line);
+- the run record (`data/runs/*.jsonl`: `files`, `failures`) and the derived JSON files
+  (`events`, `indices`, quarantine reports), including their `error` fields.
+
+The portal error messages are redacted with the credentials the fetch actually used, even when
+they did not come from the environment (Selenium may quote the typed text in an exception).
+A value shorter than 4 characters is **not** redacted: replacing such a short string would
+mangle unrelated text and still reveal its length and position. A single WARNING at start-up
+names the variable (never its value); use credentials of at least 4 characters.
 
 ## `sivin config show`
 
@@ -98,7 +111,7 @@ Exit code 1 if a device failed, 3 if the credentials are missing, the browser ca
 login fails or the device list cannot be read. Late files of timed-out attempts stay in the
 download directory (see [ingest.md](ingest.md)).
 
-## `sivin ingest [FILE ...] [--from-dir DIR] [--dry-run]`
+## `sivin ingest [FILE ...] [--from-dir DIR] [--quarantine-mode move|copy] [--dry-run]`
 
 Parses and validates each export file (`ingest.parsers`, `ingest.validation`, see
 [data-format.md](data-format.md)), then:
@@ -113,6 +126,12 @@ Parses and validates each export file (`ingest.parsers`, `ingest.validation`, se
   moved or copied (permissions, disk full), the error is logged, recorded as a failure
   (`quarantine failed: …`) and the next file is processed. Nothing of a rejected file reaches
   the store.
+
+  **The default `move` also moves a file you name yourself** (`sivin ingest ~/exports/x.csv`):
+  if it is rejected it disappears from its directory and is found in `data/quarantine/`. To
+  keep your own files where they are, pass `--quarantine-mode copy` (this invocation only) or
+  set `ingest.quarantine_mode: copy` in `config/sivin.yaml` (every run, including the
+  scheduled one, where `move` keeps a bad download from being rejected again).
 - **accepted**: every series is appended to the store (`data/raw/<id>/<YYYY>.csv`); the store
   keeps the short export identifier as `source` ([storage.md](storage.md#source-identifiers-wp-17)).
 

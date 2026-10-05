@@ -9,6 +9,7 @@ from typing import NoReturn
 import typer
 
 from sivin.app.outcome import Outcome, SetupError, SourceUnavailableError, UnknownIndexError
+from sivin.cli.console import console
 from sivin.cli.state import CliState
 from sivin.core.ids import SensorId
 
@@ -48,13 +49,14 @@ def handled() -> Iterator[None]:
     try:
         yield
     except SourceUnavailableError as error:
-        typer.echo(f"Error: {error}", err=True)
+        console.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=int(Outcome.DATA_SOURCE_UNAVAILABLE)) from error
     except SetupError as error:
-        typer.echo(f"Error: {error}", err=True)
+        console.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=int(Outcome.SETUP_ERROR)) from error
     except UnknownIndexError as error:
-        raise typer.BadParameter(str(error), param_hint="--index") from error
+        text = console.redactor.redact(str(error))
+        raise typer.BadParameter(text, param_hint="--index") from error
 
 
 def finish(outcome: Outcome) -> NoReturn:
@@ -108,4 +110,4 @@ def echo_failures(failures: Sequence[str]) -> None:
         Failure messages.
     """
     for failure in failures:
-        typer.echo(f"FAILED {failure}", err=True)
+        console.echo(f"FAILED {failure}", err=True)

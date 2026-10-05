@@ -277,6 +277,16 @@ nothing. Every entry carries `status` (`"ok"` / `"failed"`), `computed_at` (time
 **successful** computation; `null` if there never was one) and, when failed, `error`. Because
 `computed_at` is the run time, a successful run rewrites the files it computed.
 
+`error` texts are publishable: paths below the project root are written relative to it
+(`data/raw/77680921/2026.csv: …`) and the portal credentials are replaced by `***` (see
+[cli.md](cli.md#exit-codes), *Logging and secrets*); the same holds for `failures` in the run
+log. **Pruning:** entries of sensors that are neither in the registry nor in the store are
+removed on the next write: their index entries when a season file is written, their events
+files after a `sivin qc` / `sivin run` that writes. Entries of indices that are no longer
+registered are removed when a season file is written. Each pruning is logged (INFO). A
+sensor removed from the registry whose measurements stay in the store is still checked and
+keeps its entries; delete its data to retire it.
+
 `derived/events/<sensor_id>.json` — result of the QC pipeline over the stored record
 (`EventsWriter`):
 

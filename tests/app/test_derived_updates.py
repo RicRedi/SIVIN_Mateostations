@@ -91,7 +91,8 @@ class TestIndicesFile:
         assert report.outcome is Outcome.PARTIAL_FAILURE
         gst = read(file)["sensors"][OTHER_SENSOR]["gst"]
         assert gst["status"] == "failed"
-        assert gst["error"].startswith(f"{project.root / 'data/raw' / OTHER_SENSOR / '2026.csv'}")
+        assert gst["error"].startswith(f"data/raw/{OTHER_SENSOR}/2026.csv: ")  # project-relative
+        assert str(project.root) not in gst["error"]
         assert gst["computed_at"] == "2026-10-05T04:00:00Z"  # the last success
         assert gst["value"] == before["value"]
         assert read(file)["sensors"][OUTDOOR_SENSOR]["gst"]["status"] == "ok"
@@ -180,3 +181,76 @@ def test_empty_store_writes_nothing(project: Project) -> None:
     report = factory.indices_service().run(2026)
     assert report.file is None
     assert not (project.root / "data" / "derived").exists()
+
+
+GONE_SENSOR = "99999999"
+"""A sensor in neither the registry nor the store (SYNTHETIC)."""
+
+
+class TestPruning:
+    def test_indices_of_unknown_sensors_are_pruned_on_write(
+        self, services: ServiceFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        file = services.indices_service().run(2026).file
+        assert file is not None
+        document = read(file)
+        document["sensors"][GONE_SENSOR] = {"gst": {"value": 1.0}}
+        document["sensors"][OTHER_SENSOR]["removed_index"] = {"value": 1.0}
+        file.write_text(json.dumps(document), encoding="utf-8")
+        with caplog.at_level("INFO", logger="sivin.app.indices"):
+            services.indices_service().run(2026, sensors=[OUTDOOR])
+        sensors = read(file)["sensors"]
+        assert GONE_SENSOR not in sensors
+        assert {OUTDOOR_SENSOR, OTHER_SENSOR} <= set(sensors)
+        assert f"no longer in the registry or the store: {GONE_SENSOR}." in caplog.text
+        assert "removed_index" not in sensors[OTHER_SENSOR]
+        assert "gst" in sensors[OTHER_SENSOR]
+        assert "index(es) no longer registered: removed_index." in caplog.text
+
+    def test_events_files_of_unknown_sensors_are_pruned(
+        self, project: Project, services: ServiceFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        events = services.quality_service().run([OTHER]).sensors[OTHER].events_file
+        assert events is not None
+        stale = events.with_name(f"{GONE_SENSOR}.json")
+        stale.write_text("{}", encoding="utf-8")
+        services.quality_service(dry_run=True).run([OTHER])
+        assert stale.exists()  # a dry run deletes nothing
+        with caplog.at_level("INFO", logger="sivin.app.quality"):
+            services.quality_service().run([OUTDOOR])
+        assert not stale.exists()
+        assert events.exists()
+        assert f"no longer in the registry or the store: {GONE_SENSOR}." in caplog.text
+
+
+class TestRedaction:
+    SECRET = "pw-synthetic-in-a-file"
+
+    def test_error_fields_are_redacted_and_project_relative(
+        self, project: Project, services: ServiceFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SIVIN_PASSWORD", self.SECRET)
+        factory = ServiceFactory(Workspace.open(start=project.root), clock=lambda: FIRST_RUN)
+        path = project.root / "data" / "raw" / OTHER_SENSOR / "2026.csv"
+        path.write_text(f"{self.SECRET}\n", encoding="utf-8")
+        quality = factory.quality_service().run([OTHER]).sensors[OTHER]
+        indices = factory.indices_service().run(2026, sensors=[OTHER])
+        assert quality.failure is not None
+        assert self.SECRET not in quality.failure
+        assert indices.file is not None
+        assert quality.events_file is not None
+        for written in (quality.events_file, indices.file):
+            text = written.read_text(encoding="utf-8")
+            assert self.SECRET not in text
+            assert str(project.root) not in text
+            assert f"data/raw/{OTHER_SENSOR}/2026.csv: " in text
+        record = factory.run_recorder().record(
+            FIRST_RUN,
+            FIRST_RUN,
+            factory.ingest_service().ingest([]),
+            (f"fetch x: {self.SECRET} in {path}",),
+        )
+        log = factory.run_recorder().write(record).read_text(encoding="utf-8")
+        assert self.SECRET not in log
+        assert str(project.root) not in log
+        assert f"fetch x: *** in data/raw/{OTHER_SENSOR}/2026.csv" in log

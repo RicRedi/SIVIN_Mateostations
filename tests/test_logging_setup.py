@@ -11,7 +11,8 @@ from selenium.webdriver.remote.client_config import ClientConfig
 from selenium.webdriver.remote.command import Command
 from selenium.webdriver.remote.remote_connection import RemoteConnection
 
-from sivin.logging_setup import CAPPED_LOGGERS, REDACTED, SecretRedactor, setup_logging
+from sivin.logging_setup import CAPPED_LOGGERS, RedactingFilter, install_redactor, setup_logging
+from sivin.redaction import REDACTED, SecretRedactor
 
 PASSWORD = "pwSENTINEL-synthetic-42"
 USER = "synthetic-operator"
@@ -82,10 +83,18 @@ def test_tracebacks_are_redacted(log_stream: io.StringIO) -> None:
 
 def test_without_secrets_records_are_untouched() -> None:
     record = logging.LogRecord("x", logging.INFO, __file__, 1, "a %s", ("b",), None)
-    assert SecretRedactor(environ=dict).filter(record)
+    assert RedactingFilter(SecretRedactor()).filter(record)
     assert (record.msg, record.args) == ("a %s", ("b",))
 
 
 def test_capped_loggers_follow_a_higher_level(log_stream: io.StringIO) -> None:
     setup_logging("ERROR", log_stream)
     assert logging.getLogger("urllib3").level == logging.ERROR
+
+
+def test_install_redactor_replaces_the_secrets_of_the_handlers(log_stream: io.StringIO) -> None:
+    setup_logging("INFO", log_stream, redactor=SecretRedactor())
+    install_redactor(SecretRedactor.of({"SIVIN_PASSWORD": "loaded-from-dotenv"}))
+    logging.getLogger("sivin.test").info("value loaded-from-dotenv")
+    assert "loaded-from-dotenv" not in log_stream.getvalue()
+    assert f"value {REDACTED}" in log_stream.getvalue()

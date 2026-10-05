@@ -19,8 +19,38 @@ if TYPE_CHECKING:
     from sivin.ingest.portal.credentials import PortalCredentials
     from sivin.ingest.portal.driver import WebDriverFactory
     from sivin.ingest.portal.settings import PortalSettings
+    from sivin.redaction import SecretRedactor
 
 logger = logging.getLogger(__name__)
+
+
+def protect_secrets() -> SecretRedactor:
+    """Build the redactor of the credentials in the environment and install it everywhere.
+
+    The same redactor serves the log handlers and the console (and, through the
+    :class:`~sivin.app.factory.ServiceFactory`, the run record and the derived files). A
+    credential shorter than :data:`~sivin.redaction.MIN_SECRET_LENGTH` cannot be redacted
+    safely; one warning names its variable, never its value.
+
+    Returns
+    -------
+    SecretRedactor
+        The installed redactor.
+    """
+    from sivin.cli.console import console
+    from sivin.logging_setup import install_redactor
+    from sivin.redaction import MIN_SECRET_LENGTH, SecretRedactor
+
+    redactor = SecretRedactor.from_environment()
+    install_redactor(redactor)
+    console.use(redactor)
+    for name in redactor.unredactable:
+        logger.warning(
+            "%s is shorter than %d characters and cannot be redacted safely from the output.",
+            name,
+            MIN_SECRET_LENGTH,
+        )
+    return redactor
 
 
 @dataclass(frozen=True)
@@ -81,11 +111,13 @@ class CliState:
 
             workspace = Workspace.open(self.config_file)
             DotEnvLoader(workspace.paths.root).load()
+            redactor = protect_secrets()
             self._services = ServiceFactory(
                 workspace,
                 drivers=self.overrides.drivers,
                 credentials=self.overrides.credentials,
                 clock=self.overrides.clock,
+                redactor=redactor,
             )
         return self._services
 

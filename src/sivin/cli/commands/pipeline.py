@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -13,8 +14,21 @@ from sivin.app.period import TimeBounds
 from sivin.cli.commands.fetch import SENSOR_HELP
 from sivin.cli.commands.report import echo_indices, echo_ingest, echo_quality
 from sivin.cli.common import echo_failures, finish, handled, sensor_ids, state_of
+from sivin.cli.console import console
 
 DRY_RUN_HELP = "Compute and report, but write nothing."
+
+
+class QuarantineChoice(StrEnum):
+    """Values of ``sivin ingest --quarantine-mode``.
+
+    The same values as :class:`~sivin.config.sections.QuarantineMode`, which is not imported
+    here because the configuration models pull in pandas (``sivin --help`` stays fast).
+    """
+
+    MOVE = "move"
+    COPY = "copy"
+
 
 SensorOption = Annotated[list[str] | None, typer.Option("--sensor", "-s", help=SENSOR_HELP)]
 DryRunOption = Annotated[bool, typer.Option("--dry-run", help=DRY_RUN_HELP)]
@@ -36,6 +50,15 @@ def ingest(
             "without FILES: ingest.portal.download_dir.",
         ),
     ] = None,
+    quarantine_mode: Annotated[
+        QuarantineChoice | None,
+        typer.Option(
+            "--quarantine-mode",
+            case_sensitive=False,
+            help="move: a rejected file leaves its directory (also a file you named); copy: "
+            "it stays. Default: ingest.quarantine_mode (move).",
+        ),
+    ] = None,
     dry_run: DryRunOption = False,
 ) -> None:
     """Parse and validate export files; quarantine rejected ones, append the rest to the store.
@@ -43,12 +66,15 @@ def ingest(
     Writes a run record to data/runs/<date>.jsonl. Exit code 1 if a file was rejected.
     """
     with handled():
+        from sivin.config.sections import QuarantineMode
+
         services = state_of(ctx).services()
         paths = services.export_paths(files or [], from_dir)
         started = services.clock()
-        report = services.ingest_service(dry_run).ingest(paths)
+        mode = QuarantineMode(quarantine_mode.value) if quarantine_mode is not None else None
+        report = services.ingest_service(dry_run, mode).ingest(paths)
         if not paths:
-            typer.echo("No export files to ingest.")
+            console.echo("No export files to ingest.")
         elif not dry_run:
             recorder = services.run_recorder()
             recorder.write(recorder.record(started, services.clock(), report))
@@ -142,10 +168,10 @@ def run(
         year = season if season is not None else services.clock().astimezone(zone).year
         report = services.run_service(dry_run, skip_fetch, headed).run(year, wanted)
     if report.fetch_note is not None:
-        typer.echo(f"Note: {report.fetch_note}.")
+        console.echo(f"Note: {report.fetch_note}.")
     echo_failures(report.fetch_failures)
     echo_ingest(report.ingest)
     echo_quality(report.quality)
     echo_indices(report.indices)
-    typer.echo(f"Run finished: {Outcome(report.outcome).name}.")
+    console.echo(f"Run finished: {Outcome(report.outcome).name}.")
     finish(report.outcome)

@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from sivin.cli.common import echo_failures, finish, handled, sensor_ids, state_of
+from sivin.cli.console import console
 
 SENSOR_HELP = "Sensor to process (any name spelling); repeat for several. Default: all."
 
@@ -36,6 +37,6 @@ def fetch(
     with handled():
         report = state_of(ctx).services().fetch_service(headed, download_dir).fetch(wanted)
     for path in report.files:
-        typer.echo(f"DOWNLOADED {path}")
+        console.echo(f"DOWNLOADED {path}")
     echo_failures(report.failures)
     finish(report.outcome)

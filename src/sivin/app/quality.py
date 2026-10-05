@@ -84,6 +84,40 @@ STATUS_FAILED: Final = "failed"
 """``status`` of a derived entry whose last computation failed (the previous result is kept)."""
 
 
+class KnownSensors:
+    """The sensors whose derived entries are kept: those in the registry or in the store.
+
+    A sensor that is in neither (removed from the registry and with no stored data) has its
+    events file and its index entries pruned on the next write. A sensor removed from the
+    registry whose measurements stay in the store is still quality-controlled and keeps its
+    entries; delete its data to retire it from the derived files.
+
+    Parameters
+    ----------
+    registry : SensorRegistry
+        The sensor registry.
+    store : MeasurementStore
+        The measurement store.
+    """
+
+    __slots__ = ("_registry", "_store")
+
+    def __init__(self, registry: SensorRegistry, store: MeasurementStore) -> None:
+        self._registry = registry
+        self._store = store
+
+    def __call__(self) -> frozenset[str]:
+        """Return the known sensor ids.
+
+        Returns
+        -------
+        frozenset of str
+            Canonical ids of the registry and the store.
+        """
+        ids = [*self._registry.ids(), *self._store.sensors()]
+        return frozenset(str(sensor_id) for sensor_id in ids)
+
+
 class EventsWriter:
     """Write ``<derived>/events/<sensor_id>.json``: the QC events and flag counts of a sensor.
 
@@ -98,13 +132,47 @@ class EventsWriter:
         The events directory.
     writer : JsonFileWriter, optional
         Writes the JSON atomically.
+    known : callable, optional
+        Returns the ids of the sensors to keep (:class:`KnownSensors`); :meth:`prune` removes
+        the files of the others. Nothing is pruned when omitted.
     """
 
-    __slots__ = ("_directory", "_writer")
+    __slots__ = ("_directory", "_known", "_writer")
 
-    def __init__(self, directory: Path, writer: JsonFileWriter | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        writer: JsonFileWriter | None = None,
+        known: Callable[[], frozenset[str]] | None = None,
+    ) -> None:
         self._directory = directory
         self._writer = writer if writer is not None else JsonFileWriter()
+        self._known = known
+
+    def prune(self) -> list[Path]:
+        """Delete the events files of sensors that are no longer known.
+
+        Returns
+        -------
+        list of pathlib.Path
+            The deleted files (also logged).
+        """
+        if self._known is None or not self._directory.is_dir():
+            return []
+        known = self._known()
+        stale = [
+            path
+            for path in sorted(self._directory.glob(f"*{EVENTS_SUFFIX}"))
+            if path.stem not in known
+        ]
+        for path in stale:
+            path.unlink(missing_ok=True)
+        if stale:
+            logger.info(
+                "Pruned the events of sensor(s) no longer in the registry or the store: %s.",
+                ", ".join(path.stem for path in stale),
+            )
+        return stale
 
     def path_for(self, sensor_id: SensorId) -> Path:
         """Return the events file of a sensor.
@@ -310,9 +378,11 @@ class QualityService:
         Writes the derived events.
     dry_run : bool, optional
         Compute, but write no file.
+    error_text : callable, optional
+        Turns an error into a publishable text (relative paths, redacted credentials).
     """
 
-    __slots__ = ("_clock", "_dry_run", "_events", "_pipeline", "_registry", "_store")
+    __slots__ = ("_clock", "_dry_run", "_error_text", "_events", "_pipeline", "_registry", "_store")
 
     def __init__(
         self,
@@ -322,7 +392,9 @@ class QualityService:
         events: EventsWriter,
         clock: Callable[[], datetime],
         dry_run: bool = False,
+        error_text: Callable[[BaseException], str] = str,
     ) -> None:
+        self._error_text = error_text
         self._store = store
         self._pipeline = pipeline
         self._registry = registry
@@ -379,7 +451,8 @@ class QualityService:
         QC always runs over the sensor's **whole** stored record (the detector and the
         deployed checks need the context, and the events file must stay complete); ``start``
         and ``end`` only restrict what the report shows. Only the requested sensors' files are
-        written; a failed sensor keeps its previous file with ``status: "failed"``.
+        written; a failed sensor keeps its previous file with ``status: "failed"``. The files
+        of sensors no longer known are pruned (:class:`KnownSensors`).
 
         Parameters
         ----------
@@ -396,6 +469,8 @@ class QualityService:
         outcomes = {
             sensor_id: self._one(sensor_id, start, end) for sensor_id in self.sensors(sensors)
         }
+        if not self._dry_run:
+            self._events.prune()
         return QualityReport(outcomes, self._dry_run)
 
     def _one(
@@ -405,8 +480,9 @@ class QualityService:
             result = self.checked(sensor_id)
         except SENSOR_ERRORS as error:
             logger.error("Quality control of sensor %s failed: %s", sensor_id, error)
-            written = None if self._dry_run else self._events.mark_failed(sensor_id, str(error))
-            return SensorQuality(sensor_id, events_file=written, failure=str(error))
+            text = self._error_text(error)
+            written = None if self._dry_run else self._events.mark_failed(sensor_id, text)
+            return SensorQuality(sensor_id, events_file=written, failure=text)
         if result.series.is_empty:
             logger.info("Sensor %s: no stored data.", sensor_id)
             return SensorQuality(sensor_id)

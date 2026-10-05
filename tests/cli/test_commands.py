@@ -123,6 +123,20 @@ class TestIngest:
         assert "REJECTED broken.csv ->" in result.output
         assert "IMPORTED MeteoData_8615620 77678271 (VUT)_20260605_060000.csv" in result.output
 
+    @pytest.mark.parametrize(
+        ("option", "kept"), [([], False), (["--quarantine-mode", "copy"], True)]
+    )
+    def test_quarantine_mode_of_a_named_file(
+        self, project: Project, tmp_path: Path, option: list[str], kept: bool
+    ) -> None:
+        own = tmp_path / "mine" / "broken.csv"
+        own.parent.mkdir()
+        own.write_text("Meteo Data;\n", encoding="utf-8")
+        result = invoke("ingest", str(own), *option)
+        assert result.exit_code == 1
+        assert own.exists() is kept
+        assert list((project.root / "data" / "quarantine").rglob("broken*.csv"))
+
     def test_from_dir_dry_run(self, project: Project, tmp_path: Path) -> None:
         directory = tmp_path / "exports"
         write_synthetic_export(directory, days=1)

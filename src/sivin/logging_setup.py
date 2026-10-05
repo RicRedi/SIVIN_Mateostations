@@ -5,17 +5,17 @@ Two safeguards keep the portal credentials out of every log (WP-1.7 review, majo
 1. **Third-party loggers are capped** at WARNING whatever ``--log-level`` says
    (:data:`CAPPED_LOGGERS`). Selenium's ``remote_connection`` logger writes every WebDriver
    command body at DEBUG, including the text typed into the login form.
-2. **Secrets are redacted** in every record by :class:`SecretRedactor`, a filter on the root
-   handler: the current values of :data:`SECRET_ENV_VARS` are replaced by ``***`` in the
-   formatted message and traceback, whichever logger produced it.
+2. **Secrets are redacted** in every record by :class:`RedactingFilter` on the root handler,
+   with the process's one :class:`~sivin.redaction.SecretRedactor` (the same one the CLI
+   applies to its output, the run record and the derived files).
 """
 
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Callable, Mapping, Sequence
 from typing import Final, TextIO
+
+from sivin.redaction import SecretRedactor
 
 LOG_FORMAT: Final = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 """Format of every log record."""
@@ -31,36 +31,22 @@ webdriver-manager (``WDM``)."""
 CAPPED_LEVEL: Final = logging.WARNING
 """Lowest level the :data:`CAPPED_LOGGERS` emit."""
 
-SECRET_ENV_VARS: Final = ("SIVIN_PASSWORD", "SIVIN_USER")
-"""Environment variables whose values never appear in a log record."""
 
-REDACTED: Final = "***"
-"""Replacement text of a secret value."""
+class RedactingFilter(logging.Filter):
+    """Pass every record through the process's :class:`~sivin.redaction.SecretRedactor`.
 
-
-class SecretRedactor(logging.Filter):
-    """Replace the current values of secret environment variables by ``***`` in a record.
-
-    The values are read from the environment at every record, so secrets loaded later (from
-    ``.env``) are covered too. The message is formatted (``msg % args``) before redaction and
-    the record then keeps the redacted text without arguments.
+    The message is formatted (``msg % args``) before redaction and the record then keeps the
+    redacted text without arguments; the traceback text is redacted too.
 
     Parameters
     ----------
-    names : sequence of str, optional
-        Environment variables to redact; :data:`SECRET_ENV_VARS` by default.
-    environ : callable, optional
-        Returns the environment; :data:`os.environ` by default (tests pass a mapping).
+    redactor : SecretRedactor
+        The redactor; replaced by :func:`install_redactor` once the credentials are loaded.
     """
 
-    def __init__(
-        self,
-        names: Sequence[str] = SECRET_ENV_VARS,
-        environ: Callable[[], Mapping[str, str]] | None = None,
-    ) -> None:
+    def __init__(self, redactor: SecretRedactor) -> None:
         super().__init__()
-        self._names = tuple(names)
-        self._environ = environ if environ is not None else _process_environment
+        self.redactor = redactor
 
     def filter(self, record: logging.LogRecord) -> bool:
         """Redact the record in place; never drops it.
@@ -75,34 +61,36 @@ class SecretRedactor(logging.Filter):
         bool
             Always ``True``.
         """
-        environ = self._environ()
-        secrets = sorted(
-            {environ[name] for name in self._names if environ.get(name)}, key=len, reverse=True
-        )
-        if not secrets:
+        if not self.redactor.secrets:
             return True
         message = record.getMessage()
-        redacted = _redact(message, secrets)
+        redacted = self.redactor.redact(message)
         if redacted != message:
             record.msg, record.args = redacted, None
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
         if record.exc_text:
-            record.exc_text = _redact(record.exc_text, secrets)
+            record.exc_text = self.redactor.redact(record.exc_text)
         return True
 
 
-def _process_environment() -> Mapping[str, str]:
-    return os.environ
+def install_redactor(redactor: SecretRedactor) -> None:
+    """Use ``redactor`` in the filters of the root handlers (after ``.env`` was loaded).
+
+    Parameters
+    ----------
+    redactor : SecretRedactor
+        The redactor of the loaded credentials.
+    """
+    for handler in logging.getLogger().handlers:
+        for item in handler.filters:
+            if isinstance(item, RedactingFilter):
+                item.redactor = redactor
 
 
-def _redact(text: str, secrets: Sequence[str]) -> str:
-    for secret in secrets:
-        text = text.replace(secret, REDACTED)
-    return text
-
-
-def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
+def setup_logging(
+    level: str = "INFO", stream: TextIO | None = None, redactor: SecretRedactor | None = None
+) -> None:
     """Configure the root logger to write to standard error, with the safeguards above.
 
     Parameters
@@ -112,6 +100,8 @@ def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
         The :data:`CAPPED_LOGGERS` never go below WARNING.
     stream : text stream, optional
         Where to write; standard error by default (tests pass a buffer).
+    redactor : SecretRedactor, optional
+        Redacts the credentials; built from the environment when omitted.
 
     Raises
     ------
@@ -125,6 +115,8 @@ def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
         level=numeric_level, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT, force=True, stream=stream
     )
     for handler in logging.getLogger().handlers:
-        handler.addFilter(SecretRedactor())
+        handler.addFilter(
+            RedactingFilter(redactor if redactor is not None else SecretRedactor.from_environment())
+        )
     for name in CAPPED_LOGGERS:
         logging.getLogger(name).setLevel(max(CAPPED_LEVEL, numeric_level))

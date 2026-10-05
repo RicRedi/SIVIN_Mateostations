@@ -18,7 +18,6 @@ from tests.app.project import (
 from sivin.app.factory import ServiceFactory
 from sivin.app.ingest import DirectoryExports, IngestReport, export_files
 from sivin.app.outcome import Outcome
-from sivin.app.run import RunRecorder
 from sivin.core.ids import SensorId
 from sivin.core.schema import Column
 from sivin.storage.runlog import RunLog
@@ -189,7 +188,7 @@ def test_store_error_fails_the_file_only(project: Project, factory: ServiceFacto
 
 def test_run_record_of_an_ingest(project: Project, factory: ServiceFactory) -> None:
     report = factory.ingest_service().ingest([project.real_export()])
-    record = RunRecorder.record(RUN_TIME, RUN_TIME, report, ("fetch x: timeout",))
+    record = factory.run_recorder().record(RUN_TIME, RUN_TIME, report, ("fetch x: timeout",))
     assert record.files == ("MeteoData_8615620_77799986_VUT_20260301_223842.csv",)
     assert record.appends[SensorId(REAL_SENSOR)].new_rows == 300
     assert record.failures == ("fetch x: timeout",)

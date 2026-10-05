@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from selenium.common.exceptions import WebDriverException
@@ -16,12 +16,13 @@ from selenium.common.exceptions import WebDriverException
 from sivin.app.outcome import Outcome, SourceUnavailableError
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.client import PortalClient
-from sivin.ingest.portal.credentials import PortalCredentials
+from sivin.ingest.portal.credentials import PASSWORD_ENV_VAR, USER_ENV_VAR, PortalCredentials
 from sivin.ingest.portal.driver import WebDriverFactory
 from sivin.ingest.portal.errors import MissingCredentialsError, PortalError
 from sivin.ingest.portal.models import SessionResult
 from sivin.ingest.portal.session import PortalSession
 from sivin.ingest.portal.settings import PortalSettings
+from sivin.redaction import SecretRedactor
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,12 @@ class FetchReport:
     ----------
     result : SessionResult
         Downloaded files and failed devices.
+    redactor : SecretRedactor
+        Redacts the credentials in the failure texts.
     """
 
     result: SessionResult
+    redactor: SecretRedactor = field(default_factory=SecretRedactor)
 
     @property
     def files(self) -> tuple[Path, ...]:
@@ -54,7 +58,10 @@ class FetchReport:
     @property
     def failures(self) -> tuple[str, ...]:
         """One message per device that was not downloaded."""
-        return tuple(f"fetch {item.device}: {item.reason}" for item in self.result.failures)
+        return tuple(
+            self.redactor.redact(f"fetch {item.device}: {item.reason}")
+            for item in self.result.failures
+        )
 
     @property
     def outcome(self) -> Outcome:
@@ -73,16 +80,21 @@ class FetchService:
         Returns the credentials; called only when fetching.
     drivers : DriverFactoryBuilder
         Builds the browser factory for ``settings``.
+    redactor : SecretRedactor, optional
+        The process's redactor; the credentials actually used are added to it, so no error
+        text of this service contains them (exception messages from Selenium included).
     """
 
-    __slots__ = ("_credentials", "_drivers", "_settings")
+    __slots__ = ("_credentials", "_drivers", "_redactor", "_settings")
 
     def __init__(
         self,
         settings: PortalSettings,
         credentials: CredentialsSource,
         drivers: DriverFactoryBuilder,
+        redactor: SecretRedactor | None = None,
     ) -> None:
+        self._redactor = redactor if redactor is not None else SecretRedactor()
         self._settings = settings
         self._credentials = credentials
         self._drivers = drivers
@@ -114,22 +126,30 @@ class FetchService:
         try:
             credentials = self._credentials()
         except MissingCredentialsError as error:
-            raise SourceUnavailableError(str(error)) from error
+            raise SourceUnavailableError(self._redactor.redact(str(error))) from None
+        redactor = self._redactor.including(
+            {
+                USER_ENV_VAR: credentials.username,
+                PASSWORD_ENV_VAR: credentials.password.reveal(),
+            }
+        )
         self._settings.download_dir.mkdir(parents=True, exist_ok=True)
         client = PortalClient(self._settings, credentials, self._drivers(self._settings))
         try:
             result = PortalSession(client).run(sensors)
         except (PortalError, WebDriverException, OSError) as error:
-            raise SourceUnavailableError(
-                f"Portal session failed: {type(error).__name__}: {error}"
-            ) from error
+            text = redactor.redact(f"Portal session failed: {type(error).__name__}: {error}")
+            raise SourceUnavailableError(text) from None
+        return self._report(result, redactor)
+
+    def _report(self, result: SessionResult, redactor: SecretRedactor) -> FetchReport:
         logger.info(
             "Fetched %d export(s) into %s; %d device(s) failed.",
             len(result.downloads),
             self._settings.download_dir,
             len(result.failures),
         )
-        return FetchReport(result)
+        return FetchReport(result, redactor)
 
 
 class PortalExports:

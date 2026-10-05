@@ -250,6 +250,38 @@ Gates after round 2 (in `/home/user/wt/wp-1.7`): `make lint` → all checks pass
 Open questions 2 (quarantine mode) and 3 (derived defaults) are answered by the orchestrator;
 1 (exit codes) is extended by code 4.
 
+## Round 3 (changes after review round 2)
+
+- **Credentials in exception messages (major):** new module `sivin.redaction`
+  (`SecretRedactor`, `MIN_SECRET_LENGTH = 4`, `REDACTED`). `CliState.services()` builds it
+  from the environment after `.env` is loaded (`protect_secrets`) and installs the same object
+  in the log filter (`logging_setup.RedactingFilter`, `install_redactor`), the console
+  (`sivin.cli.console.Console`; every `typer.echo` of the commands now goes through it, also
+  `Error: …`, `FAILED …` and `--index` usage errors) and the `ServiceFactory`, which passes it
+  to `JsonFileWriter` (events, indices, quarantine reports: every string, keys included),
+  `ErrorText` (QC/indices `error` fields, run-record `files`/`failures`) and `FetchService`.
+  `FetchService` additionally redacts with the credentials it actually used (injected
+  credentials need not be in the environment) and raises `SourceUnavailableError … from None`
+  so the Selenium exception is not chained into a traceback.
+- **Minimum length:** values shorter than 4 characters are not redacted; one WARNING at
+  start-up names the variable only. Documented in `docs/cli.md`.
+- **Nits:** project-relative paths in `error` texts; pruning of unknown sensors (neither
+  registry nor store) and unregistered indices, logged; `sivin ingest --quarantine-mode
+  move|copy` and the `move` caveat for user files in `docs/cli.md`.
+- **Decision to confirm (owner):** pruning keeps a sensor that left the registry while its
+  data stays in the store, because QC and indices still process every stored sensor; pruning
+  it would make it reappear on every run. Retiring a sensor = removing its data (or a later
+  change to process registry sensors only).
+- **Not covered:** a traceback of an *unexpected* exception printed by Typer itself (outside
+  `handled()`) is not redacted; log records are. The quarantine report's `source_path` is
+  still absolute (not a credential; not part of the finding).
+
+Gates after round 3 (in `/home/user/wt/wp-1.7`): `make lint` → all checks passed;
+`make type` → `Success: no issues found in 160 source files`; `make test` → **1726 passed**;
+`make cov` → total 99.83 %; `redaction.py`, `app/fetch.py`, `app/json_files.py`,
+`app/quality.py`, `cli/console.py` 100 %, `app/indices.py` 98 %, `app/factory.py` 99 %.
+The leak tests were mutation-checked (redaction disabled → 9 of 10 fail).
+
 ## Review
 
 Verdict: CHANGES_REQUESTED (round 1)
@@ -417,11 +449,11 @@ exports, portal URL `127.0.0.1:9`) and of the round-1 probes:
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | src/sivin/app/fetch.py:121-125; src/sivin/cli/common.py:50-52; src/sivin/app/run.py (record failures) | Redaction covers only `logging` records. A credential that appears in the **message of an exception** reaches unredacted (a) standard error (`Error: Portal session failed: ...` via `typer.echo`, and `FAILED fetch: ...`) and (b) the run record `data/runs/<date>.jsonl`, which WP-4.1 commits to the public `data` branch. Reproduced with the WP-1.3 fake portal: the password element's `send_keys` raises `WebDriverException(f"... cannot type {text!r} ...")`. `sivin fetch` (exit 4) prints the password, and `sivin run` prints it and writes it into the run record. The first `send_keys` does the same with the user name. Chromedriver errors are not known to echo typed text, so the likelihood is low, but the plan forbids printing or committing credentials and the round-2 brief explicitly covers exceptions raised from Selenium. Fix: redact the message of `SourceUnavailableError` with the credentials `FetchService` holds (or a shared `redact()` from `logging_setup`), so it is safe in stderr, the run record and derived JSON; add a test with the raising fake element. | open |
-| minor | src/sivin/logging_setup.py:79-81 | `SecretRedactor` replaces every occurrence of `SIVIN_USER`/`SIVIN_PASSWORD`, without a minimum length. With `SIVIN_USER=u SIVIN_PASSWORD=e` every log line is mangled (`Load***d 4 s***nsors from /tmp/cla***d***-0/...`). A real user name that is a common word (e.g. `vut`, `sivin`) would mangle paths and messages and reveal the value by its pattern. Suggest skipping values shorter than ~4 characters (and documenting it), or redacting the user name only inside credential-bearing contexts. | open |
-| nit | src/sivin/app/indices.py / app/quality.py (`error` fields) | `error` texts in the derived JSON (a WP-3.2 input, published) contain absolute runner paths, e.g. `/home/runner/.../data/raw/77680921/2025.csv:17233: ...`. Consider making paths relative to the project root. | open |
-| nit | src/sivin/app/indices.py (`IndicesWriter.update`) | Merged entries are never pruned: a sensor removed from the store or the registry, or an index removed from the registry, stays in `indices/<season>.json` with its last values and `status: ok`. Only deleting the file clears it. Document it, or drop sensors/indices that are no longer registered. | open |
-| nit | docs/cli.md:108 | With the new default `quarantine_mode: move`, `sivin ingest ~/somewhere/file.csv` moves the user's own file into `data/quarantine/` when it is rejected. This is documented for downloads; one sentence for explicit FILE arguments would avoid surprise. | open |
+| major | src/sivin/app/fetch.py:121-125; src/sivin/cli/common.py:50-52; src/sivin/app/run.py (record failures) | Redaction covers only `logging` records. A credential that appears in the **message of an exception** reaches unredacted (a) standard error (`Error: Portal session failed: ...` via `typer.echo`, and `FAILED fetch: ...`) and (b) the run record `data/runs/<date>.jsonl`, which WP-4.1 commits to the public `data` branch. Reproduced with the WP-1.3 fake portal: the password element's `send_keys` raises `WebDriverException(f"... cannot type {text!r} ...")`. `sivin fetch` (exit 4) prints the password, and `sivin run` prints it and writes it into the run record. The first `send_keys` does the same with the user name. Chromedriver errors are not known to echo typed text, so the likelihood is low, but the plan forbids printing or committing credentials and the round-2 brief explicitly covers exceptions raised from Selenium. Fix: redact the message of `SourceUnavailableError` with the credentials `FetchService` holds (or a shared `redact()` from `logging_setup`), so it is safe in stderr, the run record and derived JSON; add a test with the raising fake element. | fixed (round 3): central `sivin.redaction.SecretRedactor` (env after `.env`) applied to console (`cli/console.py`, every command), log filter (same object via `install_redactor`), run record (`RunRecorder` → `ErrorText`), derived JSON (`JsonFileWriter`); `FetchService` adds the credentials it used; `tests/cli/test_secrets.py` (raising fake field, user name and password, env set/unset, `fetch` and `run`: stdout, stderr, `data/runs`, `data/derived`) |
+| minor | src/sivin/logging_setup.py:79-81 | `SecretRedactor` replaces every occurrence of `SIVIN_USER`/`SIVIN_PASSWORD`, without a minimum length. With `SIVIN_USER=u SIVIN_PASSWORD=e` every log line is mangled (`Load***d 4 s***nsors from /tmp/cla***d***-0/...`). A real user name that is a common word (e.g. `vut`, `sivin`) would mangle paths and messages and reveal the value by its pattern. Suggest skipping values shorter than ~4 characters (and documenting it), or redacting the user name only inside credential-bearing contexts. | fixed (round 3): values shorter than 4 characters are not redacted; one WARNING at start-up names the variable, not the value; `docs/cli.md`; tests |
+| nit | src/sivin/app/indices.py / app/quality.py (`error` fields) | `error` texts in the derived JSON (a WP-3.2 input, published) contain absolute runner paths, e.g. `/home/runner/.../data/raw/77680921/2025.csv:17233: ...`. Consider making paths relative to the project root. | fixed (round 3): `ErrorText` writes paths below the project root relative to it (derived `error` fields, run-record `failures`); tests; `docs/storage.md` |
+| nit | src/sivin/app/indices.py (`IndicesWriter.update`) | Merged entries are never pruned: a sensor removed from the store or the registry, or an index removed from the registry, stays in `indices/<season>.json` with its last values and `status: ok`. Only deleting the file clears it. Document it, or drop sensors/indices that are no longer registered. | fixed (round 3): on write, entries of sensors in neither the registry nor the store and of unregistered indices are pruned (indices file), events files of such sensors deleted after a writing QC; logged at INFO; tests; `docs/storage.md`. Note: a sensor removed from the registry but still in the store is kept (it is still processed), see hand-off |
+| nit | docs/cli.md:108 | With the new default `quarantine_mode: move`, `sivin ingest ~/somewhere/file.csv` moves the user's own file into `data/quarantine/` when it is rejected. This is documented for downloads; one sentence for explicit FILE arguments would avoid surprise. | fixed (round 3): `docs/cli.md` states it; new `sivin ingest --quarantine-mode move|copy` (or `ingest.quarantine_mode: copy`); CLI test |
 
 Round-1 findings: all four majors, the four minors and the three nits are verified **fixed** as described in their
 Status column. Major 1 is fixed for log records only; the remaining exception-message path is the new major above.

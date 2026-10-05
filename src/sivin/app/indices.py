@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -308,7 +308,7 @@ class IndicesWriter:
     results of the others. A failed entry keeps its previous values and gets
     ``status: "failed"`` and ``error``; its ``computed_at`` stays the time of the last
     successful computation (``null`` if there was none). A run without any result or error
-    writes nothing.
+    writes nothing. Entries of sensors no longer known are pruned on write.
 
     Parameters
     ----------
@@ -316,13 +316,27 @@ class IndicesWriter:
         The indices directory.
     writer : JsonFileWriter, optional
         Writes the JSON atomically.
+    known : callable, optional
+        Returns the ids of the sensors to keep (:class:`~sivin.app.quality.KnownSensors`); the
+        entries of the others are pruned on write. Nothing is pruned when omitted.
+    indices : collection of str, optional
+        The registered index ids; entries of other (removed) indices are pruned on write.
+        Nothing is pruned when omitted.
     """
 
-    __slots__ = ("_directory", "_writer")
+    __slots__ = ("_directory", "_indices", "_known", "_writer")
 
-    def __init__(self, directory: Path, writer: JsonFileWriter | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        writer: JsonFileWriter | None = None,
+        known: Callable[[], frozenset[str]] | None = None,
+        indices: Collection[str] | None = None,
+    ) -> None:
         self._directory = directory
         self._writer = writer if writer is not None else JsonFileWriter()
+        self._known = known
+        self._indices = frozenset(indices) if indices is not None else None
 
     def path_for(self, season: int) -> Path:
         """Return the file of a season, ``<directory>/<season>.json``.
@@ -373,6 +387,7 @@ class IndicesWriter:
                 entry.update(status=STATUS_FAILED, error=error)
                 entries[index_id] = entry
             sensors[str(sensor)] = entries
+        self._prune(sensors, report.window.season)
         updated = {
             "season": report.window.season,
             "data_from": report.window.first.isoformat(),
@@ -380,6 +395,34 @@ class IndicesWriter:
             "sensors": dict(sorted(sensors.items())),
         }
         return self._writer.write(path, updated)
+
+    def _prune(self, sensors: dict[str, Any], season: int) -> None:
+        if self._known is not None:
+            known = self._known()
+            stale = sorted(sensor for sensor in sensors if sensor not in known)
+            for sensor in stale:
+                del sensors[sensor]
+            if stale:
+                logger.info(
+                    "Pruned the season %d indices of sensor(s) no longer in the registry or "
+                    "the store: %s.",
+                    season,
+                    ", ".join(stale),
+                )
+        if self._indices is not None:
+            removed: set[str] = set()
+            for sensor, entries in list(sensors.items()):
+                if not isinstance(entries, dict):
+                    continue
+                gone = [index_id for index_id in entries if index_id not in self._indices]
+                removed.update(gone)
+                sensors[sensor] = {k: v for k, v in entries.items() if k not in gone}
+            if removed:
+                logger.info(
+                    "Pruned the season %d entries of index(es) no longer registered: %s.",
+                    season,
+                    ", ".join(sorted(removed)),
+                )
 
 
 class IndicesService:
@@ -402,9 +445,19 @@ class IndicesService:
         Current time (aware).
     dry_run : bool, optional
         Compute, but write no file.
+    error_text : callable, optional
+        Turns an error into a publishable text (relative paths, redacted credentials).
     """
 
-    __slots__ = ("_clock", "_contexts", "_dry_run", "_quality", "_selection", "_writer")
+    __slots__ = (
+        "_clock",
+        "_contexts",
+        "_dry_run",
+        "_error_text",
+        "_quality",
+        "_selection",
+        "_writer",
+    )
 
     def __init__(
         self,
@@ -414,7 +467,9 @@ class IndicesService:
         writer: IndicesWriter,
         clock: Callable[[], datetime],
         dry_run: bool = False,
+        error_text: Callable[[BaseException], str] = str,
     ) -> None:
+        self._error_text = error_text
         self._quality = quality
         self._contexts = contexts
         self._selection = selection
@@ -470,10 +525,11 @@ class IndicesService:
                 context = self._contexts.build(series, season)
             except SENSOR_ERRORS as error:
                 logger.error("Indices of sensor %s: %s", sensor_id, error)
-                failures.append(f"indices {sensor_id}: {error}")
-                errors[sensor_id] = dict.fromkeys(indices, str(error))
+                text = self._error_text(error)
+                failures.append(f"indices {sensor_id}: {text}")
+                errors[sensor_id] = dict.fromkeys(indices, text)
                 continue
-            computed, failed = self._compute(context, indices, failures)
+            computed, failed = self._compute(context, indices, failures, self._error_text)
             results[sensor_id] = computed
             if failed:
                 errors[sensor_id] = failed
@@ -485,7 +541,10 @@ class IndicesService:
 
     @staticmethod
     def _compute(
-        context: IndexContext, indices: Mapping[str, ClimateIndex[Any]], failures: list[str]
+        context: IndexContext,
+        indices: Mapping[str, ClimateIndex[Any]],
+        failures: list[str],
+        error_text: Callable[[BaseException], str],
     ) -> tuple[dict[str, IndexResult], dict[str, str]]:
         computed: dict[str, IndexResult] = {}
         failed: dict[str, str] = {}
@@ -494,6 +553,7 @@ class IndicesService:
                 computed[index_id] = index.compute(context)
             except SENSOR_ERRORS as error:
                 logger.error("Index %s of sensor %s: %s", index_id, context.sensor_id, error)
-                failures.append(f"indices {context.sensor_id} {index_id}: {error}")
-                failed[index_id] = str(error)
+                text = error_text(error)
+                failures.append(f"indices {context.sensor_id} {index_id}: {text}")
+                failed[index_id] = text
         return computed, failed
