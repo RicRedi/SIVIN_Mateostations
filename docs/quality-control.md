@@ -90,7 +90,7 @@ boundaries are typically reported as `step` (informative, not excluded) next to 
 ## Off-site log
 
 `OffSiteCheck` (`sivin/quality/checks/offsite.py`) receives the validated `OffSiteLog`
-(`sivin/registry/offsite.py`, format and validation in [sensors.md](sensors.md#off-site-log)).
+(package `sivin/registry/offsite/`, format and validation in [sensors.md](sensors.md#off-site-log)).
 It flags a sample `PRE_DEPLOYMENT` exactly when `from <= t < to` for one of its sensor's
 periods (`to = null`: until further notice); local times of the log are converted to UTC when
 the log is loaded, so a period across a daylight-saving change flags exactly the right samples.
@@ -572,7 +572,7 @@ The log itself is loaded with `OffSiteLogStore().load(file, registry, timezone)`
 | `KnownDeploymentReconciler`, `indoor_mask` | `sivin/quality/timeline.py` | `tests/quality/test_deployment.py` |
 | `DeploymentDetector`, `DeploymentResult`, `DetectorMode`, `AdvisoryPolicy`, `EnforcePolicy`, `LoggedCoverage` | `sivin/quality/deployment.py` | `tests/quality/test_deployment.py`, `tests/quality/test_offsite.py` |
 | `OffSiteCheck` | `sivin/quality/checks/offsite.py` | `tests/quality/test_offsite.py` |
-| `OffSiteLog`, `OffSitePeriod`, `OffSiteLogStore` | `sivin/registry/offsite.py` | `tests/registry/test_offsite.py` |
+| `OffSitePeriod`, `OffSiteLog` / `LocalTimeReader` / `StrictLogLoader` / `OffSiteLogStore` | `sivin/registry/offsite/{model,local_time,strict_yaml,store}.py` (re-exported by `sivin.registry.offsite`) | `tests/registry/test_offsite.py` |
 | `QualityEvent`, `DeploymentEvent` | `sivin/quality/events.py` | `tests/quality/test_base_and_events.py` |
 | `QualityPipeline`, `QualityResult` | `sivin/quality/pipeline.py` | `tests/quality/test_pipeline.py` |
 | synthetic generator | `tests/quality/synthetic.py` | `tests/quality/test_pipeline.py` |

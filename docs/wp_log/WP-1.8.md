@@ -212,10 +212,19 @@ Web (in `web/`, Node 22):
   for mappings without line numbers),
   `quality/checks/offsite.py` 100 %, `quality/pipeline.py` 100 %, `quality/deployment.py` 99 %
   (WP-1.5 lines only). Web: lint, typecheck OK, **145 tests passed** (lines 99.46 %), build OK.
-- Q10 answered; open questions 2 and 3 above remain. `registry/offsite.py` is now ~1000 lines
-  (loader, entry reader, model, log); splitting the YAML reading into its own module
-  (`registry/offsite_yaml.py`) would help readability but is outside the file list — proposal
-  for the owner.
+- Q10 answered; open questions 2 and 3 above remain.
+- **Package split (scope extended by the orchestrator):** the ~1050-line `registry/offsite.py`
+  became the package `src/sivin/registry/offsite/` — `model.py` (OffSitePeriod, OffSiteLog,
+  OffSiteLogFile, 460 lines), `local_time.py` (LocalTimeReader, `format_local*`, 193),
+  `strict_yaml.py` (StrictLogLoader, BlankValue, LocatedMapping, 94), `store.py`
+  (OffSiteLogStore and the per-entry error formatting, 230), `messages.py` (OffSiteLogError,
+  file keys, example lines, hints, 69), `settings.py` (OffSiteLogSettings, 39), `schema.py` (52).
+  `__init__.py` re-exports the public API, so every import stays `sivin.registry.offsite`. Pure
+  move: no behaviour change; helpers used across modules lost their leading underscore
+  (`offset_text`, `timezone_of`, `report`, `JSON_TIME_PATTERN`) but are not re-exported. Tests
+  unchanged (still one file, all imports via the package); the generated schema is identical.
+  Gates after the split: ruff clean, mypy --strict clean (125 files), **1424 passed**; package
+  coverage 99 % (one defensive line in `store.py`).
 
 ## Review
 
