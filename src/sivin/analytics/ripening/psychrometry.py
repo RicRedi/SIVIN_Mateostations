@@ -146,10 +146,11 @@ def vapour_pressure_deficit_kpa(temp_c: npt.ArrayLike, rh_pct: npt.ArrayLike) ->
     Returns
     -------
     numpy.ndarray of float
-        VPD in kPa. ``NaN`` where an input is ``NaN`` or ``RH < 0`` (impossible value).
+        VPD in kPa. ``NaN`` where an input is ``NaN`` or ``RH <= 0`` (a sensor artefact,
+        treated as invalid as for the dew point, see :func:`non_positive_humidity`).
         ``RH > 100 %`` gives a negative VPD and is passed through unchanged.
     """
     rh = np.asarray(rh_pct, dtype=np.float64)
-    safe_rh = np.where(rh >= 0, rh, np.nan)
+    safe_rh = np.where(rh > 0, rh, np.nan)
     e_s = saturation_vapour_pressure_kpa(temp_c)
     return np.asarray(e_s * (1.0 - safe_rh / PERCENT), dtype=np.float64)

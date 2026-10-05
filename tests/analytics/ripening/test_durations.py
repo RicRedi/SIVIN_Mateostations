@@ -31,14 +31,38 @@ def durations() -> SampleDurations:
     return SampleDurations(SampleDurationParams(), PRAGUE)
 
 
-def test_durations_follow_the_next_sample_and_are_capped(
+def test_durations_follow_the_next_sample_and_a_gap_counts_the_nominal_interval(
     sensor_id: SensorId, durations: SampleDurations
 ) -> None:
-    # Samples at 0 h, 0.5 h, 1 h, 3 h: gaps 1800 s, 1800 s, 7200 s -> capped at 3650 s;
-    # the last sample has no successor -> last_sample_duration_s = 1825 s.
-    series = series_at(sensor_id, DAY, [0, 0.5, 1, 3], [1.0, 2.0, 3.0, 4.0])
-    assert durations.durations_s(series).tolist() == [1800.0, 1800.0, 3650.0, 1825.0]
+    # Samples at 0 h, 0.5 h, 1 h, 2.25 h, 4.25 h. Steps: 1800 s, 1800 s, 4500 s (one missed
+    # sample plus drift, <= 4562.5 s cap -> counted in full), 7200 s (> cap: a gap, the sample
+    # counts only the nominal 1825 s); the last sample has no successor -> 1825 s.
+    series = series_at(sensor_id, DAY, [0, 0.5, 1, 2.25, 4.25], [1.0, 2.0, 3.0, 4.0, 5.0])
+    assert durations.durations_s(series).tolist() == [1800.0, 1800.0, 4500.0, 1825.0, 1825.0]
     assert durations.params == SampleDurationParams()
+
+
+def test_sample_before_a_gap_counts_only_the_nominal_interval(
+    sensor_id: SensorId, durations: SampleDurations
+) -> None:
+    # -1 °C at 02:00, then nothing until 08:00: 1825 s of frost, not 6 h and not the cap.
+    series = series_at(sensor_id, DAY, [2, 8], [-1.0, 5.0])
+    hours = durations.hours_by_day(series, series.frame[Column.TEMP].to_numpy(), lambda t: t <= 0)
+    assert hours[DAY] == pytest.approx(1825 / 3600)
+
+
+def test_duration_weighted_means(sensor_id: SensorId, durations: SampleDurations) -> None:
+    # 00:00 10 °C (1800 s), 00:30 10 °C (1800 s), 01:00 40 °C (step 4500 s, counted),
+    # 02:15 40 °C (last, 1825 s): weighted mean (10*3600 + 40*6325) / 9925 = 289000 / 9925
+    # = 29.12 °C, while the arithmetic sample mean would be 25.0 °C.
+    series = series_at(sensor_id, DAY, [0, 0.5, 1, 2.25], [10.0, 10.0, 40.0, 40.0])
+    values = series.frame[Column.TEMP].to_numpy()
+    means = durations.daily_means(series, values, [DAY, date(2026, 7, 2)])
+    assert means[DAY] == pytest.approx(289000 / 9925)
+    assert np.isnan(means[date(2026, 7, 2)])
+    first_two = np.array([True, True, False, False])
+    assert durations.weighted_mean(series, values, first_two) == pytest.approx(10.0)
+    assert np.isnan(durations.weighted_mean(series, values, np.zeros(4, dtype=bool)))
 
 
 def test_empty_series(sensor_id: SensorId, durations: SampleDurations) -> None:
@@ -89,7 +113,7 @@ def test_irregular_sampling_gives_the_same_hours(
     sensor_id: SensorId, durations: SampleDurations
 ) -> None:
     # Cold block 02:00-06:00 (4 h) sampled regularly (every 30 min) and irregularly; every
-    # irregular step is shorter than the 3650 s cap, so both must give exactly 4 h.
+    # irregular step is shorter than the 4562.5 s cap, so both must give exactly 4 h.
     regular_hours = [h / 2 for h in range(0, 17)]  # 00:00 .. 08:00
     regular = series_at(
         sensor_id, DAY, regular_hours, [-2.0 if 2 <= h < 6 else 4.0 for h in regular_hours]

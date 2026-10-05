@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import replace
 from typing import Final, Self
 
@@ -16,13 +15,14 @@ from sivin.analytics.ripening.thresholds import Comparison, Threshold
 from sivin.core.daily import DailyWeather
 from sivin.core.season import MonthDay, Season
 
-logger = logging.getLogger(__name__)
-
 NEW_YEARS_EVE: Final = MonthDay(12, 31)
 """Last day of the autumn part of the dormant season."""
 
 NEW_YEARS_DAY: Final = MonthDay(1, 1)
 """First day of the spring part of the dormant season."""
+
+STATUS_PREVIOUS_AUTUMN_MISSING: Final = "previous_autumn_missing"
+"""``details["status"]`` when the autumn part of the winter has no complete day."""
 
 
 class WinterFreezeParams(IndexParams):
@@ -79,6 +79,12 @@ class WinterFreezeIndex(RipeningIndex[WinterFreezeParams]):
     Example: season 2026 covers 2025-11-01 .. 2026-03-31. Only complete days count. The value
     is the number of damage days; ``details`` adds ``severe_days`` and ``min_temp_c``; ``daily``
     holds the daily minima of the winter.
+
+    The autumn part comes from the previous calendar year, so ``ctx.daily`` must contain it.
+    When it has no complete day (e.g. the context was built from season-year data only, or the
+    sensor started in winter), the value is ``None`` and ``details["status"]`` is
+    :data:`STATUS_PREVIOUS_AUTUMN_MISSING`: a count over half a winter would look like a mild
+    winter.
     """
 
     index_id = "winter_freeze"
@@ -96,12 +102,19 @@ class WinterFreezeIndex(RipeningIndex[WinterFreezeParams]):
         Returns
         -------
         IndexResult
-            Number of damage days (d), ``None`` without any complete day.
+            Number of damage days (d), ``None`` without any complete day or without a complete
+            day in the previous autumn.
         """
-        selection = self._winter_days(ctx)
+        autumn = self._season_days(replace(ctx, year=ctx.year - 1), self.params.autumn)
+        spring = self._season_days(ctx, self.params.spring)
+        selection = _joined(ctx, autumn, spring)
         temp_min_c = selection.days.frame["temp_min"]
         if temp_min_c.empty:
             return self._result(ctx, selection, None)
+        if len(autumn.days) == 0:
+            return self._result(
+                ctx, selection, None, details={"status": STATUS_PREVIOUS_AUTUMN_MISSING}
+            )
         values = temp_min_c.to_numpy()
         damage = Threshold(Comparison.LT, self.params.damage_threshold_c)
         severe = Threshold(Comparison.LT, self.params.severe_threshold_c)
@@ -112,16 +125,15 @@ class WinterFreezeIndex(RipeningIndex[WinterFreezeParams]):
         }
         return self._result(ctx, selection, float(damage_days), daily=temp_min_c, details=details)
 
-    def _winter_days(self, ctx: IndexContext) -> SeasonDays:
-        """Complete days of both parts of the dormant season, with joint coverage."""
-        autumn = self._season_days(replace(ctx, year=ctx.year - 1), self.params.autumn)
-        spring = self._season_days(ctx, self.params.spring)
-        frame = pd.concat([autumn.days.frame, spring.days.frame])
-        n_period_days = autumn.n_period_days + spring.n_period_days
-        coverage = len(frame) / n_period_days
-        return SeasonDays(
-            days=DailyWeather(ctx.sensor_id, frame, ctx.timezone),
-            n_period_days=n_period_days,
-            coverage=coverage,
-            complete=coverage >= ctx.min_season_coverage,
-        )
+
+def _joined(ctx: IndexContext, autumn: SeasonDays, spring: SeasonDays) -> SeasonDays:
+    """Complete days of both parts of the dormant season, with joint coverage."""
+    frame = pd.concat([autumn.days.frame, spring.days.frame])
+    n_period_days = autumn.n_period_days + spring.n_period_days
+    coverage = len(frame) / n_period_days
+    return SeasonDays(
+        days=DailyWeather(ctx.sensor_id, frame, ctx.timezone),
+        n_period_days=n_period_days,
+        coverage=coverage,
+        complete=coverage >= ctx.min_season_coverage,
+    )

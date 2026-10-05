@@ -28,7 +28,7 @@ $\overline{VPD_{max}} = \frac{1}{N}\sum_d VPD_{max,d}$.
 Hours above threshold (durations as in [`heat_hours`](heat_hours.md)):
 $H = \frac{1}{3600}\sum_i \Delta t_i\,\mathbf{1}[VPD_i > VPD_{thr}]$.
 
-Optional daytime mean: arithmetic mean of $VPD_i$ over samples whose local clock hour $h$
+Optional daytime mean: duration-weighted mean of $VPD_i$ (weights $\Delta t_i$) over samples whose local clock hour $h$
 satisfies `daytime_start_hour` ≤ $h$ < `daytime_end_hour`.
 
 ## Period and aggregation
@@ -37,7 +37,9 @@ satisfies `daytime_start_hour` ≤ $h$ < `daytime_end_hour`.
 - A day counts only when both its temperature and humidity coverage reach
   `analytics.min_daily_coverage` (the index filters `rh_coverage` itself); `complete` follows
   `analytics.min_season_coverage`. Without any usable day the value is `None`.
-- `RH < 0` gives `NaN`; `RH > 100 %` gives a negative VPD and is passed through.
+- `RH <= 0 %` is a sensor artefact and gives `NaN` (as for the dew point); such samples are
+  counted in `details["n_rh_non_positive"]` and logged. `RH > 100 %` gives a negative VPD and
+  is passed through.
 
 ## Parameters
 
@@ -47,8 +49,8 @@ satisfies `daytime_start_hour` ≤ $h$ < `daytime_end_hour`.
 | `threshold_kpa` | 2.0 | kPa | project default `[to be tuned]`, not from literature |
 | `daytime_start_hour` | `None` | h (local) | optional |
 | `daytime_end_hour` | `None` | h (local) | optional |
-| `sampling.max_sample_duration_s` | 3650 | s | project default `[to be tuned]` |
-| `sampling.last_sample_duration_s` | 1825 | s | nominal sampling interval |
+| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
+| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
 
 ## Interpretation
 
@@ -70,7 +72,7 @@ demand for water.
   `src/sivin/analytics/ripening/psychrometry.py`.
 - Class `VpdIndex`, parameters `VpdParams` in `src/sivin/analytics/ripening/vpd.py`.
 - `IndexResult.daily`: daily maximum VPD. `details`: `hours_above_threshold_h`,
-  `threshold_kpa`, `max_vpd_kpa`, optionally `mean_daytime_vpd_kpa`, `n_days`.
+  `threshold_kpa`, `max_vpd_kpa`, `n_rh_non_positive`, optionally `mean_daytime_vpd_kpa`, `n_days`.
 - Tests: `tests/analytics/ripening/test_formulas.py::TestVapourPressure`,
   `tests/analytics/ripening/test_hour_indices.py::TestVpd`.
 

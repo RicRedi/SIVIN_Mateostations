@@ -30,6 +30,10 @@ T_{abs} = \min_{d \in D} T_{min,d}$$
   complete days over the total number of days of both parts (151 or 152 days by default).
 - Only complete days count; `complete` follows `analytics.min_season_coverage`. Without any
   complete day the value is `None`.
+- The autumn part lies in the previous calendar year, so `IndexContext.daily` must contain it.
+  If the autumn part has no complete day, the value is `None` and
+  `details["status"] = "previous_autumn_missing"`: a count over half a winter would look like a
+  mild winter.
 
 ## Parameters
 
@@ -56,8 +60,8 @@ correspondence to Zabadal et al. (2007) is `[to be verified]`.
 
 - Class `WinterFreezeIndex`, parameters `WinterFreezeParams` (properties `autumn`, `spring`) in
   `src/sivin/analytics/ripening/winter_freeze.py`.
-- `IndexResult.daily`: daily minima of the winter. `details`: `severe_days`, `min_temp_c`,
-  `n_days`.
+- `IndexResult.daily`: daily minima of the winter. `details`: `severe_days`, `min_temp_c`, `n_days`;
+  only `status` and `n_days` when the previous autumn is missing.
 - Tests: `tests/analytics/ripening/test_daily_indices.py::TestWinterFreeze`.
 
 ## References

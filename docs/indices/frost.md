@@ -15,13 +15,13 @@ two samples per hour that number is not a time and depends on the sampling. This
 ## Definition
 
 Sample durations as in [`heat_hours`](heat_hours.md):
-$\Delta t_i = \min(t_{i+1} - t_i, \Delta t_{max})$, the last sample
-$\min(\Delta t_{end}, \Delta t_{max})$, split at local midnight.
+$\Delta t_i = t_{i+1} - t_i$ if that step is at most $\Delta t_{max}$, otherwise (data gap)
+and for the last sample the nominal interval $\Delta t_{nom}$; split at local midnight.
 
 $$H_{frost} = \frac{1}{3600}\sum_{i \in D} \Delta t_i\,\mathbf{1}[T_i \le T_{frost}], \qquad
 H_{hard} = \frac{1}{3600}\sum_{i \in D} \Delta t_i\,\mathbf{1}[T_i \le T_{hard}]$$
 
-$$N_{nights} = \sum_{d \in D} \mathbf{1}[T_{min,d} \le T_{frost}], \qquad
+$$N_{nights} = \sum_{d \in D} \mathbf{1}[T_{min,d} < T_{frost}], \qquad
 T_{abs} = \min_{d \in D} T_{min,d}$$
 
 With `after_date` $d_0$ the same quantities over $D_{crit} = \{d \in D : d \ge d_0\}$ are
@@ -35,7 +35,7 @@ reported with the prefix `critical_`.
 | $T_{frost}$, $T_{hard}$ | `frost_c`, `hard_frost_c` | °C |
 | $H_{frost}$ | frost hours (the index value) | h |
 | $H_{hard}$ | hard-frost hours | h |
-| $N_{nights}$ | frost nights | d |
+| $N_{nights}$ | frost nights ($T_{min,d} < T_{frost}$, strict, as the ČHMÚ frost day) | d |
 | $T_{abs}$ | absolute minimum | °C |
 
 ## Period and aggregation
@@ -51,9 +51,9 @@ reported with the prefix `critical_`.
 | `period_start` / `period_end` | `04-01` / `10-31` | MM-DD | growing season (Amerine & Winkler 1944), project choice `[to be tuned]` |
 | `frost_c` | 0.0 (≤) | °C | MIGRATION_PLAN §3.2 |
 | `hard_frost_c` | −2.0 (≤) | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
-| `after_date` | `None` | date | e.g. modelled budburst (WP-2.1) |
-| `sampling.max_sample_duration_s` | 3650 | s | project default `[to be tuned]` |
-| `sampling.last_sample_duration_s` | 1825 | s | nominal sampling interval |
+| `after_date` | `None` | date | e.g. modelled budburst (WP-2.1); must lie in the season year |
+| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
+| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
 
 ## Interpretation
 
@@ -66,7 +66,10 @@ not verified against the paper. The defaults 0 °C and −2 °C are thresholds o
 
 - Air temperature at sensor height, not bud or tissue temperature; radiative cooling of buds on
   clear nights can bring them below air temperature.
-- "Frost night" uses the minimum of the local calendar day (00–24 h), not of the night.
+- "Frost night" uses the minimum of the local calendar day (00–24 h), not of the night, and
+  the strict condition $T_{min} < 0$ °C of the ČHMÚ frost day, so it agrees with
+  `tropical_days_nights.frost_days`. Frost **hours** use $T \le 0$ °C: a day with
+  $T_{min} = 0.0$ °C has frost hours but no frost night.
 - Samples about every 30 min miss short dips between samples.
 
 ## Implementation

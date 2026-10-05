@@ -79,8 +79,12 @@ class TestVapourPressure:
         assert result == pytest.approx([1.1691, 3.3945, 0.0], abs=1e-4)
 
     def test_impossible_humidity_gives_nan(self) -> None:
+        # RH <= 0 is a sensor artefact, invalid for VPD as for the dew point.
         assert math.isnan(float(vapour_pressure_deficit_kpa(20.0, -1.0)))
-        assert float(vapour_pressure_deficit_kpa(20.0, 0.0)) == pytest.approx(2.3383, abs=1e-4)
+        assert math.isnan(float(vapour_pressure_deficit_kpa(20.0, 0.0)))
+        assert float(vapour_pressure_deficit_kpa(20.0, 0.1)) == pytest.approx(
+            2.3383 * 0.999, abs=1e-4
+        )
 
 
 class TestThresholds:
@@ -136,11 +140,14 @@ class TestParams:
             params.period_start = MonthDay(9, 2)  # type: ignore[misc]
 
     def test_sample_duration_bounds(self) -> None:
-        assert SampleDurationParams().max_sample_duration_s == 3650.0
+        assert SampleDurationParams().max_sample_duration_s == 4562.5
+        assert SampleDurationParams().nominal_interval_s == 1825.0
         with pytest.raises(ValidationError):
             SampleDurationParams(max_sample_duration_s=7 * 3600.0)
         with pytest.raises(ValidationError):
-            SampleDurationParams(last_sample_duration_s=0.0)
+            SampleDurationParams(nominal_interval_s=0.0)
+        with pytest.raises(ValidationError, match="nominal_interval_s"):
+            SampleDurationParams(max_sample_duration_s=1800.0, nominal_interval_s=1825.0)
 
 
 class TestRegistry:

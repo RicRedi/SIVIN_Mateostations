@@ -11,10 +11,11 @@ project defaults of MIGRATION_PLAN §3.2; that they match the cited studies is
 
 ## Definition
 
-Each valid raw sample $i$ represents the time until the next sample, capped:
+Each valid raw sample $i$ represents the time until the next sample; a step longer than the
+cap is a data gap, and the sample then represents only the nominal interval:
 
-$$\Delta t_i = \min\left(t_{i+1} - t_i,\ \Delta t_{max}\right), \qquad
-\Delta t_{last} = \min\left(\Delta t_{end},\ \Delta t_{max}\right)$$
+$$\Delta t_i = \begin{cases} t_{i+1} - t_i & \text{if } t_{i+1} - t_i \le \Delta t_{max} \\
+\Delta t_{nom} & \text{otherwise (gap)} \end{cases}, \qquad \Delta t_{last} = \Delta t_{nom}$$
 
 Hours in a band $B$ over the complete days $D$ of the period:
 
@@ -31,7 +32,7 @@ $$H_B = \frac{1}{3600}\sum_{i \in D} \Delta t_i \cdot \mathbf{1}\left[T_i \in B\
 | $t_i$ | timestamp of sample $i$ (UTC) | s |
 | $T_i$ | air temperature of sample $i$ | °C |
 | $\Delta t_{max}$ | `sampling.max_sample_duration_s` | s |
-| $\Delta t_{end}$ | `sampling.last_sample_duration_s` | s |
+| $\Delta t_{nom}$ | `sampling.nominal_interval_s` | s |
 | $H_B$ | hours in band $B$ | h |
 
 ## Period and aggregation
@@ -53,8 +54,8 @@ $$H_B = \frac{1}{3600}\sum_{i \in D} \Delta t_i \cdot \mathbf{1}\left[T_i \in B\
 | `optimum_max_c` | 30.0 | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
 | `heat_stress_c` | 30.0 | °C | MIGRATION_PLAN §3.2; background Greer & Weedon (2012) `[to be verified]` |
 | `extreme_heat_c` | 35.0 | °C | MIGRATION_PLAN §3.2; background Mori et al. (2007) `[to be verified]` |
-| `sampling.max_sample_duration_s` | 3650 | s | project default `[to be tuned]` (2 × 1825 s) |
-| `sampling.last_sample_duration_s` | 1825 | s | nominal sampling interval (legacy configs) |
+| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
+| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
 
 ## Interpretation
 
@@ -67,7 +68,9 @@ response depends on variety and duration `[to be verified]`.
 - Only air temperature is measured; berry temperature in direct sun can be several degrees
   higher, so the hours underestimate the heat load on exposed bunches.
 - With ~30 min sampling each sample stands for ~30 min; short peaks between samples are missed.
-- A gap longer than `max_sample_duration_s` counts only up to the cap after the last sample.
+- A sample followed by a gap longer than `max_sample_duration_s` counts only the nominal
+  interval; the default cap of 2.5 × 1825 s still bridges one missed sample plus clock drift.
+  The same rule is used by the disease models (WP-2.3), so the two copies can be unified.
   Days with gaps are mostly excluded by the daily coverage rule anyway.
 
 ## Implementation

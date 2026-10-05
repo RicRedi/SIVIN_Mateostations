@@ -24,11 +24,13 @@ Shorter than the shortest local day (23 h), so a sample interval crosses at most
 midnight; a sample that is followed by a longer gap is not meant to stand for it anyway.
 """
 
-DEFAULT_MAX_SAMPLE_DURATION_S: Final = 2 * LEGACY_SAMPLING_INTERVAL_S
-"""Default cap of the time one sample represents, in seconds (3650 s).
+DEFAULT_MAX_SAMPLE_DURATION_S: Final = 2.5 * LEGACY_SAMPLING_INTERVAL_S
+"""Default longest step to the next sample that still counts in full, in seconds (4562.5 s).
 
-Project default ``[to be tuned]``: twice the nominal interval of 1825 s, so a single missed
-sample is still bridged but a longer gap is not counted.
+Project default ``[to be tuned]``: 2.5 times the nominal interval of 1825 s, so one missed
+sample (a step of about 3650 s) plus clock drift is still bridged; a longer step is a data gap.
+Same rule and default as the WP-2.3 copy (``sivin.analytics.disease.sampling``), so that the
+later unification in core preserves behaviour.
 """
 
 
@@ -82,9 +84,15 @@ class PeriodParams(IndexParams):
 class SampleDurationParams(BaseModel):
     """How long a single raw sample is taken to last (for hour-based metrics).
 
-    Each sample represents the time until the next sample of the series, capped at
-    ``max_sample_duration_s``; the last sample of the series represents
-    ``last_sample_duration_s`` (also capped).
+    Each sample represents the time until the next sample of the series if that step is at
+    most ``max_sample_duration_s``. If the step is longer (a data gap), the sample represents
+    only ``nominal_interval_s`` and the rest of the gap is not counted. The last sample of the
+    series also represents ``nominal_interval_s``.
+
+    Raises
+    ------
+    pydantic.ValidationError
+        If ``max_sample_duration_s < nominal_interval_s``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -94,15 +102,22 @@ class SampleDurationParams(BaseModel):
         gt=0.0,
         le=MAX_SAMPLE_DURATION_LIMIT_S,
         description=(
-            "Longest time one sample may represent, in seconds (s). Longer gaps are not "
-            "counted beyond it. Project default 3650 s = 2 x 1825 s [to be tuned]."
+            "Longest step to the next sample (s) that the sample represents in full; a longer "
+            "step is a gap and the sample counts only nominal_interval_s. Project default "
+            "4562.5 s = 2.5 x 1825 s [to be tuned]."
         ),
     )
-    last_sample_duration_s: float = Field(
+    nominal_interval_s: float = Field(
         LEGACY_SAMPLING_INTERVAL_S,
         gt=0.0,
         description=(
-            "Time represented by the last sample of a series, which has no successor, in "
-            "seconds (s). Default: the nominal sampling interval of 1825 s (legacy configs)."
+            "Time (s) represented by a sample followed by a gap and by the last sample of a "
+            "series. Default: the nominal sampling interval of 1825 s (legacy configs)."
         ),
     )
+
+    @model_validator(mode="after")
+    def _cap_not_below_nominal(self) -> Self:
+        if self.max_sample_duration_s < self.nominal_interval_s:
+            raise ValueError("max_sample_duration_s must not be shorter than nominal_interval_s")
+        return self

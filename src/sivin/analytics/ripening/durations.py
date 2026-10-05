@@ -3,13 +3,13 @@
 The sensors sample about every 1825 s, but not exactly, and samples go missing. Counting rows
 (as the legacy ``frost_events_count`` did) therefore does not measure time. Here each sample is
 read as a step function (zero-order hold): its value holds from its own timestamp until the next
-sample of the series, at most ``max_sample_duration_s``. Hours in a temperature band are the
-summed durations of the samples whose value lies in the band.
+sample of the series; after a step longer than ``max_sample_duration_s`` (a data gap) it holds
+only for the nominal interval. Hours in a temperature band are the summed durations of the
+samples whose value lies in the band.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Final
@@ -21,8 +21,6 @@ import pandas as pd
 from sivin.analytics.ripening.params import SampleDurationParams
 from sivin.core.schema import Column, MeasurementSeries
 from sivin.core.timeutil import LocalTimeConverter
-
-logger = logging.getLogger(__name__)
 
 SECONDS_PER_HOUR: Final = 3600.0
 """Seconds in one hour."""
@@ -66,12 +64,13 @@ def masked_values(series: MeasurementSeries, column: Column, exclude_mask: int) 
 class SampleDurations:
     """Split the time covered by valid samples into pieces per local calendar day.
 
-    Sample ``i`` represents the interval ``[t_i, t_i + d_i)`` with
-    ``d_i = min(t_{i+1} - t_i, max_sample_duration_s)``; the last sample of the series has
-    ``d = min(last_sample_duration_s, max_sample_duration_s)``. Durations are taken from the
-    whole series (excluded rows included), so an excluded or missing value leaves its own
-    interval uncounted instead of stretching its predecessor. An interval that crosses a local
-    midnight is split there, so every piece belongs to exactly one local day.
+    Sample ``i`` represents the interval ``[t_i, t_i + d_i)`` with ``d_i = t_{i+1} - t_i`` if
+    that step is at most ``max_sample_duration_s``, else ``d_i = nominal_interval_s`` (a data
+    gap ends the interval); the last sample of the series has ``d = nominal_interval_s``.
+    Durations are taken from the whole series (excluded rows included), so an excluded or
+    missing value leaves its own interval uncounted instead of stretching its predecessor. An
+    interval that crosses a local midnight is split there, so every piece belongs to exactly
+    one local day.
 
     Parameters
     ----------
@@ -108,10 +107,12 @@ class SampleDurations:
         times_ns = _utc_ns(series)
         if times_ns.size == 0:
             return np.empty(0, dtype=np.float64)
-        gaps_s = np.diff(times_ns).astype(np.float64) / _NS_PER_S
-        gaps_s = np.append(gaps_s, self._params.last_sample_duration_s)
-        capped: FloatArray = np.minimum(gaps_s, self._params.max_sample_duration_s)
-        return capped
+        steps_s = np.diff(times_ns).astype(np.float64) / _NS_PER_S
+        nominal_s = self._params.nominal_interval_s
+        durations: FloatArray = np.full(times_ns.size, nominal_s, dtype=np.float64)
+        followed = steps_s <= self._params.max_sample_duration_s
+        durations[:-1][followed] = steps_s[followed]
+        return durations
 
     def pieces(self, series: MeasurementSeries, values: FloatArray) -> pd.DataFrame:
         """Return the time covered by the valid samples, split at local midnight.
@@ -217,6 +218,60 @@ class SampleDurations:
             hours = hours.reindex(pd.Index(days, dtype=object), fill_value=0.0)
         hours.index.name = "date"
         return hours.astype(np.float64)
+
+    def daily_means(
+        self, series: MeasurementSeries, values: FloatArray, days: list[date]
+    ) -> pd.Series:
+        """Return the duration-weighted mean of the values per local day.
+
+        Each piece of :meth:`pieces` weighs with its duration, so a densely sampled stretch
+        does not weigh more than a sparsely sampled one.
+
+        Parameters
+        ----------
+        series : MeasurementSeries
+            Raw measurements; only the timestamps are used.
+        values : numpy.ndarray of float
+            One value per row (any unit); ``NaN`` marks a row that does not count.
+        days : list of datetime.date
+            Local days to report, in this order; a day without valid values gets ``NaN``.
+
+        Returns
+        -------
+        pandas.Series of float
+            Mean in the unit of ``values`` per local date, index named ``date``.
+        """
+        pieces = self.pieces(series, values)
+        weighted = (pieces["duration_s"] * pieces["value"]).groupby(pieces["date"]).sum()
+        total_s = pieces["duration_s"].groupby(pieces["date"]).sum()
+        means = (weighted / total_s).reindex(pd.Index(days, dtype=object, name="date"))
+        return means.astype(np.float64)
+
+    def weighted_mean(
+        self, series: MeasurementSeries, values: FloatArray, selected: npt.NDArray[np.bool_]
+    ) -> float:
+        """Return the duration-weighted mean of the selected valid values.
+
+        Parameters
+        ----------
+        series : MeasurementSeries
+            Raw measurements; only the timestamps are used.
+        values : numpy.ndarray of float
+            One value per row (any unit); ``NaN`` marks a row that does not count.
+        selected : numpy.ndarray of bool
+            One flag per row; only flagged rows count.
+
+        Returns
+        -------
+        float
+            Mean in the unit of ``values`` weighted by :meth:`durations_s`; ``NaN`` if no
+            selected row has a valid value.
+        """
+        use = selected & ~np.isnan(values)
+        weights_s = self.durations_s(series)[use]
+        if weights_s.size == 0:
+            return float("nan")
+        return float(np.average(values[use], weights=weights_s))
 
     def _midnights(self, first_ns: int, last_ns: int) -> tuple[list[date], npt.NDArray[np.int64]]:
         """Local days touched by ``[first_ns, last_ns]`` and their starts, plus one more start."""

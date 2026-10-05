@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import date
 from typing import Self
 
@@ -12,8 +11,6 @@ from sivin.analytics.base import IndexContext, IndexResult, index_registry
 from sivin.analytics.ripening.common import RipeningIndex
 from sivin.analytics.ripening.params import MonthDayValue, PeriodParams
 from sivin.core.season import MonthDay, Season
-
-logger = logging.getLogger(__name__)
 
 
 class DtrRipeningParams(PeriodParams):

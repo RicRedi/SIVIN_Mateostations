@@ -170,6 +170,23 @@ class TestWinterFreeze:
         assert result.daily is not None
         assert result.daily.tolist() == [-16.0, -21.0, -15.0]
 
+    def test_missing_previous_autumn_gives_no_value(
+        self, hourly_days: DaySeriesFactory, make_context: ContextFactory
+    ) -> None:
+        # Only January data (as if the context held the season year only): two damage days
+        # exist, but half a winter must not be reported as a count.
+        series = hourly_days(
+            {
+                date(2026, 1, 10): two_level_day(-21.0, -8.0),
+                date(2026, 1, 11): two_level_day(-16.0, -8.0),
+            }
+        )
+        result = WinterFreezeIndex().compute(make_context(series, 2026))
+        assert result.value is None
+        assert result.details["status"] == "previous_autumn_missing"
+        assert result.coverage == pytest.approx(2 / 151)
+        assert result.complete is False
+
     def test_window_must_cross_new_year(self) -> None:
         with pytest.raises(ValidationError, match="cross New Year"):
             WinterFreezeParams(dormant_start="01-01", dormant_end="03-31")

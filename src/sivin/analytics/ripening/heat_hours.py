@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Final, Self
 
 import numpy as np
@@ -17,8 +16,6 @@ from sivin.analytics.ripening.params import MonthDayValue, PeriodParams, SampleD
 from sivin.analytics.ripening.thresholds import Comparison, Threshold
 from sivin.core.schema import Column
 from sivin.core.season import MonthDay
-
-logger = logging.getLogger(__name__)
 
 BAND_COLUMNS: Final = ("optimum_h", "heat_stress_h", "extreme_heat_h", "observed_h")
 """Columns of :meth:`HeatHoursIndex.band_hours`, all in hours."""

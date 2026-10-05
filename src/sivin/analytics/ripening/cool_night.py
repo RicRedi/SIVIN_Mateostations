@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Final
 
 from pydantic import Field
@@ -12,8 +11,6 @@ from sivin.analytics.ripening.common import RipeningIndex
 from sivin.analytics.ripening.params import MonthDayValue, PeriodParams
 from sivin.analytics.ripening.thresholds import UpperBoundClasses
 from sivin.core.season import MonthDay
-
-logger = logging.getLogger(__name__)
 
 SEPTEMBER: Final = 9
 """Month of the Cool Night Index in the northern hemisphere (Tonietto and Carbonneau, 2004)."""

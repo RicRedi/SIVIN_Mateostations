@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Final
 
@@ -15,8 +14,6 @@ from sivin.analytics.ripening.common import RipeningIndex
 from sivin.analytics.ripening.params import MonthDayValue, PeriodParams
 from sivin.analytics.ripening.thresholds import Comparison, Threshold
 from sivin.core.season import MonthDay
-
-logger = logging.getLogger(__name__)
 
 TROPICAL_DAYS: Final = "tropical_days"
 """Detail key of the number of tropical days (the index value)."""

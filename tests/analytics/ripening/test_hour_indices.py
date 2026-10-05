@@ -5,6 +5,8 @@ All data are synthetic, chosen so that the results can be computed by hand.
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import date
 
 import numpy as np
@@ -61,9 +63,9 @@ class TestFrost:
     @pytest.fixture
     def series(self, hourly_days: DaySeriesFactory) -> MeasurementSeries:
         # Apr 10: 2 h at -3, 4 h at -1, 18 h at 4 °C -> frost (<= 0) 6 h, hard (<= -2) 2 h.
-        # Apr 20: 2 h at 0.0 (frost, T <= 0), 22 h at 6 °C -> frost 2 h, min 0.
-        # Apr 25: no frost, min 5. Apr 10 23:00 is followed by Apr 20: its interval is capped
-        # at 3650 s, of which 3600 s fall on Apr 10 (4 °C) and 50 s on Apr 11 (no data day).
+        # Apr 20: 2 h at 0.0 (frost hours count T <= 0), 22 h at 6 °C -> frost 2 h, min 0.0,
+        # but no frost night (T_min < 0, as the ČHMÚ frost day). Apr 25: no frost, min 5.
+        # Apr 10 23:00 is followed by a gap until Apr 20: it counts only 1825 s (4 °C).
         return hourly_days(
             {
                 date(2026, 4, 10): [-3.0] * 2 + [-1.0] * 4 + [4.0] * 18,
@@ -80,7 +82,7 @@ class TestFrost:
         assert result.value == pytest.approx(8.0)
         assert result.details["frost_h"] == pytest.approx(8.0)
         assert result.details["hard_frost_h"] == pytest.approx(2.0)
-        assert result.details["frost_nights"] == 2
+        assert result.details["frost_nights"] == 1
         assert result.details["min_temp_c"] == -3.0
         assert "after_date" not in result.details
         assert result.daily is not None
@@ -95,8 +97,15 @@ class TestFrost:
         assert result.details["after_date"] == "2026-04-15"
         assert result.details["critical_frost_h"] == pytest.approx(2.0)
         assert result.details["critical_hard_frost_h"] == pytest.approx(0.0)
-        assert result.details["critical_frost_nights"] == 1
+        assert result.details["critical_frost_nights"] == 0
         assert result.details["critical_min_temp_c"] == 0.0
+
+    def test_after_date_must_lie_in_season_year(
+        self, series: MeasurementSeries, make_context: ContextFactory
+    ) -> None:
+        params = FrostParams(after_date=date(2025, 4, 15))
+        with pytest.raises(ValueError, match="season year 2026"):
+            FrostIndex(params).compute(make_context(series, 2026))
 
     def test_critical_period_without_days(
         self, series: MeasurementSeries, make_context: ContextFactory
@@ -124,7 +133,7 @@ class TestFrost:
         self, sensor_id: SensorId, make_context: ContextFactory
     ) -> None:
         # The same 3 h frost (01:00-04:00) on May 3, once every 30 min, once at irregular
-        # steps (all shorter than the 3650 s cap). Both must give 3 h.
+        # steps (all shorter than the 4562.5 s cap). Both must give 3 h.
         day = date(2026, 5, 3)
         values = []
         for hours in (
@@ -237,6 +246,7 @@ class TestDewPoint:
         result = DewPointIndex().compute(make_context(series, 2026))
         assert result.value is None
         assert result.details["n_rh_non_positive"] == 24
+        assert "mean_depression_c" not in result.details
 
 
 class TestVpd:
@@ -276,6 +286,40 @@ class TestVpd:
         result = VpdIndex().compute(make_context(series, 2026))
         assert result.details["n_days"] == 1
         assert result.value == pytest.approx(1.1691, abs=1e-4)
+
+    def test_non_positive_humidity_is_invalid(
+        self,
+        hourly_days: DaySeriesFactory,
+        make_context: ContextFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Two samples at RH = 0 % (30 °C) would give VPD = e_s(30) = 4.24 kPa; they are
+        # invalid, so the daily maximum is VPD(20 °C, 50 %) = 1.1691 kPa and no hour is above
+        # the 2 kPa threshold.
+        temps = [30.0] * 2 + [20.0] * 22
+        rh = [0.0] * 2 + [50.0] * 22
+        series = hourly_days({date(2026, 6, 1): temps}, rh={date(2026, 6, 1): rh})
+        result = VpdIndex().compute(make_context(series, 2026))
+        assert result.details["n_rh_non_positive"] == 2
+        assert result.value == pytest.approx(1.1691, abs=1e-4)
+        assert result.details["hours_above_threshold_h"] == 0.0
+        assert "VPD" in caplog.text
+
+    def test_daytime_mean_is_duration_weighted(
+        self, sensor_id: SensorId, make_context: ContextFactory
+    ) -> None:
+        # Daytime 10-12 h: 10:00 at 20 °C / 50 % (1.1691 kPa) lasts 1 h; 11:00 and 11:30 at
+        # 30 °C / 20 % (3.3945 kPa) last 1800 s each (11:30 -> 12:00). Weighted mean =
+        # (1.1691*3600 + 3.3945*3600) / 7200 = 2.2818 kPa; the sample mean would be 2.6527.
+        day = date(2026, 6, 1)
+        hours = [h for h in range(24) if h != 11] + [11, 11.5]
+        hours.sort()
+        temps = [30.0 if 11 <= h < 12 else 20.0 for h in hours]
+        rh = [20.0 if 11 <= h < 12 else 50.0 for h in hours]
+        series = MeasurementSeries.from_records(sensor_id, local_stamps(day, hours), temps, rh)
+        params = VpdParams(daytime_start_hour=10, daytime_end_hour=12)
+        result = VpdIndex(params).compute(make_context(series, 2026))
+        assert result.details["mean_daytime_vpd_kpa"] == pytest.approx(2.2818, abs=1e-4)
 
     @pytest.mark.parametrize(
         "values",
@@ -320,3 +364,20 @@ class TestEmptyAndOutOfSeason:
         assert result.value is None
         assert result.coverage == 0.0
         assert not np.isnan(result.coverage)
+
+    def test_details_are_finite_json(
+        self, index_id: str, hourly_days: DaySeriesFactory, make_context: ContextFactory
+    ) -> None:
+        # Pathological but valid input: humidity 0 % everywhere (no dew point, no VPD), a
+        # winter without its autumn, frost on every day; no detail may be NaN or infinite.
+        days = [date(2026, 1, 10), date(2026, 4, 10), date(2026, 8, 10), date(2026, 9, 10)]
+        series = hourly_days(
+            {day: [-25.0] * 6 + [35.0] * 18 for day in days},
+            rh={day: [0.0] * 24 for day in days},
+        )
+        params = {"after_date": "2026-04-01"} if index_id == "frost" else {}
+        result = index_registry.create(index_id, params).compute(make_context(series, 2026))
+        for key, detail in result.details.items():
+            assert isinstance(detail, str) or math.isfinite(detail), key
+        assert result.value is None or math.isfinite(result.value)
+        json.dumps(dict(result.details), allow_nan=False)

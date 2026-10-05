@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import date
 from typing import Self
 
@@ -17,14 +16,12 @@ from sivin.analytics.ripening.thresholds import Comparison, Threshold
 from sivin.core.schema import Column
 from sivin.core.season import MonthDay
 
-logger = logging.getLogger(__name__)
-
 
 class FrostParams(PeriodParams):
     """Parameters of :class:`FrostIndex`.
 
     Frost is ``T <= frost_c`` and hard frost ``T <= hard_frost_c`` (raw samples); a frost night
-    is a complete day with ``T_min <= frost_c``.
+    is a complete day with ``T_min < frost_c``, consistent with the ČHMÚ frost day.
     """
 
     period_start: MonthDayValue = Field(
@@ -53,7 +50,7 @@ class FrostParams(PeriodParams):
         None,
         description=(
             "First day (date) from which frost is critical, e.g. the modelled budburst; "
-            "None = no critical-frost figures."
+            "must lie in the computed season year; None = no critical-frost figures."
         ),
     )
     sampling: SampleDurationParams = Field(
@@ -95,13 +92,23 @@ class FrostIndex(RipeningIndex[FrostParams]):
         -------
         IndexResult
             Frost hours (h), ``None`` without any complete day.
+
+        Raises
+        ------
+        ValueError
+            If ``after_date`` lies outside ``ctx.year``.
         """
         params = self.params
+        if params.after_date is not None and params.after_date.year != ctx.year:
+            raise ValueError(
+                f"after_date {params.after_date} does not lie in season year {ctx.year}."
+            )
         selection = self._season_days(ctx, params.season)
         if len(selection.days) == 0:
             return self._result(ctx, selection, None)
         frost = Threshold(Comparison.LE, params.frost_c)
         hard_frost = Threshold(Comparison.LE, params.hard_frost_c)
+        frost_night = Threshold(Comparison.LT, params.frost_c)
         durations = SampleDurations(params.sampling, ctx.timezone)
         pieces = durations.pieces(
             ctx.series, masked_values(ctx.series, Column.TEMP, ctx.exclude_mask)
@@ -112,7 +119,7 @@ class FrostIndex(RipeningIndex[FrostParams]):
                 "frost_h": durations.sum_hours(pieces, frost.holds, selection.days.dates),
                 "hard_frost_h": durations.sum_hours(pieces, hard_frost.holds, selection.days.dates),
                 "frost_nights": pd.Series(
-                    frost.holds(temp_min_c.to_numpy()), index=temp_min_c.index
+                    frost_night.holds(temp_min_c.to_numpy()), index=temp_min_c.index
                 ),
                 "temp_min": temp_min_c,
             }
