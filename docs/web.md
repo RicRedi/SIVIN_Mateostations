@@ -66,16 +66,18 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `app/SensorCatalog` | Joins `sensors.geojson`, manifest and `latest.json` into `SensorInfo` per sensor (position, elevation, `municipality`, `track`, `variety`, registry `status`, latest values). |
 | `app/SensorGrouping` | Groups sensors municipality → vineyard track for the picker: names in Czech collation with natural number order (`Trať 2` before `Trať 10`), the unassigned group (`null`) last; within a track by label, retired sensors last. |
 | `app/SensorQuery` | The picker's search: every word of the query must occur in id, label, municipality, track or variety; case and diacritics are ignored (`foldText`: NFD, combining marks removed, lower case). |
-| `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and "select all" of a group within the comparison limit: a fully selected group is removed; otherwise its unselected sensors are appended in group order up to 8 and the rest is reported as truncated. |
+| `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and the group checkbox within the comparison limit: a group with **any** selected sensor is cleared (so a partly selected group can always be cleared, also at the limit); a group without one is added in group order up to 8 and the rest is reported (`groupNotice`: "only n added", or the plain limit message when nothing fit). |
 | `app/ChartDataLoader` | Loads raw / hourly / daily series and in-window events **per sensor** (`Promise.allSettled`): a sensor whose series fail becomes a failure entry shown as a per-sensor error above the chart, the other sensors still render. A missing or invalid events file degrades to "no events" with a `console.warn`. |
 | `app/ChartPresenter` | Resolves the window from the state (falling back to the default window if a spec cannot be resolved), shows "loading", the data or an error; drops responses of superseded requests. |
 | `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution. Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
 | `i18n/I18n`, `LanguagePreference` | UI strings cs (default) / de / en, manifest labels, number/date formatting. Lookup: language → Czech → key. The language is stored in `localStorage` (every access in `try/catch`). Priority at start: URL hash → stored preference → Czech. |
-| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. **Clustering** (`leaflet.markercluster`): markers closer than about one marker diameter on screen (`CLUSTER_RADIUS_PX` = 28 px) merge into a grey badge with the count; a click on a badge, or Enter on a focused one, zooms in to its sensors (at the highest zoom it spreads them). A badge that hides a selected sensor has a blue ring. Leaflet re-creates a marker's element when it leaves a cluster, so the keyboard attributes are re-applied on every `add`. |
-| `ui/ClusterIcon` | Content and classes of a cluster badge: the count, an accessible name ("Skupina čidel: 5 – přiblížit") and the selection ring. Neutral grey on purpose: the temperature colours belong to single sensors. |
+| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. **Clustering** (`leaflet.markercluster`, see *Clustering* below): markers closer than `CLUSTER_RADIUS_PX` (42 px) on screen merge into a badge with the count, coloured by the **mean latest temperature** of its members on the marker scale; a click on a badge, or Enter on a focused one, zooms in to its sensors (at the highest zoom it spreads them). A badge that hides a selected sensor has a blue ring. Leaflet re-creates a marker's element when it leaves a cluster, so the keyboard attributes are re-applied on every `add`. |
+| `ui/ClusterIcon` | Content of a cluster badge: the count, an accessible name ("Skupina čidel: 5 – přiblížit"), the colour (below) and the selection ring. |
 | `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor picker, metadata (incl. municipality and track) and latest values of the selected sensors, time-window controls, chart. |
 | `ui/picker/SensorPicker` | Sensor selection that scales to larger networks (WP-3.5), details below. |
 | `ui/picker/PickerTree` | The grouped checkbox list (composite of group nodes and sensor rows). The DOM is built once; `update` only shows, hides and checks, so focus stays where it is while typing or toggling. |
+| `ui/picker/ModalSheet` | Makes the open panel modal in the phone layout: `role="dialog"`, `aria-modal="true"`, every other part of the page `inert`, Tab / Shift+Tab wrap inside the sheet; all undone on close. |
+| `ui/ClusterIcon` (colours) | `appearance(tempsC, selectedCount)`: mean of the members' current temperatures (stale or missing ones ignored) on `TemperatureScale`; grey `STALE_COLOR` with a dashed ring only when no member has a value; text dark or white, whichever has the higher WCAG contrast (`inkFor`). |
 | `ui/picker/SensorChips` | The selected sensors as removable chips in their line colour, in selection order; they double as the chart legend. |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
 | `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
@@ -93,25 +95,53 @@ Owner decision 2026-10-05: the selection must scale beyond a handful of sensors.
   with a **search field** (focused on open) and the sensors grouped **municipality → vineyard
   track** (`municipality`, `track` of the registry; a sensor without a value is listed under
   *Nezařazeno* on that level). Each group has a disclosure button with its name and
-  "selected/visible" count, and a **tri-state "select all" checkbox** over its *visible*
-  sensors (so "select all" during a search selects the matches only). Selecting a group
-  respects the 8-sensor comparison limit: it adds sensors in list order until 8 are selected and
-  says how many were added ("Srovnat lze nejvýše 8 čidel – ze skupiny bylo přidáno jen 6.");
-  a fully selected group is deselected.
+  "selected/visible" count, and a **tri-state checkbox** over its *visible* sensors. A group
+  without a selected sensor is added in list order until 8 sensors are selected, with a notice
+  how many were added ("Srovnat lze nejvýše 8 čidel – ze skupiny bylo přidáno jen 6."; just
+  "Srovnat lze nejvýše 8 čidel." when nothing fit). A group with **any** selected sensor
+  (checked or mixed) is cleared by its checkbox, so a partly selected group can always be
+  cleared, also at the limit.
 - **Search** filters by id, label, municipality, track and variety, case- and
-  diacritics-insensitive, every word must match ("ryzl mik"). Starting a search expands all
-  groups. Retired sensors are listed last in their track, struck through and greyed, with
-  "vyřazeno"; the variety is shown under the label.
+  diacritics-insensitive: every word of the query must be the **start of a word** of one of
+  those fields ("ryzl mik"; "obec b trat 4" finds Obec B / Trať 4 only — "b" does not match
+  inside "obec", "4" not inside an id "90000401"). Words are split at anything that is not a
+  letter or digit. Starting a search expands all groups. During a search the group checkbox
+  acts on the matches, and says so: its name is "Vybrat nalezená v <group>", its state
+  refers to the matches, and a hint "nalezeno m z n" next to the name shows how many of the
+  group's sensors match.
+- Retired sensors are listed last in their track and greyed (not struck through: their data are
+  kept), with "vyřazeno"; the variety is shown under the label.
+- **Limit notice** once, in the picker: inside the open panel, else right under the button
+  (the side panel no longer repeats it).
 - **Chips** below the button: the compared sensors in their line colour with a × button
   ("Odebrat … ze srovnání"); removing one moves focus to the next chip, or to the button.
 - **Keyboard:** Tab through the controls (native checkboxes and buttons), ↓/↑ move between the
   visible controls of the open panel, Escape closes it and returns focus to the button; a click
-  outside closes it. On phones (≤ 760 px) the open panel is a **full-screen sheet** with a
-  title "Výběr čidel (n/N)" and a "Hotovo" button.
+  outside closes it. On phones (≤ 760 px, `PHONE_LAYOUT_QUERY` in `main.ts`, checked on each
+  opening) the open panel is a **modal full-screen sheet** (`ModalSheet`): `role="dialog"`,
+  `aria-modal="true"`, the rest of the page `inert`, Tab trapped inside, a title
+  "Výběr čidel (n/N)" and a "Hotovo" button; closing restores everything and returns focus to
+  the button.
 - The selection stays in the URL hash (`#s=…`) as before; the open/closed state, the search and
   collapsed groups are not part of the URL.
 
 Screenshots: `docs/wp_log/img/WP-3.5-*.png`.
+
+### Clustering
+
+`MapView` puts the markers into a `leaflet.markercluster` group. `CLUSTER_RADIUS_PX`
+(`src/ui/MapView.ts`, a named constant) is its `maxClusterRadius`: the larger of a marker's
+(20 px) and a badge's (34 px) diameter plus an 8 px margin = **42 px**, so neither markers nor
+badges overlap. The first choice, 28 px (one marker diameter), was checked against a
+**synthetic 200-sensor site** (10 municipalities × 7 tracks, 1440 × 900, overview zoom): 26
+badges, many of them overlapping, because a badge is larger than a marker; 44 px gave 16 badges
+and 60 px 8 (screenshot `WP-3.5-200-sensors-map.png`, 42 px). Change the constant to cluster
+more or less aggressively.
+
+A badge is coloured by the **mean latest temperature** of its members (only current values:
+stale and missing ones are ignored) on the same scale as the markers, so the temperature
+picture stays visible when zoomed out. It is grey with a dashed ring only when no member has a
+current value. Text is dark or white, whichever contrasts more.
 
 ### Time windows and resolution
 
@@ -178,8 +208,14 @@ STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 
 ```json
 { "type": "off_site", "t": 1780552800, "t_end": 1780668000, "source": "log",
-  "detail": "service: battery replacement" }
+  "detail": "service" }
 ```
+
+`detail` of an `off_site` event is only the **reason category** of the off-site log (`office`,
+`service`, `transport`, `storage`, `other`), never its free-text note (by analogy with the owner
+decision of 2026-10-05 on registry notes; [site.md](site.md#eventsidjson)). The web translates it
+("Mimo vinici: servis", "Nicht im Weinberg: Wartung", "Not in the vineyard: service"); any other
+text (data published before this rule) is shown as it is.
 
 `t_end` (Unix seconds, exclusive) is required for `off_site` and is `null` while the sensor is
 still off site. On a point event (`deployment`, `retrieval`, `step`) a `t_end` is **ignored with
@@ -211,7 +247,7 @@ depend on the flags. Lines of other compared sensors continue through the band. 
 focusable grey square handle at its centre (handles of bands at the same place, e.g. two
 compared sensors serviced together, are stacked downwards), whose accessible name and tooltip
 read
-"Mimo vinici: <detail> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
+"Mimo vinici: <reason> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
 vineyard"; open end "dosud" / "bis heute" / "ongoing"). The logic is in
 `src/ui/EventMarkers.ts` (`offSiteBands`, `withoutBands`, `EventMarkers.drawBands`).
 
@@ -241,10 +277,11 @@ available through `DataClient.getIndices` but not displayed yet (WP-3.4).
 sampling step with a per-sensor phase and ±3 s clock jitter; sensor 77799986 has one synthetic
 `off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). To exercise the picker and the
 clustering at scale (WP-3.5) it has **16 more synthetic sensors** (ids `9xxxxxxx`, label
-"… (demo)") with data for September 2026 only, so there are 20 sensors in the fictional
-municipalities "Obec A/B/C" with tracks "Trať 1–6", one sensor without a track, two without any
-grouping, one `inactive` and one `retired` sensor (≈ 1.4 MB in total). Names, ids and varieties
-of these sensors are invented. The registry in the fixture is the public projection (`notes`
+"… (demo)") with data for September 2026 only, so there are 20 sensors: the synthetic ones in
+the fictional municipalities "Obec A/B/C" with tracks "Trať 1–6" (one without a track, one
+without any grouping, one `inactive`, one `retired`), and the **four real sensor ids with
+municipality, track and variety `null`**, so the demo makes no fictional claim about real
+devices (≈ 1.4 MB in total). Names, ids and varieties of the synthetic sensors are invented. The registry in the fixture is the public projection (`notes`
 and `note` are `null`), like the pipeline's output. It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
 

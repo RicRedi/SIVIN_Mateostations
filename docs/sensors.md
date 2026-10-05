@@ -70,8 +70,7 @@ The web portal's sensor picker groups the sensors in two levels, municipality �
 
 - `municipality`: the official name of the municipality (*obec*) whose cadastral area the
   vineyard lies in, written exactly the same way for every sensor of that municipality
-  (grouping compares the text; `"Mikulov"` and `"Mikulov "` would be two groups — the loader
-  rejects empty strings but not trailing spaces, so take care).
+  (grouping compares the text, case and diacritics included).
 - `track`: the name of the vineyard track (*viniční trať*) as registered for the wine region,
   again spelled identically for all sensors of one track. Use `null` if the vineyard is not in
   a registered track or the name is not known yet.
@@ -85,14 +84,24 @@ Examples (fictional names, as in the web's synthetic fixture; not the places of 
 "municipality": null,       "track": null,       "variety": null
 ```
 
+**Whitespace is cleaned on load.** Leading and trailing whitespace of `label`, `municipality`,
+`track` and `variety` is removed and internal runs of whitespace become one space
+(`"  Obec   A "` → `"Obec A"`), with a warning naming the sensor, the key and both values;
+saving the registry writes the cleaned value. A value that is only whitespace is an error (use
+`null`). So `"Mikulov "` and `"Mikulov"` are one group.
+
 Groups are sorted by name (Czech collation, numbers in natural order: `Trať 2` before
 `Trať 10`); within a track, sensors are sorted by `label` and retired sensors come last.
 
 **Older files with `site`.** Until 2026-10-05 the registry had a single key `site`. An old file
 still loads: `site` is read as `track`, `municipality` as `null`, and a warning names the sensor;
-saving the registry writes the new keys. A sensor that has `site` *and* `municipality` or
-`track` is an error (`'site' was replaced by 'municipality' and 'track' (2026-10-05); remove
-'site', …`). The JSON Schema knows only the new keys, so schema validation (and the web admin
+saving the registry writes the new keys. Errors name `site` and the fix:
+
+| Problem | Message |
+|---|---|
+| `site` together with `municipality` and `track` | `'site' was replaced by 'municipality' and 'track' (2026-10-05); remove 'site'` |
+| `site` together with only one of them | `… remove 'site' and add 'track' (null if unknown)` (or `'municipality'`) |
+| `site` is empty, blank or not a string | `'site' (deprecated, read as 'track') must be a non-empty string or null, got ''; better replace it by 'municipality' and 'track' (docs/sensors.md)` | The JSON Schema knows only the new keys, so schema validation (and the web admin
 mode, WP-3.3) rejects `site`. The web portal ignores a `site` key in the published file with a
 console warning.
 
@@ -260,7 +269,7 @@ entries:
 | `from` | yes | Start of the period, **inclusive**. |
 | `to` | yes | End of the period, **exclusive**. Write **`to: open`** while the sensor is still off site (`to: null` means the same). A `to:` with nothing after it is an **error**, so a half-filled entry never silently excludes everything from `from` on. |
 | `reason` | yes | `office`, `service`, `transport`, `storage` or `other` (lower case). |
-| `note` | no | Free text in quotes. The web shows `"<reason>: <note>"` in the band's tooltip. |
+| `note` | no | Free text in quotes. **Internal:** it is kept in the derived events, the run summary and the CLI, but the public site publishes only the `reason` (the web shows a translated reason in the band's tooltip; [site.md](site.md#eventsidjson)). |
 
 The file is read strictly: **a key written twice is an error** (YAML itself would silently keep
 the last one). That covers a second `entries:` line, e.g. from pasting a whole example file, and

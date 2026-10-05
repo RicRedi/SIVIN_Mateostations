@@ -144,7 +144,17 @@ Each optional group is written only when some day has a value.
 `{"sensor_id": ..., "events": [...]}`, written for every published sensor (possibly with an
 empty list). QC reports many event kinds; `site.events` selects the published ones. Each keeps
 its kind as `type`; `source` is `log`, `detected` or `registry`; `confidence` is 0-1 or `null`;
-`detail` is the QC text.
+`detail` is the QC text, except for `off_site`.
+
+**Off-site notes are not published.** By analogy with the owner decision of 2026-10-05 on
+registry notes, the `detail` of an `off_site` event is only the **reason category** of the
+off-site log entry (`office`, `service`, `transport`, `storage`, `other`), never its free-text
+`note` (`SiteEventMapping` with the filter `public_reason` of `sivin.registry.offsite`; a text
+that does not start with a known reason gives `detail: null`). The web translates the reason.
+Internal outputs keep the full `"<reason>: <note>"`: `data/derived/events/`, the run record
+and job summary, and the CLI. `tests/site/test_service.py` writes a marker note into the
+off-site log and checks that it reaches no site file but stays in the derived events. (To be
+confirmed by the owner.)
 
 | QC event kind | Published by default | Shape | Web |
 |---|---|---|---|
