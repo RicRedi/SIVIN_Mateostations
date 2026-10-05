@@ -192,6 +192,39 @@ class TestInvalidFiles:
         with pytest.raises(RegistryFormatError, match="not the last"):
             store.load(_write(tmp_path, document))
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [("portal_name", None), ("portal_name", ...), ("site", ...), ("notes", ...)],
+    )
+    def test_sensor_keys_required_and_portal_name_not_null(
+        self, store: GeoJsonRegistryStore, tmp_path: Path, key: str, value: object
+    ) -> None:
+        document = _synthetic_document()
+        properties = document["features"][0]["properties"]
+        if value is ...:
+            del properties[key]
+        else:
+            properties[key] = value
+        with pytest.raises(RegistryFormatError, match=rf"features\.0\.properties\.{key}"):
+            store.load(_write(tmp_path, document))
+
+    @pytest.mark.parametrize("key", ["to", "elevation_m", "note"])
+    def test_placement_keys_required(
+        self, store: GeoJsonRegistryStore, tmp_path: Path, key: str
+    ) -> None:
+        document = _synthetic_document()
+        del document["features"][0]["properties"]["placements"][1][key]
+        with pytest.raises(RegistryFormatError, match=rf"placements\.1\.{key}"):
+            store.load(_write(tmp_path, document))
+
+    def test_offset_other_than_z_rejected(
+        self, store: GeoJsonRegistryStore, tmp_path: Path
+    ) -> None:
+        document = _synthetic_document()
+        document["features"][0]["properties"]["placements"][1]["from"] = "2026-03-01T01:00:00+01:00"
+        with pytest.raises(RegistryFormatError, match="UTC with 'Z'"):
+            store.load(_write(tmp_path, document))
+
     def test_duplicate_id(self, store: GeoJsonRegistryStore, tmp_path: Path) -> None:
         document = _synthetic_document()
         document["features"].append(document["features"][0])

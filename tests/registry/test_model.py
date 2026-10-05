@@ -57,14 +57,46 @@ class TestPlacement:
         placement = Placement.model_validate(
             {
                 "from": "2025-12-01T00:00:00Z",
-                "to": "2026-03-01T00:00:00+01:00",
+                "to": "2026-03-01T00:00:00.5Z",
                 "lat": 48.8,
                 "lon": 16.6,
+                "elevation_m": None,
+                "note": None,
             }
         )
         assert placement.from_utc == T_2025_12_01
-        assert placement.to_utc == datetime(2026, 2, 28, 23, tzinfo=UTC)
+        assert placement.to_utc == datetime(2026, 3, 1, 0, 0, 0, 500000, tzinfo=UTC)
         assert placement.elevation_m is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "2026-03-01T00:00:00+01:00",
+            "2026-03-01T00:00:00+00:00",
+            "2026-03-01T00:00:00",
+            "2026-03-01 00:00:00Z",
+            "2026-03-01T00:00Z",
+            "yesterday",
+        ],
+    )
+    def test_file_timestamps_must_be_utc_with_z(self, text: str) -> None:
+        document = {"from": text, "to": None, "lat": 48.8, "lon": 16.6}
+        with pytest.raises(ValidationError, match="must be ISO 8601 in UTC with 'Z'"):
+            Placement.model_validate(document | {"elevation_m": None, "note": None})
+
+    @pytest.mark.parametrize("key", ["to", "elevation_m", "note"])
+    def test_every_key_is_required(self, key: str) -> None:
+        document = {
+            "from": "2025-12-01T00:00:00Z",
+            "to": None,
+            "lat": 48.8,
+            "lon": 16.6,
+            "elevation_m": None,
+            "note": None,
+        }
+        del document[key]
+        with pytest.raises(ValidationError, match="Field required"):
+            Placement.model_validate(document)
 
     def test_serialises_with_file_keys_and_z(self, make_placement: PlacementFactory) -> None:
         placement = make_placement(to_utc=T_2026_03_01, note="n")
@@ -120,7 +152,14 @@ class TestSensor:
 
     def test_accepts_sensor_id_instance(self, make_placement: PlacementFactory) -> None:
         sensor = Sensor(
-            id=SensorId("11112222"), label="x", status="active", placements=(make_placement(),)
+            id=SensorId("11112222"),
+            portal_name="8615620 11112222",
+            label="x",
+            site=None,
+            variety=None,
+            status="active",
+            placements=(make_placement(),),
+            notes=None,
         )
         assert sensor.id == SensorId("11112222")
 
@@ -163,6 +202,21 @@ class TestSensor:
             )
         )
         assert len(sensor.placements) == 3
+
+    @pytest.mark.parametrize("key", ["portal_name", "site", "variety", "notes"])
+    def test_every_key_is_required(self, make_sensor: SensorFactory, key: str) -> None:
+        document = make_sensor().model_dump()
+        del document[key]
+        with pytest.raises(ValidationError, match="Field required"):
+            Sensor.model_validate(document)
+
+    @pytest.mark.parametrize("portal_name", [None, ""])
+    def test_portal_name_is_a_non_empty_string(
+        self, make_sensor: SensorFactory, portal_name: str | None
+    ) -> None:
+        document = make_sensor().model_dump() | {"portal_name": portal_name}
+        with pytest.raises(ValidationError, match="portal_name"):
+            Sensor.model_validate(document)
 
     def test_portal_name_must_name_the_same_serial(self, make_sensor: SensorFactory) -> None:
         assert make_sensor(portal_name="8615620 11112222").portal_name == "8615620 11112222"
@@ -267,7 +321,23 @@ class TestMovedTo:
         sensor = make_sensor(status="inactive", placements=(make_placement(to_utc=T_2026_03_01),))
         moved = sensor.moved_to(make_placement(from_utc=T_2026_06_01))
         assert len(moved.placements) == 2
-        assert moved.status == "inactive"
+        assert moved.status == "active"
+        closed = sensor.moved_to(
+            make_placement(from_utc=T_2026_06_01, to_utc=T_2026_06_01 + timedelta(days=1))
+        )
+        assert closed.status == "inactive"
+
+    def test_active_sensor_stays_active(
+        self, make_sensor: SensorFactory, make_placement: PlacementFactory
+    ) -> None:
+        assert make_sensor().moved_to(make_placement(from_utc=T_2026_03_01)).status == "active"
+
+    def test_retired_sensor_cannot_move(
+        self, make_sensor: SensorFactory, make_placement: PlacementFactory
+    ) -> None:
+        sensor = make_sensor(status="retired", placements=(make_placement(to_utc=T_2026_03_01),))
+        with pytest.raises(ValueError, match="retired and cannot be moved"):
+            sensor.moved_to(make_placement(from_utc=T_2026_06_01))
 
     def test_rejects_move_before_current_start(
         self, make_sensor: SensorFactory, make_placement: PlacementFactory

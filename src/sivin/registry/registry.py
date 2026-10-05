@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable, Iterator
+from pathlib import PureWindowsPath
 from typing import Final
 
 from sivin.core.ids import LEGACY_SUFFIX_DIGITS, SensorId
@@ -20,6 +21,14 @@ from sivin.registry.settings import GeoBounds
 logger = logging.getLogger(__name__)
 
 _LEGACY_SUFFIX_PATTERN: Final = re.compile(rf"[0-9]{{{LEGACY_SUFFIX_DIGITS}}}")
+
+
+def _base_name(text: str) -> str:
+    """Normalise a name the way :meth:`SensorId.parse` does: base name of a (Windows) path.
+
+    ``sivin.core.ids`` keeps this step private; see the WP-1.1 hand-off note (out of scope).
+    """
+    return PureWindowsPath(text.strip()).name.strip()
 
 
 class SensorRegistry:
@@ -123,7 +132,8 @@ class SensorRegistry:
         key : SensorId or str
             A :class:`SensorId`, the canonical serial, the portal name (``8615620 77678271``),
             the GPX name (``77678271 (VUT)``), an export file name or path, or the legacy
-            4-digit short name (``8271``) if exactly one sensor of the registry ends with it.
+            4-digit short name (``8271``, also as the last component of a path) if exactly one
+            sensor of the registry ends with it.
 
         Returns
         -------
@@ -139,13 +149,14 @@ class SensorRegistry:
         """
         if isinstance(key, SensorId):
             return self._by_known_id(key, key)
+        name = _base_name(key)
+        if _LEGACY_SUFFIX_PATTERN.fullmatch(name) is not None:
+            return self._by_legacy_suffix(name)
         try:
-            return self._by_known_id(SensorId.parse(key), key)
+            sensor_id = SensorId.parse(key)
         except ValueError as error:
-            name = key.strip()
-            if _LEGACY_SUFFIX_PATTERN.fullmatch(name) is not None:
-                return self._by_legacy_suffix(name)
             raise SensorLookupError(str(error)) from error
+        return self._by_known_id(sensor_id, key)
 
     def _by_known_id(self, sensor_id: SensorId, key: SensorId | str) -> Sensor:
         sensor = self._by_id.get(sensor_id)

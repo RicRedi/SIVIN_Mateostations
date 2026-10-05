@@ -31,7 +31,7 @@ def _gpx(tmp_path: Path, text: str, name: str = "synthetic.gpx") -> Path:
 
 
 def test_waypoints_namespace_aware(tmp_path: Path) -> None:
-    waypoints = GpxImporter().waypoints(_gpx(tmp_path, GPX_11))
+    waypoints = GpxImporter("8615620").waypoints(_gpx(tmp_path, GPX_11))
     assert waypoints == (
         GpxWaypoint("11112222 (synthetic)", 48.81, 16.61, 201.5),
         GpxWaypoint("33334444", 48.82, 16.62, None),
@@ -40,7 +40,7 @@ def test_waypoints_namespace_aware(tmp_path: Path) -> None:
 
 def test_waypoints_without_namespace(tmp_path: Path) -> None:
     text = '<gpx><wpt lat="48.81" lon="16.61"><name>11112222</name></wpt></gpx>'
-    assert len(GpxImporter().waypoints(_gpx(tmp_path, text))) == 1
+    assert len(GpxImporter("8615620").waypoints(_gpx(tmp_path, text))) == 1
 
 
 def test_read_builds_sensors(tmp_path: Path) -> None:
@@ -58,9 +58,9 @@ def test_read_builds_sensors(tmp_path: Path) -> None:
     assert second.placements[0].elevation_m is None
 
 
-def test_read_without_prefix_and_with_note_suffix(tmp_path: Path) -> None:
-    sensors = GpxImporter().read(_gpx(tmp_path, GPX_11), DEPLOYED, note_suffix="placeholder")
-    assert sensors[0].portal_name is None
+def test_read_with_note_suffix(tmp_path: Path) -> None:
+    sensors = GpxImporter("1").read(_gpx(tmp_path, GPX_11), DEPLOYED, note_suffix="placeholder")
+    assert sensors[0].portal_name == "1 11112222"
     assert sensors[0].placements[0].note == "imported from synthetic.gpx; placeholder"
 
 
@@ -94,20 +94,20 @@ def test_rejects_bad_prefix(prefix: str) -> None:
 )
 def test_rejects_broken_gpx(tmp_path: Path, text: str, message: str) -> None:
     with pytest.raises(GpxFormatError, match=message):
-        GpxImporter().waypoints(_gpx(tmp_path, text))
+        GpxImporter("8615620").waypoints(_gpx(tmp_path, text))
 
 
 def test_missing_file(tmp_path: Path) -> None:
     with pytest.raises(GpxFormatError, match="Cannot read GPX"):
-        GpxImporter().waypoints(tmp_path / "missing.gpx")
+        GpxImporter("8615620").waypoints(tmp_path / "missing.gpx")
 
 
 def test_name_without_sensor_id(tmp_path: Path) -> None:
     text = '<gpx><wpt lat="48.8" lon="16.6"><name>Kostel</name></wpt></gpx>'
     with pytest.raises(ValueError, match="Cannot recognise"):
-        GpxImporter().read(_gpx(tmp_path, text), DEPLOYED)
+        GpxImporter("8615620").read(_gpx(tmp_path, text), DEPLOYED)
 
 
 def test_naive_deployment_instant(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="timezone"):
-        GpxImporter().read(_gpx(tmp_path, GPX_11), datetime(2025, 12, 1))
+        GpxImporter("8615620").read(_gpx(tmp_path, GPX_11), datetime(2025, 12, 1))

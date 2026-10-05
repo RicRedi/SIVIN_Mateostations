@@ -58,9 +58,10 @@ class GpxImporter:
 
     Parameters
     ----------
-    portal_prefix : str, optional
-        Device-number prefix of the provider's portal (digits). When given, the portal name is
-        ``"<portal_prefix> <serial>"``; otherwise it is ``None``. The prefix is passed by the
+    portal_prefix : str
+        Device-number prefix of the provider's portal (digits); the portal name of every
+        imported sensor is ``"<portal_prefix> <serial>"``. It is required because every sensor
+        of the registry has a portal name (MIGRATION_PLAN §2.4). The prefix is passed by the
         caller and never assumed here.
 
     Raises
@@ -69,8 +70,8 @@ class GpxImporter:
         If ``portal_prefix`` is not a string of digits.
     """
 
-    def __init__(self, portal_prefix: str | None = None) -> None:
-        if portal_prefix is not None and _PORTAL_PREFIX_PATTERN.fullmatch(portal_prefix) is None:
+    def __init__(self, portal_prefix: str) -> None:
+        if _PORTAL_PREFIX_PATTERN.fullmatch(portal_prefix) is None:
             raise ValueError(f"portal_prefix must be digits, got {portal_prefix!r}")
         self._portal_prefix = portal_prefix
 
@@ -159,11 +160,9 @@ class GpxImporter:
 
     def _sensor(self, waypoint: GpxWaypoint, deployed_from: datetime, note: str) -> Sensor:
         sensor_id = SensorId.parse(waypoint.name)
-        portal_name = (
-            f"{self._portal_prefix} {sensor_id}" if self._portal_prefix is not None else None
-        )
         placement = Placement(
             from_utc=deployed_from,
+            to_utc=None,
             lon_deg=waypoint.lon_deg,
             lat_deg=waypoint.lat_deg,
             elevation_m=waypoint.elevation_m,
@@ -171,8 +170,11 @@ class GpxImporter:
         )
         return Sensor(
             id=sensor_id,
-            portal_name=portal_name,
+            portal_name=f"{self._portal_prefix} {sensor_id}",
             label=waypoint.name,
+            site=None,
+            variety=None,
             status="active",
             placements=(placement,),
+            notes=None,
         )

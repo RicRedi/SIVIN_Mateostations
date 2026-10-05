@@ -12,12 +12,14 @@ The field aliases (``from``, ``to``, ``lat``, ``lon``) are the keys of the regis
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Final, Literal, Self
 
 from pydantic import (
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     PlainSerializer,
@@ -91,13 +93,43 @@ def format_utc(instant: datetime) -> str:
     return text.removesuffix(_UTC_SUFFIX) + "Z"
 
 
+UTC_TIMESTAMP_PATTERN: Final = (
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$"
+)
+"""Text form of an instant in the registry file: ISO 8601 in UTC with ``Z``.
+
+This is exactly what :func:`format_utc` writes; other offsets are rejected in the file so that
+the JSON Schema (``pattern``) and the Python loader accept the same texts.
+"""
+
+_UTC_TIMESTAMP_REGEX: Final = re.compile(UTC_TIMESTAMP_PATTERN)
+
+
+def _require_utc_text(value: object) -> object:
+    """Reject a timestamp string that is not ISO 8601 UTC with ``Z``; pass other values on."""
+    if isinstance(value, str) and _UTC_TIMESTAMP_REGEX.fullmatch(value) is None:
+        raise ValueError(
+            f"timestamp {value!r} must be ISO 8601 in UTC with 'Z', e.g. '2025-12-01T00:00:00Z'"
+        )
+    return value
+
+
+UtcTimestamp = Annotated[
+    AwareDatetime,
+    BeforeValidator(_require_utc_text),
+    WithJsonSchema({"type": "string", "format": "date-time", "pattern": UTC_TIMESTAMP_PATTERN}),
+]
+"""An aware datetime; as text it must be ISO 8601 UTC with ``Z`` (schema ``pattern``)."""
+
+
 class Placement(BaseModel):
     """One placement of a sensor: where it stood from one instant to another.
 
     Parameters
     ----------
     from_utc : datetime.datetime
-        Deployment instant (alias ``from``); any aware datetime, stored in UTC.
+        Deployment instant (alias ``from``); any aware datetime in Python, stored in UTC. In
+        the file it is text in ISO 8601 UTC with ``Z`` (:data:`UTC_TIMESTAMP_PATTERN`).
     to_utc : datetime.datetime or None
         End of the placement (alias ``to``), exclusive; ``None`` while it lasts.
     lon_deg : float
@@ -108,6 +140,9 @@ class Placement(BaseModel):
         Elevation in metres above sea level, if known.
     note : str or None
         Free text, e.g. where the placement data came from.
+
+    Every parameter is required, also the nullable ones, because every key is present in the
+    registry file (MIGRATION_PLAN §2.4) and the web contract (WP-3.1) relies on that.
 
     Raises
     ------
@@ -120,13 +155,12 @@ class Placement(BaseModel):
         frozen=True, extra="forbid", validate_by_name=True, serialize_by_alias=True
     )
 
-    from_utc: AwareDatetime = Field(
-        alias="from", description="Deployment instant, ISO 8601 with offset; stored in UTC."
+    from_utc: UtcTimestamp = Field(
+        alias="from", description="Deployment instant, ISO 8601 in UTC with 'Z'."
     )
-    to_utc: AwareDatetime | None = Field(
-        default=None,
+    to_utc: UtcTimestamp | None = Field(
         alias="to",
-        description="End of the placement (exclusive), ISO 8601 in UTC; null while it lasts.",
+        description="End of the placement (exclusive), ISO 8601 UTC with 'Z'; null while open.",
     )
     lon_deg: float = Field(
         alias="lon",
@@ -143,13 +177,10 @@ class Placement(BaseModel):
         description="Latitude in degrees north (WGS 84).",
     )
     elevation_m: float | None = Field(
-        default=None,
         allow_inf_nan=False,
         description="Elevation in metres above sea level; null if unknown.",
     )
-    note: str | None = Field(
-        default=None, min_length=1, description="Free-text note (no unit); null if none."
-    )
+    note: str | None = Field(min_length=1, description="Free-text note (no unit); null if none.")
 
     @field_validator("from_utc", "to_utc")
     @classmethod
@@ -217,7 +248,7 @@ class Sensor(BaseModel):
     ----------
     id : SensorId or str
         Canonical id, the 8-digit serial (written as a string).
-    portal_name : str or None
+    portal_name : str
         Device name in the provider's portal, e.g. ``"8615620 77678271"``; must contain the id.
     label : str
         Human-readable name, e.g. the GPX waypoint name ``"77678271 (VUT)"``.
@@ -232,6 +263,8 @@ class Sensor(BaseModel):
     notes : str or None
         Free text.
 
+    Every parameter is required, also the nullable ones (pass ``None``), as in the file.
+
     Raises
     ------
     pydantic.ValidationError
@@ -244,25 +277,20 @@ class Sensor(BaseModel):
     )
 
     id: SensorIdField = Field(description="Canonical id: the 8-digit device serial number.")
-    portal_name: str | None = Field(
-        default=None,
+    portal_name: str = Field(
         min_length=1,
-        description=(
-            "Device name in the provider's portal, e.g. '8615620 77678271'; null if unknown."
-        ),
+        description="Device name in the provider's portal, e.g. '8615620 77678271'.",
     )
     label: str = Field(min_length=1, description="Human-readable name, e.g. '77678271 (VUT)'.")
-    site: str | None = Field(
-        default=None, min_length=1, description="Vineyard or site name; null if unknown."
-    )
+    site: str | None = Field(min_length=1, description="Vineyard or site name; null if unknown.")
     variety: str | None = Field(
-        default=None, min_length=1, description="Grape variety at the sensor; null if unknown."
+        min_length=1, description="Grape variety at the sensor; null if unknown."
     )
     status: SensorStatus = Field(description="Life-cycle state: active, inactive or retired.")
     placements: tuple[Placement, ...] = Field(
         min_length=1, description="Placement history in time order; only the last may be open."
     )
-    notes: str | None = Field(default=None, min_length=1, description="Free text; null if none.")
+    notes: str | None = Field(min_length=1, description="Free text; null if none.")
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -292,8 +320,6 @@ class Sensor(BaseModel):
                 )
 
     def _check_portal_name(self) -> None:
-        if self.portal_name is None:
-            return
         try:
             named = SensorId.parse(self.portal_name)
         except ValueError as error:
@@ -362,7 +388,9 @@ class Sensor(BaseModel):
     def moved_to(self, placement: Placement) -> Sensor:
         """Return this sensor with a new placement appended.
 
-        An open placement is closed at the new placement's ``from`` instant first.
+        An open placement is closed at the new placement's ``from`` instant first. An
+        ``inactive`` sensor that moves to an open placement becomes ``active`` (it is back in
+        the field); otherwise the status is kept. A retired sensor cannot be moved.
 
         Parameters
         ----------
@@ -372,18 +400,26 @@ class Sensor(BaseModel):
         Returns
         -------
         Sensor
-            The moved sensor (same status).
+            The moved sensor.
 
         Raises
         ------
+        ValueError
+            If the sensor is retired.
         pydantic.ValidationError
             If the new placement does not fit after the existing history.
         """
+        if self.status == "retired":
+            raise ValueError(
+                f"sensor {self.id} is retired and cannot be moved; set its status first if it "
+                "returns to use"
+            )
         history = list(self.placements)
         if history[-1].is_open:
             history[-1] = history[-1].closed_at(placement.from_utc)
         logger.debug("Moving sensor %s from %s", self.id, format_utc(placement.from_utc))
-        return self.replaced(placements=(*history, placement))
+        status = "active" if self.status == "inactive" and placement.is_open else self.status
+        return self.replaced(placements=(*history, placement), status=status)
 
     def replaced(self, **changes: object) -> Sensor:
         """Return a validated copy with some fields changed.

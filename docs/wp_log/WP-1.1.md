@@ -15,6 +15,14 @@ generated from the models, and a test keeps it in sync. The committed
 `sensors/sensors.geojson` holds the four sensors of `sensor_location.gpx`. Their deployment
 date is a placeholder.
 
+**Round 2** addressed the review (round 1). Every §2.4 key is now required in the file, in the
+models and in the schema. `portal_name` is always a non-empty string, and `GpxImporter`
+requires `portal_prefix`. File timestamps must be ISO 8601 UTC with `Z`, enforced by a schema
+`pattern` and by the loader. Legacy-suffix lookup normalises paths the way `SensorId.parse`
+does. Moving an `inactive` sensor to an open placement makes it `active`, and moving a
+`retired` sensor is refused. The per-finding details are in the *Status* column of the review
+table.
+
 ## Changed files
 
 - Package: `src/sivin/registry/{model,registry,geojson,gpx,schema,settings,errors}.py`
@@ -30,17 +38,21 @@ date is a placeholder.
 SensorStatus = Literal["active", "inactive", "retired"]
 SensorIdField                                   # Annotated[SensorId, ...] -> "77678271" in JSON
 def format_utc(instant: datetime) -> str        # "2025-12-01T00:00:00Z"
+UTC_TIMESTAMP_PATTERN: str                      # file form of from/to (schema "pattern")
+UtcTimestamp                                    # Annotated[AwareDatetime, ...] with that pattern
+# All fields of Placement and Sensor are required (nullable ones take None), as in the file.
 class Placement(BaseModel):                     # frozen, extra="forbid"; file keys from/to/lon/lat
     from_utc: datetime; to_utc: datetime | None; lon_deg: float; lat_deg: float
     elevation_m: float | None; note: str | None
     is_open; contains(instant) -> bool          # [from, to)
     closed_at(end_utc) -> Placement
 class Sensor(BaseModel):                        # frozen, extra="forbid"
-    id: SensorId; portal_name: str | None; label: str; site: str | None; variety: str | None
+    id: SensorId; portal_name: str; label: str; site: str | None; variety: str | None
     status: SensorStatus; placements: tuple[Placement, ...]; notes: str | None
     is_active; current_placement -> Placement | None; last_placement -> Placement
     deployed_since -> datetime; placement_at(instant) -> Placement | None
-    moved_to(placement) -> Sensor; replaced(**changes) -> Sensor
+    moved_to(placement) -> Sensor   # inactive + open placement -> active; retired -> ValueError
+    replaced(**changes) -> Sensor
 
 # sivin.registry.registry
 class SensorRegistry:
@@ -58,7 +70,7 @@ def render_json(document) -> str                # canonical JSON text
 
 # sivin.registry.gpx
 class GpxImporter:
-    def __init__(self, portal_prefix: str | None = None)
+    def __init__(self, portal_prefix: str)
     read(path, deployed_from, *, note_suffix=None) -> tuple[Sensor, ...]
     waypoints(path) -> tuple[GpxWaypoint, ...]
 
@@ -80,6 +92,26 @@ SensorLookupError(LookupError), AmbiguousSensorNameError(SensorLookupError)
 All commands were run in `/home/user/wt/wp-1.1` with a venv created by
 `uv venv --python 3.12 .venv && uv pip install -e ".[dev,ingest,viz]"` (pydantic 2.13.5,
 ruff 0.16.10, mypy 2.4.0).
+
+Round 2:
+
+- `make lint` → `All checks passed!`, `46 files already formatted`.
+- `make type` → `Success: no issues found in 27 source files`.
+- `make test` → `326 passed` (145 of them in `tests/registry`).
+- `make cov` → every `src/sivin/registry/*.py` at 100 % (statements and branches);
+  `TOTAL 1238 0 250 0 100%`.
+- `sensors/sensors.schema.json` was regenerated. `sensors/sensors.geojson` is unchanged, and the
+  generation command gives the same bytes.
+- Independent schema check: `jsonschema` (Draft 2020-12) was installed in a throwaway venv in
+  the session scratchpad, not in the repo. The schema itself is valid, and the committed file
+  has 0 errors. The schema rejects `portal_name: null`, a missing `portal_name`, `site`, `to`
+  or `note`, `from: "+01:00"` and `from: "yesterday"`. It accepts `"…00.5Z"`.
+- WP-3.1's `validateSensors.ts` was read, not run. Every value the schema or the loader accepts
+  is also accepted by it: required strings stay strings, nullable fields are `null` or a
+  string/number, and coordinates are exactly two numbers. The web parser is more lenient, since
+  it tolerates missing `site`/`variety`/`notes`/`elevation_m`/`note`.
+
+Round 1:
 
 - `make lint` → `All checks passed!`, `46 files already formatted`.
 - `make type` → `Success: no issues found in 27 source files`.
@@ -112,9 +144,8 @@ ruff 0.16.10, mypy 2.4.0).
   the country's extreme points rounded outward, with no checked source, so it is marked
   *[to be verified]*. It is only a plausibility check, and the setting can be changed or
   disabled.
-- **The JSON Schema was not checked with an independent validator.** `jsonschema` is not a
-  dependency, so the committed GeoJSON was not validated against the schema with an external
-  tool. Only pydantic was used. WP-3.3 will use the schema in the browser.
+- `jsonschema` is not a project dependency, so no repository test validates the file against
+  the schema with an external validator. That check was run by hand in round 2 (see above).
 - The schema text depends on the pydantic version. A pydantic upgrade can change it, and then
   `test_committed_schema_is_in_sync` fails. That failure is intended: regenerate the schema
   with the command in `docs/sensors.md`.
@@ -148,14 +179,18 @@ ruff 0.16.10, mypy 2.4.0).
 7. **`with_sensor` adds or replaces.** If the sensor's id is already registered, it replaces
    that sensor in place and keeps the file order. Otherwise it appends. The WP-3.3 edit flow
    needs the replace case.
-8. **Canonical form.** Any time-zone offset is accepted on input and written as UTC `Z`.
-   Integers in coordinates are written as floats (`16` → `16.0`), and every array element goes
-   on its own line, so `coordinates` is not inline as in the §2.4 example. The byte-identical
+8. **Canonical form.** Since round 2, file timestamps must already be UTC with `Z`; Python
+   code may pass any aware datetime, which is stored as UTC. Integers in coordinates are
+   written as floats (`16` → `16.0`), and every array element goes on its own line, so `coordinates` is not inline as in the §2.4 example. The byte-identical
    round trip holds for files in canonical form, which is what `save` writes. Elevations keep
    the full GPX precision (`183.939606`); the §2.4 example shows `183.9`.
-9. **`to` may be omitted** in a placement on input (it defaults to `null`) but is always written.
+9. **All keys are required** (round 2, replaces "`to` may be omitted"). Python construction
+   must pass every field as well, so the models and the file cannot drift apart.
 10. **No re-exports** in `sivin/registry/__init__.py`, the same as `sivin.core`. Import from the
     submodules.
+11. **Moving an inactive sensor** (round 2): `moved_to` sets `active` when the new placement is
+    open. A move to a closed placement keeps `inactive`, and a `retired` sensor cannot be moved
+    (`ValueError`).
 
 ## Proposed integration (WP-1.7 / WP-3.2)
 
@@ -183,6 +218,7 @@ ruff 0.16.10, mypy 2.4.0).
   sensors, so the placeholder `from` values can be replaced.
 - Q4 (existing): site and grape variety per sensor.
 - Is the status rule in decision 3 acceptable (active ⇒ open placement, retired ⇒ none open)?
+  Is the automatic `inactive → active` on a move to an open placement (decision 11) acceptable?
 
 ## Review
 
@@ -240,10 +276,10 @@ Reviewer: independent review agent. Everything below was run or read by the revi
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | src/sivin/registry/model.py:126-130, 247-253; sensors/sensors.schema.json (`required`); docs/sensors.md:52,104 | The registry contract is looser than the §2.4 example and the WP-3.1 consumer. `portal_name` may be `null` or missing, and a placement's `to` may be omitted. The web's `parseSensorsGeoJSON` throws on both. | open |
-| minor | sensors/sensors.schema.json (`from`/`to`) | `format: "date-time"` is only an annotation in Draft 2020-12, so a schema-only validator (WP-3.3) accepts `"from": "yesterday"` or a naive time. | open |
-| minor | src/sivin/registry/registry.py:144-148 | The legacy-suffix check runs on `key.strip()`, but `SensorId.parse` uses the base name of the path. `get("x/8271")` therefore fails with the message "looks like a legacy 4-digit short sensor name … resolve it through the sensor registry", even though it was the registry that was asked. | open |
-| nit | src/sivin/registry/model.py:362-386 | `moved_to`/`with_moved` keeps the status. Moving an `inactive` sensor whose placement is closed gives an `inactive` sensor with an open placement. Docs (lines 153-155) tell the user to set `active` by hand, which is easy to forget in the WP-3.3 flow. | open |
+| major | src/sivin/registry/model.py:126-130, 247-253; sensors/sensors.schema.json (`required`); docs/sensors.md:52,104 | The registry contract is looser than the §2.4 example and the WP-3.1 consumer. `portal_name` may be `null` or missing, and a placement's `to` may be omitted. The web's `parseSensorsGeoJSON` throws on both. | fixed (round 2, orchestrator's option (a)): all §2.4 keys are required in the models, the loader and the schema (`required` lists every property; tests assert this). `portal_name: str`, `min_length=1`. `GpxImporter(portal_prefix)` is required. Nullable: site, variety, notes, note, elevation_m, to. Tests in `test_model.py`, `test_geojson.py::TestInvalidFiles`, `test_schema.py`; checked by hand with jsonschema. |
+| minor | sensors/sensors.schema.json (`from`/`to`) | `format: "date-time"` is only an annotation in Draft 2020-12, so a schema-only validator (WP-3.3) accepts `"from": "yesterday"` or a naive time. | fixed: `UtcTimestamp` adds `pattern` `UTC_TIMESTAMP_PATTERN` (ISO 8601 UTC with `Z`) next to `format`, and the loader enforces the same pattern on text input. Tests: `test_file_timestamps_must_be_utc_with_z`, `test_offset_other_than_z_rejected`, `test_schema_uses_file_keys`. |
+| minor | src/sivin/registry/registry.py:144-148 | The legacy-suffix check runs on `key.strip()`, but `SensorId.parse` uses the base name of the path. `get("x/8271")` therefore fails with the message "looks like a legacy 4-digit short sensor name … resolve it through the sensor registry", even though it was the registry that was asked. | fixed: `get` takes the base name the same way `SensorId.parse` does (`PureWindowsPath(...).name`) before the legacy-suffix check, so `exports/8271` and `C:\exports\8271` resolve and `x/8271` gives the ambiguity error. A public helper in `sivin.core.ids` is still proposed (Out of scope). |
+| nit | src/sivin/registry/model.py:362-386 | `moved_to`/`with_moved` keeps the status. Moving an `inactive` sensor whose placement is closed gives an `inactive` sensor with an open placement. Docs (lines 153-155) tell the user to set `active` by hand, which is easy to forget in the WP-3.3 flow. | fixed: an inactive sensor moved to an open placement becomes active, and a move to a closed placement stays inactive. Moving a retired sensor raises `ValueError` with a clear message. Documented in `docs/sensors.md` and in the docstring. Tests in `TestMovedTo`. |
 
 **M1 (major): mismatch between the registry contract and the web contract.**
 

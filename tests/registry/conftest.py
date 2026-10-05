@@ -47,22 +47,29 @@ def make_placement() -> PlacementFactory:
 
 @pytest.fixture
 def make_sensor(make_placement: PlacementFactory) -> SensorFactory:
-    """Build a synthetic active sensor with one open placement unless told otherwise."""
+    """Build a synthetic active sensor with one open placement unless told otherwise.
+
+    The portal name defaults to ``"8615620 <serial>"``.
+    """
 
     def factory(
         serial: str = "11112222",
         *,
         portal_name: str | None = None,
+        site: str | None = None,
         status: str = "active",
         placements: tuple[Placement, ...] | None = None,
     ) -> Sensor:
         return Sensor.model_validate(
             {
                 "id": serial,
-                "portal_name": portal_name,
+                "portal_name": portal_name if portal_name is not None else f"8615620 {serial}",
                 "label": f"{serial} (synthetic)",
+                "site": site,
+                "variety": None,
                 "status": status,
                 "placements": placements if placements is not None else (make_placement(),),
+                "notes": None,
             }
         )
 

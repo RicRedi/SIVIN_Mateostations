@@ -49,22 +49,23 @@ The file is a GeoJSON `FeatureCollection` with one `Point` feature per sensor:
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `id` | string, 8 digits | yes | Canonical id: the device serial number, e.g. `"77678271"`. Only the canonical form is accepted here. |
-| `portal_name` | string or `null` | no | Device name in the provider's portal, e.g. `"8615620 77678271"`. It must contain the sensor's own serial. |
+| `portal_name` | string | yes | Device name in the provider's portal, e.g. `"8615620 77678271"`. Never `null` (the web portal relies on it). It must contain the sensor's own serial. |
 | `label` | string | yes | Human-readable name, e.g. the GPX waypoint name `"77678271 (VUT)"`. |
-| `site` | string or `null` | no | Vineyard or site name (owner question Q4). |
-| `variety` | string or `null` | no | Grape variety at the sensor (owner question Q4). |
+| `site` | string or `null` | yes | Vineyard or site name (owner question Q4). |
+| `variety` | string or `null` | yes | Grape variety at the sensor (owner question Q4). |
 | `status` | `"active"`, `"inactive"`, `"retired"` | yes | Life-cycle state, see below. |
 | `placements` | array of placements, ≥ 1 | yes | Placement history in time order. |
-| `notes` | string or `null` | no | Free text. |
+| `notes` | string or `null` | yes | Free text. |
 
-Strings, when present, must not be empty (use `null` instead).
+**Every key is required**, including the nullable ones: write `null`, do not leave the key
+out. Strings must not be empty (use `null` instead where `null` is allowed).
 
 ### Placement
 
 | Key | Type | Unit | Meaning |
 |---|---|---|---|
-| `from` | ISO 8601 date-time with offset | UTC instant | **Deployment instant.** The ground truth for the deployment detector (WP-1.5). Any offset is accepted on input; the file is written in UTC with `Z`. |
-| `to` | ISO 8601 date-time or `null` | UTC instant | End of the placement, exclusive. `null` while the sensor still stands there. |
+| `from` | ISO 8601 in UTC with `Z`, e.g. `2025-12-01T00:00:00Z` | UTC instant | **Deployment instant.** The ground truth for the deployment detector (WP-1.5). Other offsets (`+01:00`, `+00:00`) and times without seconds are rejected; up to 6 fractional digits are allowed. |
+| `to` | as `from`, or `null` | UTC instant | End of the placement, exclusive. `null` while the sensor still stands there. The key must be present. |
 | `lon` | number | degrees east (WGS 84) | Longitude, −180 … 180. |
 | `lat` | number | degrees north (WGS 84) | Latitude, −90 … 90. |
 | `elevation_m` | number or `null` | metres above sea level | Elevation, if known. |
@@ -87,20 +88,26 @@ Loading the file (`GeoJsonRegistryStore.load`) checks, and reports the key path 
 problem (e.g. `features.0.properties.placements.1.lat`):
 
 1. Structure and types as in `sensors.schema.json`; unknown keys are rejected (typo safety).
-2. `from` and `to` carry a time-zone offset; `from < to`.
-3. Coordinates are within the WGS 84 ranges and, by default, inside the Czech Republic
+2. Every key of a sensor and of a placement is present; `portal_name` is a non-empty string.
+3. `from` and `to` are ISO 8601 UTC texts with `Z` (pattern
+   `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$`); `from < to`.
+4. Coordinates are within the WGS 84 ranges and, by default, inside the Czech Republic
    (bounding box 48.55–51.06° N, 12.09–18.86° E, rounded outward from the country's extreme
    points; *to be verified*). This catches swapped latitude and longitude. The box is the
    `allowed_area` registry setting and can be disabled with `null`.
-4. Placements are sorted by `from`, do not overlap (`to` of one ≤ `from` of the next; gaps are
+5. Placements are sorted by `from`, do not overlap (`to` of one ≤ `from` of the next; gaps are
    allowed), and only the last placement may be open.
-5. `status` agrees with the last placement (table above).
-6. `portal_name`, if present, contains the sensor's own serial.
-7. Sensor ids are unique. Portal names are therefore unique as well.
-8. `geometry` equals the last placement.
+6. `status` agrees with the last placement (table above).
+7. `portal_name` contains the sensor's own serial.
+8. Sensor ids are unique. Portal names are therefore unique as well.
+9. `geometry` equals the last placement.
 
-The JSON Schema covers rules 1–3 only partially (structure, types, global coordinate ranges);
-rules that relate several values are enforced by the Python loader. The web admin mode
+The JSON Schema covers rules 1–3 fully (structure, types, required keys, timestamp
+`pattern` in addition to `format: date-time`, which Draft 2020-12 treats as an annotation
+only) and rule 4 for the global WGS 84 ranges. Rules that relate several values (4 for the
+allowed area, 5–9) are enforced by the Python loader. Everything the schema and the loader
+accept is also accepted by the web portal's parser (`web/src/contract/validateSensors.ts`,
+WP-3.1), which is more lenient (it tolerates missing optional keys). The web admin mode
 (WP-3.3) validates against the schema before it commits and the pipeline re-checks on load.
 
 ## Sensor names that are recognised
@@ -113,7 +120,7 @@ rules that relate several values are enforced by the Python loader. The web admi
 | portal device name | `8615620 77678271` |
 | GPX waypoint name | `77678271 (VUT)` |
 | export file name or path | `MeteoData_8615620 77678271  (VUT)_20260301_223857.csv` |
-| legacy 4-digit short name | `8271` — **only if exactly one sensor of the registry ends with these digits**; otherwise the lookup fails with `AmbiguousSensorNameError` and the full serial must be used. |
+| legacy 4-digit short name | `8271` — **only if exactly one sensor of the registry ends with these digits**; otherwise the lookup fails with `AmbiguousSensorNameError` and the full serial must be used. Like every other spelling it may be the last component of a path (`exports/8271`). |
 
 ## Changing the registry
 
@@ -132,8 +139,9 @@ same changes are `SensorRegistry.with_sensor`, `.with_moved` and `.without`, fol
 
 ### Add a sensor
 
-Append a feature with a new `id`, `status: "active"` and one open placement whose `from` is the
-instant the sensor was put up in the vineyard (UTC). Set `geometry.coordinates` to
+Append a feature with a new `id`, its `portal_name`, a `label`, `site`/`variety`/`notes`
+(`null` if unknown), `status: "active"` and one placement with `to: null` whose `from` is the
+instant the sensor was put up in the vineyard (UTC, `Z`). Set `geometry.coordinates` to
 `[lon, lat]` of that placement.
 
 ### Move a sensor
@@ -146,13 +154,17 @@ Instead:
    or later than the previous `to`) and `to: null`,
 3. set `geometry.coordinates` to the new `[lon, lat]`.
 
-`SensorRegistry.with_moved(id, placement)` does steps 1–3 with `to` = the new `from`.
+`SensorRegistry.with_moved(id, placement)` does steps 1–3 with `to` = the new `from`. If the
+sensor was `inactive` and the new placement is open, it becomes `active` automatically (it is
+back in the field); an active sensor stays active, and an inactive one moved to a closed
+placement stays inactive. A `retired` sensor cannot be moved (`ValueError`); change its status
+first if it really returns to use.
 
 ### Take a sensor out for service
 
 Set `to` of the current placement and `status: "inactive"`. When it comes back, add a new
 placement as in *Move a sensor* (same coordinates if it returns to the same spot) and set
-`status: "active"`.
+`status: "active"` (`with_moved` does that for you).
 
 ### Retire a sensor
 

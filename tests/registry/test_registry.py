@@ -89,6 +89,8 @@ class TestGet:
             "/data/exports/MeteoData_8615620 77678271 (VUT)_20260301_223857 (1).xlsx",
             "8271",
             " 8271 ",
+            "exports/8271",
+            r"C:\exports\8271",
         ],
     )
     def test_resolves_every_variant(self, registry: SensorRegistry, name: SensorId | str) -> None:
@@ -112,6 +114,8 @@ class TestGet:
         registry = SensorRegistry([make_sensor("11118271"), make_sensor("22228271")])
         with pytest.raises(AmbiguousSensorNameError, match="11118271, 22228271"):
             registry.get("8271")
+        with pytest.raises(AmbiguousSensorNameError, match="ambiguous"):
+            registry.get("x/8271")
         assert registry.get("22228271").id == SensorId("22228271")
 
 
