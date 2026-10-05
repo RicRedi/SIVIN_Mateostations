@@ -137,8 +137,8 @@ def test_clock_reset_drops_the_far_earlier_rows(write_csv: CsvWriter) -> None:
         "2026-03-01 00:00:07", "2026-03-01 01:00:07", "2026-03-01 02:00:07", "2026-03-01 03:00:07"
     )
     (issue,) = result.report.issues
-    assert (issue.rule, issue.row, issue.severity) == ("large-backward-steps", 6, "warning")
-    assert issue.message.startswith("2 row(s) are far earlier")
+    assert (issue.rule, issue.row, issue.severity) == ("out-of-sequence", 6, "warning")
+    assert issue.message.startswith("2 of 6 row(s) are out of sequence")
 
 
 @pytest.mark.parametrize(
@@ -286,3 +286,78 @@ def test_overlaps_never_misplace_a_row() -> None:
         series = reader.assemble(table, "t.csv")
         result = ParsedExport((series,), Path("t.csv"), report)
         check_against_grid(result, indices)
+
+
+def regular_utc(n_rows: int) -> list[pd.Timestamp]:
+    """Synthetic UTC instants every 1825 s from 2026-02-28 23:00:07Z (crosses spring forward)."""
+    start = pd.Timestamp("2026-02-28 23:00:07", tz="UTC")
+    return [start + k * pd.Timedelta(seconds=1825) for k in range(n_rows)]
+
+
+def regular_times(n_rows: int) -> list[pd.Timestamp]:
+    """The local wall-clock times of :func:`regular_utc`."""
+    return [t.tz_convert("Europe/Prague").tz_localize(None) for t in regular_utc(n_rows)]
+
+
+@pytest.mark.parametrize(
+    ("n_rows", "glitched", "jump"),
+    [
+        (2000, 1, pd.Timedelta(days=60)),  # review round 2, repro 1 (row 2)
+        (100, 50, pd.Timedelta(days=3)),  # review round 2, repro 2 (row 51)
+        (2000, 1, pd.Timedelta(hours=3)),  # just above max_backward_step_s
+    ],
+)
+def test_forward_glitch_loses_only_the_glitched_row(
+    write_csv: CsvWriter, n_rows: int, glitched: int, jump: pd.Timedelta
+) -> None:
+    times = regular_times(n_rows)
+    times[glitched] += jump
+    lines = [[f"{t:%Y-%m-%d %H:%M:%S}", "1,5", "80"] for t in times]
+    result = PortalCsvParser(make_settings()).parse(write_csv(lines))
+    assert result.is_accepted
+    expected = regular_utc(n_rows)
+    del expected[glitched]
+    assert result.series[0].frame["timestamp_utc"].tolist() == expected
+    (issue,) = result.report.issues
+    assert (issue.rule, issue.severity, issue.row) == (
+        "out-of-sequence",
+        Severity.WARNING,
+        glitched + 3,
+    )
+    assert issue.message.startswith(f"1 of {n_rows} row(s) are out of sequence")
+
+
+def test_two_glitched_rows_at_the_start(write_csv: CsvWriter) -> None:
+    times = regular_times(20)
+    times[0] += pd.Timedelta(days=60)
+    times[1] += pd.Timedelta(days=60)
+    lines = [[f"{t:%Y-%m-%d %H:%M:%S}", "1,5", "80"] for t in times]
+    result = PortalCsvParser(make_settings()).parse(write_csv(lines))
+    assert len(result.series[0]) == 18
+    assert result.report.rules() == {"out-of-sequence"}
+
+
+def test_outage_starts_a_new_timeline(write_csv: CsvWriter) -> None:
+    times = regular_times(20)
+    times[10:] = [t + pd.Timedelta(days=3) for t in times[10:]]
+    lines = [[f"{t:%Y-%m-%d %H:%M:%S}", "1,5", "80"] for t in times]
+    result = PortalCsvParser(make_settings()).parse(write_csv(lines))
+    assert len(result.series[0]) == 20
+    assert result.report.issues == ()
+
+
+def test_mass_out_of_sequence_drop_is_an_error(write_csv: CsvWriter) -> None:
+    times = regular_times(20)
+    times[5:] = [t - pd.Timedelta(days=3) for t in times[5:]]
+    lines = [[f"{t:%Y-%m-%d %H:%M:%S}", "1,5", "80"] for t in times]
+    result = PortalCsvParser(make_settings()).parse(write_csv(lines))
+    assert result.report.rules(Severity.ERROR) == {"out-of-sequence"}
+    assert result.series == ()
+
+
+def test_long_overlap_copies_are_kept_as_duplicates(write_csv: CsvWriter) -> None:
+    times = regular_times(20)
+    lines = [[f"{t:%Y-%m-%d %H:%M:%S}", "1,5", "80"] for t in [*times, *times[2:]]]
+    result = PortalCsvParser(make_settings()).parse(write_csv(lines))
+    assert len(result.series[0]) == 20
+    assert result.report.rules() == {"duplicate-timestamps", "backward-steps"}

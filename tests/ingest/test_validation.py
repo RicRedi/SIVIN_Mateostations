@@ -45,7 +45,7 @@ EXPECTED_RULES = (
     "date-order",
     "timestamps-plausible",
     "row-order",
-    "large-backward-steps",
+    "out-of-sequence",
     "duplicate-timestamps",
     "backward-steps",
     "daylight-saving",

@@ -104,8 +104,8 @@ class TabularExportReader:
     converter : LocalTimeConverter, optional
         Local-to-UTC conversion; one for ``settings.source_timezone`` when omitted.
     order : RowOrderAnalyser, optional
-        Decides whether a table is reversed, which rows are stale and how backward steps are
-        repaired; one built from ``settings`` when omitted.
+        Decides whether a table is reversed, which rows are out of sequence and how backward
+        steps are repaired; one built from ``settings`` when omitted.
     now_utc : datetime.datetime, optional
         The run time (timezone-aware), the base of the latest plausible timestamp; the current
         time when omitted. Ignored if ``settings.latest_timestamp`` is set.
@@ -149,7 +149,8 @@ class TabularExportReader:
         """Locate the header, map and parse the columns and convert the timestamps.
 
         Implausible timestamps are set aside, a table that is clearly newest first is
-        reversed, rows far earlier than rows before them are set aside, and the remaining
+        reversed, out-of-sequence rows (far earlier than the rows before them, or isolated far
+        ahead) are set aside, and the remaining
         backward steps are repaired (by default: converted in separate monotonic segments).
         See :mod:`sivin.ingest.parsers.order`.
 
@@ -271,7 +272,7 @@ class TabularExportReader:
     def _time_column(
         self, header: str, local: pd.Series, implausible: BoolArray, order: RowOrder
     ) -> TimeColumn:
-        converted = local.mask(implausible | order.stale)
+        converted = local.mask(implausible | order.out_of_sequence)
         results = [self._converter.to_utc(converted.iloc[segment]) for segment in order.segments]
         unresolved = np.concatenate([_as_bool(result.unresolved) for result in results])
         return TimeColumn(
@@ -281,7 +282,7 @@ class TabularExportReader:
             suspect=np.concatenate([_as_bool(result.suspect) for result in results]),
             unresolved=unresolved | self._order.incomplete_transitions(converted, order),
             implausible=implausible,
-            stale=order.stale,
+            out_of_sequence=order.out_of_sequence,
         )
 
     def _value_column(

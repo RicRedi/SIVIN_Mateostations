@@ -204,9 +204,10 @@ class ValidationSettings(BaseModel):
         le=1.0,
         description=(
             "Share of data rows (0-1, dimensionless) with a timestamp outside the plausible "
-            "range (ParserSettings.earliest_timestamp to the run time plus max_future_s). Above "
-            "it the file is rejected (ERROR); at or below it the rows are dropped (WARNING). "
-            "Project default [to be verified]."
+            "range (ParserSettings.earliest_timestamp to the run time plus max_future_s), and "
+            "also of rows out of sequence (rule out-of-sequence). Above it the file is rejected "
+            "(ERROR); at or below it the rows are dropped (WARNING). Project default "
+            "[to be verified]."
         ),
     )
     min_error_rows: StrictInt = Field(
@@ -285,7 +286,8 @@ class TimeColumn:
         Naive local wall-clock timestamps (``datetime64[ns]``); ``NaT`` where unparseable.
     utc : pandas.Series
         Timestamps converted to UTC (``datetime64[ns, UTC]``); ``NaT`` where unparseable,
-        implausible, stale or where the daylight-saving conversion collided with another row.
+        implausible, out of sequence or where the daylight-saving conversion collided with
+        another row.
     suspect : numpy.ndarray of bool
         Ambiguous or nonexistent local time (daylight-saving transition).
     unresolved : numpy.ndarray of bool
@@ -293,9 +295,9 @@ class TimeColumn:
         of a repaired table whose transition is not fully covered; these rows are dropped.
     implausible : numpy.ndarray of bool
         Readable local time outside the plausible range; not converted, dropped.
-    stale : numpy.ndarray of bool
-        More than the maximum backward step earlier than a row before it; not converted,
-        dropped.
+    out_of_sequence : numpy.ndarray of bool
+        Far earlier than the rows before it, or an isolated row far ahead of its neighbours;
+        not converted, dropped.
     """
 
     header: str
@@ -304,7 +306,7 @@ class TimeColumn:
     suspect: BoolArray
     unresolved: BoolArray
     implausible: BoolArray
-    stale: BoolArray
+    out_of_sequence: BoolArray
 
     @property
     def unparseable(self) -> BoolArray:
@@ -949,30 +951,38 @@ class RowOrderRule(TableRule):
 
 
 @validation_rules.register
-class LargeBackwardStepsRule(TableRule):
-    """Rows far earlier than data already read are dropped (WARNING).
+class OutOfSequenceRule(TableRule):
+    """Rows out of sequence are dropped; too many of them reject the file.
 
-    A row more than ``ParserSettings.max_backward_step_s`` earlier than the latest local time
-    before it comes from a device clock reset or a long overlap of concatenated exports; the
-    rows before it are kept and it is dropped.
+    A row more than ``ParserSettings.max_backward_step_s`` earlier than the latest accepted row
+    before it (device clock reset; exact copies from overlapping exports are kept), or an
+    isolated row as far ahead of its neighbours (glitched timestamp), is dropped. A share above
+    ``max_implausible_timestamp_share`` (and more than ``min_error_rows`` rows) is an ERROR,
+    so a mass drop is never silent.
     """
 
-    rule_id = "large-backward-steps"
+    rule_id = "out-of-sequence"
 
     def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
-        """Yield a WARNING for dropped stale rows (see :meth:`TableRule.check_table`)."""
+        """Yield findings about dropped rows (see :meth:`TableRule.check_table`)."""
         if table.times is None:
             return
-        stale = table.times.stale
-        count = int(stale.sum())
-        if count:
-            yield self._issue(
-                Severity.WARNING,
-                f"{count} row(s) are far earlier than rows before them (clock reset or "
-                "overlapping exports?); dropped.",
-                table.first_row(stale),
-                table.name,
-            )
+        dropped = table.times.out_of_sequence
+        count = int(dropped.sum())
+        if not count:
+            return
+        limit = self.settings.max_implausible_timestamp_share
+        severity = _share_severity(count, table.n_data_rows, limit, self.settings)
+        consequence = "file rejected" if severity is Severity.ERROR else "dropped"
+        yield self._issue(
+            severity,
+            f"{count} of {table.n_data_rows} row(s) are out of sequence: far earlier than the "
+            "rows before them (clock reset?) or isolated far ahead of "
+            f"their neighbours ({_share(count, table.n_data_rows):.1%}, limit {limit:.1%}); "
+            f"{consequence}.",
+            table.first_row(dropped),
+            table.name,
+        )
 
 
 @validation_rules.register

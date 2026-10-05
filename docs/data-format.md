@@ -140,12 +140,22 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
      `newest_first_min_share` (0.75) of them go back in time. A table that steps back but has
      fewer steps is read oldest first (rule `row-order`, WARNING). The real row order of the
      exports is unknown (Q1).
-   - A row more than `max_backward_step_s` (2 h; at least 1 h, the repeated hour) earlier
-     than the latest time already read is **dropped** (rule `large-backward-steps`, WARNING).
-     This covers a device clock reset and a long overlap of concatenated exports. The rows
-     before it are kept, and the rows after it are kept again once the clock is back within
-     2 h of the latest time. The rows of a long overlap are copies of rows already read, so in
-     an overlap the first export's values win.
+   - **Out-of-sequence rows** (rule `out-of-sequence`). Each row is compared with the latest
+     *accepted* row. The threshold is `max_backward_step_s` (2 h, at least 1 h = the
+     repeated hour).
+     - A row more than 2 h **earlier** is dropped (device clock reset). The exception is a
+       row that repeats the wall-clock time of an accepted row exactly: it is a copy from an
+       overlapping export and is kept, and later becomes a duplicate instant.
+     - A row more than 2 h **later** is checked against the next 5 rows. If most of them
+       are earlier than it (the clock returns), it is an isolated forward outlier, i.e. a
+       glitched timestamp, and only that row is dropped. Otherwise it is accepted as a
+       genuine outage after which the clock continues. An outlier never becomes the
+       reference, so one glitched row cannot discard the rows after it.
+     - The first row has no reference. It is an outlier only when most of the next 5 rows
+       are more than 2 h earlier than it, so that a short newest-first table read oldest
+       first is not mistaken for one.
+     - Dropping more than `max_implausible_timestamp_share` (5 %) of the rows, and more
+       than `min_error_rows`, is an ERROR, so a mass drop is never silent.
    - Every remaining counted backward step comes from a clock correction or a short overlap.
      It is handled by an `OrderRepair` strategy (rule `backward-steps`, WARNING). The default,
      `SplitAtBackwardSteps`, starts a new segment at each such step and converts each segment
@@ -165,7 +175,11 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
      them. Rows of the repeated hour that an overlap repeats at the end of a file look
      exactly like a transition the file stops in, and the converter would place them one hour
      late. A genuine export that ends or starts inside the repeated hour loses those rows;
-     the loss is reported.
+     the loss is reported. An export that ends just after the clock jump (e.g. 02:10 CEST,
+     02:40 CEST, 02:11 CET) loses its last repeated-hour rows the same way. The rows are
+     recovered when the next, overlapping export is imported, because the measurement store
+     (WP-1.4) merges overlapping exports and fills the gap. This behaviour is accepted
+     (review round 2).
    - The review's exhaustive check (two overlapping chunks of 24 samples across the
      fall-back, both directions, 5152 files) places **no** row at a wrong instant. A seeded
      subset of 400 cases runs in `tests/ingest/parsers/test_order.py`.
@@ -196,7 +210,7 @@ configuration section `ingest.validation`. The defaults are project defaults
 | `date-order` | day and month look swapped (see Timestamps, step 2) | ERROR |
 | `timestamps-plausible` | share of timestamps outside the plausible range > `max_implausible_timestamp_share` (5 %) → ERROR; otherwise the rows are dropped | ERROR / WARNING |
 | `row-order` | the table steps back but is too short to decide whether it is newest first; read oldest first | WARNING |
-| `large-backward-steps` | rows more than `max_backward_step_s` earlier than rows before them (clock reset, long overlap); dropped | WARNING |
+| `out-of-sequence` | rows more than `max_backward_step_s` earlier than the latest accepted row (clock reset; exact overlap copies excepted) or isolated more than that ahead of their neighbours (glitched timestamp); dropped. Share > `max_implausible_timestamp_share` (5 %) and more than `min_error_rows` → ERROR | ERROR / WARNING |
 | `duplicate-timestamps` | repeated UTC instants (count, and how many conflict); the last one is kept | WARNING |
 | `backward-steps` | counted backward steps (count and the first 10 source rows); converted in segments | WARNING |
 | `daylight-saving` | ambiguous or nonexistent local times (flagged `TIMESTAMP_SUSPECT`) and the number of unresolved rows dropped (including incomplete transitions) | WARNING |
@@ -208,7 +222,7 @@ configuration section `ingest.validation`. The defaults are project defaults
 rows are affected, or all of them. So one footer or comment row in a ten-row file is a
 WARNING (the row is dropped), while a file whose every timestamp is unreadable is still an
 ERROR. This applies to `numbers-parseable`, `timestamps-parseable`, `timestamps-plausible`,
-the gross bounds rules and `humidity-fraction`.
+`out-of-sequence`, the gross bounds rules and `humidity-fraction`.
 
 These gross bounds only guard against unit and column mix-ups. Values outside the bounds
 that stay below the share threshold are reported but kept: the climatological range check

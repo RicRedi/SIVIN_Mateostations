@@ -10,8 +10,18 @@ first:
 1. **Newest first.** A table is reversed only when it is clearly newest first: it has at least
    ``min_steps`` counted steps and at least ``newest_first_min_share`` of them go back in time.
    A table that steps back but is too short to decide is read oldest first and reported.
-2. **Large backward steps.** A row more than ``max_backward_step_s`` earlier than the latest
-   time already read (clock reset, long overlap) is dropped; the rows before it are kept.
+2. **Out-of-sequence rows.** Each row is compared with the reference, the latest *accepted*
+   row. A row more than ``max_backward_step_s`` earlier (clock reset) is dropped, unless it
+   repeats the wall-clock time of an accepted row exactly: that is a copy from an overlapping
+   export and is kept (it becomes a duplicate instant). A row more than
+   ``max_backward_step_s`` *later* than the reference is checked against the next
+   ``_LOOKAHEAD_ROWS`` rows: if most of them are earlier than it (the clock returns), it is an
+   isolated forward outlier (glitched timestamp) and is dropped; otherwise it is accepted (a
+   genuine outage, after which the clock goes on from the new time). The first row has no
+   reference; it is an outlier only when most of the next rows are more than
+   ``max_backward_step_s`` earlier than it (a short newest-first table read oldest first is
+   not an outlier). An outlier is never accepted, so a single glitched row cannot move the
+   reference and discard the rows after it.
 3. **Repair.** The remaining backward steps are handed to an :class:`OrderRepair` strategy.
    The default, :class:`SplitAtBackwardSteps`, starts a new segment at every backward step
    except one inside the repeated hour of a fall-back transition (between two ambiguous rows
@@ -42,6 +52,10 @@ IndexArray = npt.NDArray[np.intp]
 
 _NS_PER_S: Final = 1_000_000_000
 
+_LOOKAHEAD_ROWS: Final = 5
+"""Rows after a far forward jump that decide whether it is an outlier (majority returns) or a
+new timeline. Project choice: recognises bursts of up to two glitched rows."""
+
 
 @dataclass(frozen=True, eq=False)
 class RowOrder:
@@ -56,8 +70,9 @@ class RowOrder:
     undecided : bool
         ``True`` if the table steps back in time but has too few steps to decide whether it is
         newest first; it is read oldest first.
-    stale : numpy.ndarray of bool
-        Rows more than ``max_backward_step_s`` earlier than a row before them; dropped.
+    out_of_sequence : numpy.ndarray of bool
+        Rows far earlier than the rows before them, or isolated far ahead of their
+        neighbours (see the module docstring, point 2); dropped.
     segments : tuple of slice
         Consecutive row ranges that are converted separately; one segment covering all rows
         when the order is clean.
@@ -65,7 +80,7 @@ class RowOrder:
 
     newest_first: bool
     undecided: bool
-    stale: BoolArray
+    out_of_sequence: BoolArray
     segments: tuple[slice, ...]
 
     @property
@@ -204,7 +219,8 @@ class RowOrderAnalyser:
     min_steps : int
         Minimum number of counted non-zero steps needed to decide that a table is newest first.
     max_backward_step_s : float
-        Rows more than this many seconds earlier than the latest time read so far are dropped.
+        Rows more than this many seconds before (or, isolated, after) the latest accepted row
+        are dropped.
     repair : OrderRepair, optional
         Strategy for the remaining backward steps; :class:`SplitAtBackwardSteps` when omitted.
     """
@@ -251,7 +267,7 @@ class RowOrderAnalyser:
         Returns
         -------
         RowOrder
-            Reversal, dropped stale rows and segments, in the (reversed) row order.
+            Reversal, dropped out-of-sequence rows and segments, in the (reversed) row order.
         """
         _, steps = self.wall_clock(local).steps()
         backward = int((steps < 0).sum())
@@ -260,12 +276,12 @@ class RowOrderAnalyser:
         newest_first = decidable and backward > 0 and backward >= self._min_share * moving
         ordered = local.iloc[::-1].reset_index(drop=True) if newest_first else local
         clock = self.wall_clock(ordered)
-        stale = self._stale(clock)
+        out_of_sequence = self._out_of_sequence(clock)
         return RowOrder(
             newest_first=newest_first,
             undecided=not decidable and backward > 0,
-            stale=stale,
-            segments=self._repair.segments(clock, ~stale),
+            out_of_sequence=out_of_sequence,
+            segments=self._repair.segments(clock, ~out_of_sequence),
         )
 
     def incomplete_transitions(self, local: pd.Series, order: RowOrder) -> BoolArray:
@@ -301,14 +317,30 @@ class RowOrderAnalyser:
                     incomplete[group] = True
         return incomplete
 
-    def _stale(self, clock: WallClock) -> BoolArray:
-        """Rows more than the maximum backward step earlier than the latest row before them."""
-        stale = np.zeros(len(clock.ns), dtype=np.bool_)
+    def _out_of_sequence(self, clock: WallClock) -> BoolArray:
+        """Rows far before the reference, and isolated rows far after it (see point 2)."""
+        dropped = np.zeros(len(clock.ns), dtype=np.bool_)
+        positions = np.flatnonzero(clock.present)
+        seen: set[int] = set()
         latest: int | None = None
-        for position in np.flatnonzero(clock.present):
+        for index, position in enumerate(positions):
             instant = int(clock.ns[position])
+            if instant in seen:
+                continue
             if latest is not None and instant < latest - self._max_backward_ns:
-                stale[position] = True
-            elif latest is None or instant > latest:
-                latest = instant
-        return stale
+                dropped[position] = True
+                continue
+            if latest is None or instant > latest + self._max_backward_ns:
+                following = clock.ns[positions[index + 1 : index + 1 + _LOOKAHEAD_ROWS]]
+                back = (
+                    following < instant - self._max_backward_ns
+                    if latest is None
+                    else following < instant
+                )
+                returning = int(back.sum())
+                if 2 * returning > len(following):
+                    dropped[position] = True
+                    continue
+            seen.add(instant)
+            latest = instant if latest is None else max(latest, instant)
+        return dropped

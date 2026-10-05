@@ -208,10 +208,11 @@ class ParserSettings(BaseModel):
         7200.0,
         ge=3600.0,
         description=(
-            "Rows more than this many seconds earlier than the latest local time already read "
-            "(clock reset, long overlap of concatenated exports) are dropped and reported. At "
-            "least 3600 s, the length of the repeated hour of a fall-back transition. Project "
-            "default [to be verified]."
+            "Rows more than this many seconds earlier than the latest accepted row (clock "
+            "reset; exact copies from overlapping exports are kept), or isolated rows "
+            "this far ahead of their neighbours (glitched timestamp), are dropped and reported. "
+            "At least 3600 s, the length of the repeated hour of a fall-back transition. "
+            "Project default [to be verified]."
         ),
     )
     earliest_timestamp: datetime = Field(

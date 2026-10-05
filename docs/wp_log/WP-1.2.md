@@ -29,7 +29,12 @@ column of the review table.
 - **Implausible timestamps.** Timestamps outside a plausible range are dropped, and so are rows
   more than `max_backward_step_s` earlier than rows already read.
 - **New rules:** `values-present`, `date-order`, `timestamps-plausible`, `row-order` and
-  `large-backward-steps`.
+  `large-backward-steps` (renamed `out-of-sequence` in round 3).
+**Round 3** fixed the round 2 blocker. A forward-glitched row is now recognised as an isolated
+outlier and is the only row dropped; it no longer makes every later row stale. The rule was
+renamed from `large-backward-steps` to `out-of-sequence` and now has a share limit (ERROR).
+The minor finding about an export ending just after the fall-back is accepted and documented.
+
 - **Short files.** Share thresholds now also need more than `min_error_rows` affected rows
   before they give an ERROR.
 - **Oversized number cells** are now unparseable instead of crashing the parser.
@@ -81,6 +86,28 @@ validation_rules: ValidationRuleRegistry   # @validation_rules.register
 ```
 
 ## How it was verified
+
+Round 3, in `/home/user/wt/wp-1.2`:
+
+- `make lint` → `All checks passed!`.
+- `make type` → `Success: no issues found in 30 source files`.
+- `make test` → `359 passed`.
+- `make cov` → `TOTAL 1981 0 396 0 100%`. Coverage of `sivin.ingest` →
+  `TOTAL 1138 0 210 0 100%`.
+- Reviewer scripts:
+  - `r3.py`: `glitch_row2_of_2000` → 1999 of 2000 rows and `glitch_plus3h_row2` → 1999, each
+    losing only the glitched row with no extra row.
+  - `r2.py`: `forward_glitch_one_row` → 99 of 100. All other cases are unchanged (the clock
+    correction back by 3 h still loses 1 row).
+  - `t4.py` → `bad 0` (5152 files), with the same 2002 rows lost as in round 2.
+- New tests in `tests/ingest/parsers/test_order.py`:
+  - both repros, plus a +3 h glitch on row 2, each asserting that exactly the glitched row is
+    lost;
+  - two glitched rows at the start;
+  - a 3-day outage, which starts a new timeline with no finding;
+  - a mass backward drop, which gives an ERROR;
+  - a long overlap, whose copies are kept as duplicates.
+- The 400-case overlap subset still passes.
 
 Round 2, in `/home/user/wt/wp-1.2`, same tools:
 
@@ -170,8 +197,13 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 - Repeated-hour rows at the start or end of a file, or of an overlap segment, are dropped
   (reported), even when they are genuine. With data only on one side of the transition they
   cannot be told apart from an overlap.
-- A long overlap (more than 2 h) keeps the first export's values. If the second export
-  differs, it is dropped and only counted; it is not compared with the first.
+- Overlap copies are kept as duplicates (the last occurrence wins). Rows of a second export
+  that are more than 2 h earlier than data already read, and are not exact copies, are
+  dropped and counted.
+- A glitched first row only slightly ahead (between 2 h and about 4 h with 30-minute
+  sampling) is not recognised as an outlier. The first row has no reference, and the next
+  rows are not yet 2 h earlier than it. The rows within 2 h after it are then dropped and
+  reported. This needs a glitch on exactly the first row.
 - A °F temperature column with plausible-looking values (e.g. a winter export, 30–45 °F) and a
   header without a unit is not detected. It is caught only through its header or when more
   than 5 % of the values exceed 70.
@@ -213,7 +245,7 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
    - `TabularExportReader(..., now_utc=None)`;
    - extra rules `expected-tables`, `short-rows`, `daylight-saving`, `humidity-fraction` (the
      brief's "RH in 0–1" guard), `values-present`, `date-order`, `timestamps-plausible`,
-     `row-order` and `large-backward-steps`.
+     `row-order` and `out-of-sequence`.
 6. **`can_parse` uses the file name only**, so the decisions are cheap and do not overlap:
    - `portal-csv` takes any `*.csv`;
    - `portal-xlsx` takes a workbook whose name starts with `MeteoData` or names a sensor;
@@ -239,9 +271,15 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 11. **`values-present`:** ERROR only when both variables have no value at all. One empty
     variable is a WARNING, because the other variable (usually temperature) is still valuable,
     e.g. with a failed humidity channel.
-12. **Long backward steps:** rows more than `max_backward_step_s` earlier than the latest row
-    read so far are dropped until the clock is back. This handles both a clock reset and a long
-    overlap with one rule; in an overlap the first export's copy wins.
+12. **Out-of-sequence rows (round 3):** rows are compared with the latest *accepted* row, not
+    with the median the orchestrator suggested. A median of recent rows lags a monotonic series
+    by about half its window, so a clock reset of just over 2 h is no longer caught. Robustness
+    against glitches comes from never accepting a forward outlier instead. Details:
+    - a row more than `max_backward_step_s` earlier is dropped, unless it exactly repeats an
+      accepted wall-clock time (an overlap copy);
+    - a row more than `max_backward_step_s` later is dropped when most of the next 5 rows are
+      earlier than it (an isolated glitch), and otherwise starts a new timeline (an outage);
+    - too many drops are an ERROR.
 13. **Date-only cells:** read as local midnight, because openpyxl returns them as a `datetime`
     and they cannot be told apart. The docstring now says so.
 ## Out of scope
@@ -497,8 +535,8 @@ where noted:
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| blocker | `src/sivin/ingest/parsers/order.py:304-314`, `src/sivin/ingest/validation.py:952-975` | One forward-glitched timestamp discards the rest of the file, and the glitched row is imported. `_stale` compares every row with the running maximum. A single row that jumps forward by more than `max_backward_step_s` makes every later genuine row "stale". | open |
-| minor | `src/sivin/ingest/parsers/order.py:271-302` | `incomplete_transitions` also drops repeated-hour rows that a single export *could* resolve, for example an export ending after the clock jump (02:10S, 02:40S, 02:11W). The loss is reported, and an overlapping next export restores the rows. Optional refinement: keep a group when its rows after the jump differ in value from the rows before it, because overlap copies repeat their values. Otherwise document that WP-1.4 must merge overlapping exports. | open |
+| blocker | `src/sivin/ingest/parsers/order.py:304-314`, `src/sivin/ingest/validation.py:952-975` | One forward-glitched timestamp discards the rest of the file, and the glitched row is imported. `_stale` compares every row with the running maximum. A single row that jumps forward by more than `max_backward_step_s` makes every later genuine row "stale". | fixed (round 3): `_out_of_sequence` compares each row with the latest *accepted* row and never accepts an isolated forward outlier (most of the next 5 rows are earlier than it), so only the glitched row is dropped. Exact overlap copies are kept. The rule was renamed `out-of-sequence` and is an ERROR above `max_implausible_timestamp_share` with more than `min_error_rows` rows. Both repros and a +3 h variant are tests; `t4.py` gives bad 0 |
+| minor | `src/sivin/ingest/parsers/order.py:271-302` | `incomplete_transitions` also drops repeated-hour rows that a single export *could* resolve, for example an export ending after the clock jump (02:10S, 02:40S, 02:11W). The loss is reported, and an overlapping next export restores the rows. Optional refinement: keep a group when its rows after the jump differ in value from the rows before it, because overlap copies repeat their values. Otherwise document that WP-1.4 must merge overlapping exports. | accepted (orchestrator): behaviour unchanged; `docs/data-format.md` documents that the next overlapping export restores the rows when the store (WP-1.4) merges them |
 
 **Details of the blocker.**
 - **Repro 1:** a normal 2000-row export from 2026-03-01 at 1825 s, with row 2's timestamp
