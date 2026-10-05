@@ -1,35 +1,36 @@
-r"""Indoor / outdoor regime of a segment, from transparent rules.
+r"""Robust features of a stretch of samples and the absolute "indoor-like" rules.
 
-A sensor in the office shows a temperature close to a comfort band, a small daily range and
-low humidity; in the vineyard it follows the weather with a large daily range. For one segment
-:class:`RegimeClassifier` computes three robust features
+A sensor indoors (office, store, service) shows a small daily temperature range, a steady and
+moderate relative humidity and a temperature a room can have. For a stretch of samples
+:class:`RegimeClassifier` computes
 
-* the median temperature :math:`\tilde T` (°C) and its distance :math:`d` from the comfort band
-  :math:`[T_{lo}, T_{hi}]`: :math:`d = \max(T_{lo} - \tilde T, \tilde T - T_{hi}, 0)`,
-* the daily spread :math:`s` (°C): the median over the segment's consecutive 24-h windows
-  (counted from its first sample; windows with fewer than ``min_window_samples`` samples are
-  skipped, and if none is left the whole segment is one window) of :math:`P_{95} - P_{5}` of
-  the temperature,
-* the median relative humidity :math:`\tilde h` (%), if humidity is available,
+* the median temperature :math:`\tilde T` (°C),
+* the daily temperature spread :math:`s` (°C): the median over the stretch's consecutive 24-h
+  windows (counted from its first sample; windows with fewer than ``min_window_samples``
+  samples are skipped, and if none is left the whole stretch is one window) of
+  :math:`P_{95} - P_{5}` of the temperature,
+* the median relative humidity :math:`\tilde h` (%) and the daily humidity spread :math:`r` (%),
+  computed like :math:`s`, if humidity is available,
 
-turns each into a membership in "indoor" between 0 and 1 with a linear ramp
+and calls the stretch **indoor-like** if all absolute criteria hold:
 
 .. math::
 
-    \mu_{band} = 1 - \operatorname{clip}(d / r_T, 0, 1), \quad
-    \mu_{spread} = 1 - \operatorname{clip}((s - s_{max}) / r_s, 0, 1), \quad
-    \mu_{rh} = 1 - \operatorname{clip}((\tilde h - h_{max}) / r_h, 0, 1),
+    T_{room,min} \le \tilde T \le T_{room,max}, \quad s \le s_{max}, \quad
+    \tilde h \le h_{max}, \quad r \le r_{max}
 
-and combines them with a logical AND (minimum): :math:`S = \min(\mu_{band}, \mu_{spread},
-\mu_{rh})`. The segment is indoor if :math:`S \ge S_0`; the confidence of the label is
-:math:`|2S - 1|`.
+(the humidity criteria only with humidity). These rules alone do not decide a transition; a
+transition also needs a relative contrast to the neighbouring outdoor data
+(:mod:`sivin.quality.contrast`).
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -39,10 +40,10 @@ from sivin.quality.samples import S_PER_DAY, FloatArray
 logger = logging.getLogger(__name__)
 
 SPREAD_LOW_PERCENTILE = 5.0
-"""Lower percentile of the daily spread (robust against a single spike)."""
+"""Lower percentile of a daily spread (robust against a single spike)."""
 
 SPREAD_HIGH_PERCENTILE = 95.0
-"""Upper percentile of the daily spread (robust against a single spike)."""
+"""Upper percentile of a daily spread (robust against a single spike)."""
 
 
 class Regime(StrEnum):
@@ -55,62 +56,48 @@ class Regime(StrEnum):
 
 
 class RegimeSettings(BaseModel):
-    """Rules of :class:`RegimeClassifier` (all project defaults, to be tuned on real data)."""
+    """Absolute indoor-like rules (all project defaults, to be tuned on real data)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    comfort_band_low_c: float = Field(
-        18.0,
-        description="Lower edge of the indoor comfort band T_lo in °C. Project default.",
-    )
-    comfort_band_high_c: float = Field(
-        27.0,
-        description="Upper edge of the indoor comfort band T_hi in °C. Project default.",
-    )
-    band_ramp_c: float = Field(
-        4.0,
-        gt=0,
+    room_min_c: float = Field(
+        5.0,
         description=(
-            "Distance r_T (°C) of the median temperature outside the comfort band at which the "
-            "band membership reaches 0. Project default."
-        ),
-    )
-    indoor_max_daily_spread_c: float = Field(
-        3.0,
-        ge=0,
-        description=(
-            "Daily spread s_max (P95 - P5 of temperature per 24 h, °C) up to which a segment "
-            "fully looks indoor. Project default [to be tuned on real data]."
-        ),
-    )
-    spread_ramp_c: float = Field(
-        3.0,
-        gt=0,
-        description=(
-            "Additional spread r_s (°C) above s_max at which the spread membership reaches 0. "
-            "Project default."
-        ),
-    )
-    indoor_max_rh_pct: float = Field(
-        65.0,
-        description=(
-            "Median relative humidity h_max (%) up to which a segment fully looks indoor. "
+            "Lowest median temperature (°C) of a room; covers unheated stores in winter. "
             "Project default [to be tuned on real data]."
         ),
     )
-    rh_ramp_pct: float = Field(
-        15.0,
-        gt=0,
+    room_max_c: float = Field(
+        35.0,
         description=(
-            "Additional humidity r_h (%) above h_max at which the humidity membership reaches "
-            "0. Project default."
+            "Highest median temperature (°C) of a room; covers hot offices in summer. "
+            "Project default [to be tuned on real data]."
         ),
     )
-    indoor_threshold: float = Field(
-        0.5,
-        gt=0,
-        lt=1,
-        description="Indoor score S_0 (0-1, dimensionless) at or above which a segment is indoor.",
+    indoor_max_daily_spread_c: float = Field(
+        4.0,
+        ge=0,
+        description=(
+            "Largest daily temperature spread s_max (P95 - P5 per 24 h, °C) of an indoor "
+            "stretch; an office with day-time heating stays below it. Project default "
+            "[to be tuned on real data]."
+        ),
+    )
+    indoor_max_rh_pct: float = Field(
+        75.0,
+        description=(
+            "Largest median relative humidity h_max (%) of an indoor stretch; excludes fog and "
+            "most overcast days. Project default [to be tuned on real data]."
+        ),
+    )
+    indoor_max_rh_spread_pct: float = Field(
+        8.0,
+        ge=0,
+        description=(
+            "Largest daily relative-humidity spread r_max (P95 - P5 per 24 h, %) of an indoor "
+            "stretch: indoor humidity is steady, outdoor humidity follows the daily "
+            "temperature cycle even under overcast skies. Project default [to be tuned]."
+        ),
     )
     min_window_samples: int = Field(
         12,
@@ -123,14 +110,14 @@ class RegimeSettings(BaseModel):
 
     @model_validator(mode="after")
     def _ordered_band(self) -> RegimeSettings:
-        if self.comfort_band_low_c > self.comfort_band_high_c:
-            raise ValueError("comfort_band_low_c must not exceed comfort_band_high_c")
+        if self.room_min_c > self.room_max_c:
+            raise ValueError("room_min_c must not exceed room_max_c")
         return self
 
 
 @dataclass(frozen=True, slots=True)
-class SegmentFeatures:
-    """Robust features of one segment.
+class WindowFeatures:
+    """Robust features of a stretch of samples.
 
     Attributes
     ----------
@@ -140,37 +127,51 @@ class SegmentFeatures:
         Median over 24-h windows of the P95 - P5 temperature spread, in °C.
     rh_median_pct : float or None
         Median relative humidity in %, ``None`` without humidity data.
+    rh_daily_spread_pct : float or None
+        Median over 24-h windows of the P95 - P5 humidity spread, in %; ``None`` without
+        humidity data.
+    n_samples : int
+        Number of samples.
     """
 
     temp_median_c: float
     daily_spread_c: float
     rh_median_pct: float | None
+    rh_daily_spread_pct: float | None
+    n_samples: int
 
 
 @dataclass(frozen=True, slots=True)
-class RegimeVerdict:
-    """The regime of one segment and why.
+class IndoorAssessment:
+    """Which absolute indoor criteria a stretch meets.
 
     Attributes
     ----------
-    regime : Regime
-        The label.
-    indoor_score : float
-        Score :math:`S` (0-1, dimensionless); 1 = clearly indoor.
-    confidence : float
-        :math:`|2S - 1|` (0-1, dimensionless).
-    features : SegmentFeatures
-        The features the label is based on.
+    features : WindowFeatures
+        The features.
+    criteria : Mapping[str, bool]
+        Criterion name → met (read-only).
     """
 
-    regime: Regime
-    indoor_score: float
-    confidence: float
-    features: SegmentFeatures
+    features: WindowFeatures
+    criteria: Mapping[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "criteria", MappingProxyType(dict(self.criteria)))
+
+    @property
+    def indoor_like(self) -> bool:
+        """``True`` if every criterion is met."""
+        return all(self.criteria.values())
+
+    @property
+    def regime(self) -> Regime:
+        """``INDOOR`` if indoor-like, else ``OUTDOOR``."""
+        return Regime.INDOOR if self.indoor_like else Regime.OUTDOOR
 
 
 class RegimeClassifier:
-    """Label a segment indoor or outdoor (rules in the module docstring).
+    """Compute window features and apply the absolute rules (module docstring).
 
     Parameters
     ----------
@@ -188,99 +189,88 @@ class RegimeClassifier:
         """The rules."""
         return self._settings
 
-    def classify(
+    def assess(
         self, t_s: FloatArray, temp_c: FloatArray, rh_pct: FloatArray | None
-    ) -> RegimeVerdict:
-        """Classify one segment.
+    ) -> IndoorAssessment:
+        """Compute the features of a stretch and check the absolute rules.
 
         Parameters
         ----------
         t_s : numpy.ndarray of float
             Sample times in seconds, increasing.
         temp_c : numpy.ndarray of float
-            Temperatures in °C, no ``NaN``.
+            Temperatures in °C, no ``NaN``, at least one value.
         rh_pct : numpy.ndarray of float or None
-            Relative humidity in % (no ``NaN``), or ``None`` to classify on temperature only.
+            Relative humidity in % (no ``NaN``), or ``None`` to use temperature only.
 
         Returns
         -------
-        RegimeVerdict
-            Label, score, confidence and features.
+        IndoorAssessment
+            Features and criteria.
         """
-        features = self.features(t_s, temp_c, rh_pct)
-        score = self.indoor_score(features)
-        regime = Regime.INDOOR if score >= self._settings.indoor_threshold else Regime.OUTDOOR
-        return RegimeVerdict(regime, score, abs(2.0 * score - 1.0), features)
+        return self.assess_features(self.features(t_s, temp_c, rh_pct))
 
     def features(
         self, t_s: FloatArray, temp_c: FloatArray, rh_pct: FloatArray | None
-    ) -> SegmentFeatures:
-        """Compute the features of one segment.
+    ) -> WindowFeatures:
+        """Compute the features of a stretch.
 
         Parameters
         ----------
         t_s, temp_c, rh_pct
-            As in :meth:`classify`.
+            As in :meth:`assess`.
 
         Returns
         -------
-        SegmentFeatures
-            Median temperature, daily spread and median humidity.
+        WindowFeatures
+            Medians and daily spreads.
         """
-        return SegmentFeatures(
+        return WindowFeatures(
             temp_median_c=float(np.median(temp_c)),
-            daily_spread_c=self._daily_spread_c(t_s, temp_c),
+            daily_spread_c=self._daily_spread(t_s, temp_c),
             rh_median_pct=None if rh_pct is None else float(np.median(rh_pct)),
+            rh_daily_spread_pct=None if rh_pct is None else self._daily_spread(t_s, rh_pct),
+            n_samples=int(temp_c.size),
         )
 
-    def indoor_score(self, features: SegmentFeatures) -> float:
-        """Combine the memberships into the indoor score :math:`S`.
+    def assess_features(self, features: WindowFeatures) -> IndoorAssessment:
+        """Check the absolute rules on given features.
 
         Parameters
         ----------
-        features : SegmentFeatures
-            Features of a segment.
+        features : WindowFeatures
+            Features of a stretch.
 
         Returns
         -------
-        float
-            :math:`S` in 0-1 (dimensionless).
+        IndoorAssessment
+            Features and the result of every criterion.
         """
         settings = self._settings
-        distance_c = max(
-            settings.comfort_band_low_c - features.temp_median_c,
-            features.temp_median_c - settings.comfort_band_high_c,
-            0.0,
-        )
-        memberships = [
-            _falling_ramp(distance_c, 0.0, settings.band_ramp_c),
-            _falling_ramp(
-                features.daily_spread_c, settings.indoor_max_daily_spread_c, settings.spread_ramp_c
-            ),
-        ]
+        criteria = {
+            "room_temperature": settings.room_min_c
+            <= features.temp_median_c
+            <= settings.room_max_c,
+            "small_daily_spread": features.daily_spread_c <= settings.indoor_max_daily_spread_c,
+        }
         if features.rh_median_pct is not None:
-            memberships.append(
-                _falling_ramp(
-                    features.rh_median_pct, settings.indoor_max_rh_pct, settings.rh_ramp_pct
-                )
+            criteria["moderate_humidity"] = features.rh_median_pct <= settings.indoor_max_rh_pct
+        if features.rh_daily_spread_pct is not None:
+            criteria["steady_humidity"] = (
+                features.rh_daily_spread_pct <= settings.indoor_max_rh_spread_pct
             )
-        return min(memberships)
+        return IndoorAssessment(features, criteria)
 
-    def _daily_spread_c(self, t_s: FloatArray, temp_c: FloatArray) -> float:
+    def _daily_spread(self, t_s: FloatArray, values: FloatArray) -> float:
         window = ((t_s - t_s[0]) // S_PER_DAY).astype(np.int64)
         spreads = [
-            _spread(temp_c[window == w])
+            _spread(values[window == w])
             for w in np.unique(window)
             if np.count_nonzero(window == w) >= self._settings.min_window_samples
         ]
-        return float(np.median(spreads)) if spreads else _spread(temp_c)
+        return float(np.median(spreads)) if spreads else _spread(values)
 
 
 def _spread(values: FloatArray) -> float:
     low, high = np.percentile(values, [SPREAD_LOW_PERCENTILE, SPREAD_HIGH_PERCENTILE])
     return float(high - low)
-
-
-def _falling_ramp(value: float, full_until: float, width: float) -> float:
-    """1 up to ``full_until``, falling linearly to 0 at ``full_until + width``."""
-    return float(1.0 - np.clip((value - full_until) / width, 0.0, 1.0))

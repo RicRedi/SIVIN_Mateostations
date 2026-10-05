@@ -1,19 +1,19 @@
-"""Split a series into indoor and outdoor regimes.
+"""Find indoor stretches and their confirmed boundaries.
 
-:class:`RegimeSegmenter` combines the change-point search and the regime rules:
+:class:`RegimeSegmenter` combines the building blocks:
 
-1. binary segmentation on the Gaussian level-and-variance cost
-   (:mod:`sivin.quality.changepoint`) cuts the series into segments of at least the minimum
-   duration,
-2. every segment is labelled indoor or outdoor (:class:`~sivin.quality.regime.RegimeClassifier`),
-3. adjacent segments with the same label are merged into one regime,
-4. every regime boundary is **refined**: within the two regimes it separates, and at most the
-   minimum segment duration away from the first estimate, the position with the largest
-   likelihood-ratio gain wins. The minimum duration constrains the search, not the final
-   boundary; without this step a boundary close to an earlier change point could not be
-   placed exactly.
-5. the merged regimes are classified again on their final extent (features, score and
-   confidence of the reported events); adjacent regimes that now share a label are merged.
+1. change points in level and variance, found locally in epoch-anchored windows
+   (:class:`~sivin.quality.windows.WindowedChangePoints`),
+2. every segment between change points is checked against the absolute indoor-like rules
+   (:class:`~sivin.quality.regime.RegimeClassifier`); consecutive indoor-like segments form an
+   **indoor run** (a candidate office or service stay),
+3. each boundary of a run is placed exactly (:class:`~sivin.quality.boundaries.BoundaryRefiner`)
+   and a transport transient on its outdoor side is moved to the indoor side
+   (:class:`~sivin.quality.boundaries.TransportTrimmer`),
+4. each boundary is confirmed or rejected by the relative contrast between local windows on
+   both sides (:class:`~sivin.quality.contrast.TransitionContrast`).
+
+Which runs are applied is decided by :class:`IndoorRun` (see :attr:`IndoorRun.applied`).
 """
 
 from __future__ import annotations
@@ -23,69 +23,161 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 import numpy as np
+import numpy.typing as npt
 
-from sivin.quality.changepoint import MIN_SEGMENT_SAMPLES, BinarySegmentation, GaussianSegmentCost
-from sivin.quality.regime import RegimeClassifier, RegimeVerdict
+from sivin.quality.boundaries import BoundaryRefiner, TransportTrimmer
+from sivin.quality.contrast import ContrastVerdict, TransitionContrast
+from sivin.quality.events import EventKind
+from sivin.quality.regime import IndoorAssessment, RegimeClassifier
 from sivin.quality.samples import FloatArray
+from sivin.quality.windows import WindowedChangePoints
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class RegimeSpan:
-    """A run of samples in one regime.
+class Boundary:
+    """One boundary of an indoor run.
+
+    Attributes
+    ----------
+    position : int
+        First sample of the new regime (coordinates of the segmenter's input).
+    kind : EventKind
+        ``RETRIEVAL`` (start of the run) or ``DEPLOYMENT`` (end of the run).
+    verdict : ContrastVerdict or None
+        The relative comparison; ``None`` if a local window had too few samples.
+    """
+
+    position: int
+    kind: EventKind
+    verdict: ContrastVerdict | None
+
+    @property
+    def confirmed(self) -> bool:
+        """Whether the relative and absolute criteria hold."""
+        return self.verdict is not None and self.verdict.confirmed
+
+
+@dataclass(frozen=True, slots=True)
+class IndoorRun:
+    """A stretch of indoor-like samples and its boundaries.
 
     Attributes
     ----------
     start, end : int
-        Half-open sample range ``[start, end)`` in the coordinates of the segmenter's input.
-    verdict : RegimeVerdict
-        Regime, score, confidence and features of the run.
+        Half-open sample range ``[start, end)``.
+    assessment : IndoorAssessment
+        Absolute assessment of the whole run.
+    retrieval : Boundary or None
+        Boundary at ``start``; ``None`` if the run starts with the data.
+    deployment : Boundary or None
+        Boundary at ``end``; ``None`` if the run lasts until the end of the data.
     """
 
     start: int
     end: int
-    verdict: RegimeVerdict
+    assessment: IndoorAssessment
+    retrieval: Boundary | None
+    deployment: Boundary | None
+
+    @property
+    def applied(self) -> bool:
+        """Whether the run counts as indoor (its samples become ``PRE_DEPLOYMENT``).
+
+        A run is applied only if it ends with a confirmed deployment and, unless it starts
+        with the data, begins with a confirmed retrieval. A retrieval without a later
+        redeployment is never applied: it would exclude all later data on uncertain grounds.
+        """
+        if self.deployment is None or not self.deployment.confirmed:
+            return False
+        return self.retrieval is None or self.retrieval.confirmed
+
+    @property
+    def partly_confirmed(self) -> bool:
+        """``True`` if some but not all boundaries needed for :attr:`applied` are confirmed."""
+        boundaries = [b for b in (self.retrieval, self.deployment) if b is not None]
+        return not self.applied and any(b.confirmed for b in boundaries)
+
+
+@dataclass(frozen=True, slots=True)
+class Segment:
+    """A segment between change points and its absolute assessment.
+
+    Attributes
+    ----------
+    start, end : int
+        Half-open sample range.
+    assessment : IndoorAssessment
+        Absolute indoor-like assessment.
+    """
+
+    start: int
+    end: int
+    assessment: IndoorAssessment
+
+
+@dataclass(frozen=True, slots=True)
+class _Data:
+    t_s: FloatArray
+    temp_c: FloatArray
+    rh_pct: FloatArray | None
+    matrix: npt.NDArray[np.float64]
+
+    @classmethod
+    def of(cls, t_s: FloatArray, temp_c: FloatArray, rh_pct: FloatArray | None) -> _Data:
+        columns = [temp_c] if rh_pct is None else [temp_c, rh_pct]
+        return cls(t_s, temp_c, rh_pct, np.column_stack(columns))
+
+    def index(self, t_s: float) -> int:
+        return int(np.searchsorted(self.t_s, t_s))
+
+    def rh(self, start: int, end: int) -> FloatArray | None:
+        return None if self.rh_pct is None else self.rh_pct[start:end]
 
 
 class RegimeSegmenter:
-    """Cut samples into indoor/outdoor regimes (steps in the module docstring).
+    """Find indoor runs and confirm their boundaries (module docstring).
 
     Parameters
     ----------
-    segmentation : BinarySegmentation
-        The change-point search.
+    change_points : WindowedChangePoints
+        Local change-point search.
     classifier : RegimeClassifier
-        The regime rules.
-    min_segment_s : float
-        Minimum segment duration in seconds; also the refinement radius.
-    variance_floors : tuple of float
-        Variance floor per variable (°C², %²), in the column order of the data.
+        Absolute indoor-like rules.
+    contrast : TransitionContrast
+        Relative confirmation (its ``window_s`` sets the local windows).
+    refiner : BoundaryRefiner
+        Exact boundary placement.
+    trimmer : TransportTrimmer
+        Transport transient handling.
     """
 
-    __slots__ = ("_classifier", "_min_segment_s", "_segmentation", "_variance_floors")
+    __slots__ = ("_change_points", "_classifier", "_contrast", "_refiner", "_trimmer")
 
     def __init__(
         self,
-        segmentation: BinarySegmentation,
+        change_points: WindowedChangePoints,
         classifier: RegimeClassifier,
-        min_segment_s: float,
-        variance_floors: tuple[float, ...],
+        contrast: TransitionContrast,
+        refiner: BoundaryRefiner,
+        trimmer: TransportTrimmer,
     ) -> None:
-        self._segmentation = segmentation
+        self._change_points = change_points
         self._classifier = classifier
-        self._min_segment_s = min_segment_s
-        self._variance_floors = variance_floors
+        self._contrast = contrast
+        self._refiner = refiner
+        self._trimmer = trimmer
 
     def split(
         self, t_s: FloatArray, temp_c: FloatArray, rh_pct: FloatArray | None
-    ) -> list[RegimeSpan]:
-        """Split samples into regimes.
+    ) -> tuple[list[Segment], list[IndoorRun]]:
+        """Find segments and indoor runs.
 
         Parameters
         ----------
         t_s : numpy.ndarray of float
-            Sample times in seconds, increasing.
+            Sample times in seconds since the Unix epoch, increasing.
         temp_c : numpy.ndarray of float
             Temperature in °C, no ``NaN``.
         rh_pct : numpy.ndarray of float or None
@@ -93,62 +185,78 @@ class RegimeSegmenter:
 
         Returns
         -------
-        list of RegimeSpan
-            Consecutive regimes covering all samples; adjacent regimes differ in label.
+        tuple of (list of Segment, list of IndoorRun)
+            All segments with their absolute assessment, and the indoor runs in time order.
         """
         if t_s.size == 0:
-            return []
-        columns = [temp_c] if rh_pct is None else [temp_c, rh_pct]
-        floors = np.array(self._variance_floors[: len(columns)])
-        cost = GaussianSegmentCost(np.column_stack(columns), floors)
-        step_s = float(np.median(np.diff(t_s))) if t_s.size > 1 else 0.0
-        edges_s = np.append(t_s, t_s[-1] + step_s)
-        cuts = [0, *(c.position for c in self._segmentation.fit(cost, edges_s)), t_s.size]
-        labels = [self._classify(t_s, temp_c, rh_pct, a, b).regime for a, b in pairwise(cuts)]
-        bounds = [0] + [cuts[i + 1] for i in range(len(labels) - 1) if labels[i] != labels[i + 1]]
-        bounds.append(t_s.size)
-        bounds = self._refined(bounds, cost, edges_s)
-        spans = [
-            RegimeSpan(a, b, self._classify(t_s, temp_c, rh_pct, a, b)) for a, b in pairwise(bounds)
-        ]
-        return self._merged(spans, t_s, temp_c, rh_pct)
+            return [], []
+        data = _Data.of(t_s, temp_c, rh_pct)
+        cuts = [0, *(c.position for c in self._change_points.find(t_s, data.matrix)), t_s.size]
+        segments = [Segment(a, b, self._assess(data, a, b)) for a, b in pairwise(cuts)]
+        spans = _indoor_spans(segments)
+        runs = [self._run(data, spans, k) for k in range(len(spans))]
+        logger.debug("%d segment(s), %d indoor run(s).", len(segments), len(runs))
+        return segments, runs
 
-    def _refined(
-        self, bounds: list[int], cost: GaussianSegmentCost, edges_s: FloatArray
-    ) -> list[int]:
-        refined = list(bounds)
-        for k in range(1, len(refined) - 1):
-            start, end = refined[k - 1], bounds[k + 1]
-            first = edges_s[refined[k]]
-            candidates = np.arange(start + MIN_SEGMENT_SAMPLES, end - MIN_SEGMENT_SAMPLES + 1)
-            near = np.abs(edges_s[candidates] - first) <= self._min_segment_s
-            candidates = candidates[near]
-            if candidates.size:
-                gains = cost.split_gains(start, end, candidates)
-                refined[k] = int(candidates[int(np.argmax(gains))])
-        return refined
+    def _run(self, data: _Data, spans: list[tuple[int, int]], k: int) -> IndoorRun:
+        n_samples = data.t_s.size
+        start, end = spans[k]
+        before = spans[k - 1][1] if k > 0 else 0
+        after = spans[k + 1][0] if k + 1 < len(spans) else n_samples
+        if start > 0:
+            start = self._refiner.refine(data.t_s, data.matrix, start, before, end)
+        if end < n_samples:
+            end = self._refiner.refine(data.t_s, data.matrix, end, start, after)
+        # The indoor window ends (starts) one maximum transport duration before (after) the
+        # refined boundary, so a transport transient cannot distort it.
+        retrieval = deployment = None
+        if start > 0:
+            trimmed = self._trimmer.trim(data.t_s, data.temp_c, start, end, before)
+            retrieval = self._retrieval(data, start, end, before, trimmed)
+        if end < n_samples:
+            trimmed = self._trimmer.trim(data.t_s, data.temp_c, end, start, after)
+            deployment = self._deployment(data, start, end, after, trimmed)
+        return IndoorRun(start, end, self._assess(data, start, end), retrieval, deployment)
 
-    def _merged(
-        self,
-        spans: list[RegimeSpan],
-        t_s: FloatArray,
-        temp_c: FloatArray,
-        rh_pct: FloatArray | None,
-    ) -> list[RegimeSpan]:
-        merged: list[RegimeSpan] = []
-        for span in spans:
-            current = span
-            while merged and merged[-1].verdict.regime is current.verdict.regime:
-                start = merged.pop().start
-                verdict = self._classify(t_s, temp_c, rh_pct, start, current.end)
-                current = RegimeSpan(start, current.end, verdict)
-            merged.append(current)
-        logger.debug("%d regime(s) after merging.", len(merged))
-        return merged
+    def _deployment(self, data: _Data, start: int, end: int, after: int, trimmed: int) -> Boundary:
+        window_s = self._contrast.settings.window_s
+        last_indoor_s = data.t_s[end - 1]
+        indoor_from = max(start, data.index(last_indoor_s - window_s))
+        indoor_to = max(indoor_from, data.index(last_indoor_s - self._trimmer.guard_s))
+        outdoor_to = min(after, data.index(data.t_s[trimmed] + window_s))
+        verdict = self._verdict(data, (indoor_from, indoor_to), (trimmed, outdoor_to))
+        return Boundary(trimmed, EventKind.DEPLOYMENT, verdict)
 
-    def _classify(
-        self, t_s: FloatArray, temp_c: FloatArray, rh_pct: FloatArray | None, start: int, end: int
-    ) -> RegimeVerdict:
-        return self._classifier.classify(
-            t_s[start:end], temp_c[start:end], None if rh_pct is None else rh_pct[start:end]
+    def _retrieval(self, data: _Data, start: int, end: int, before: int, trimmed: int) -> Boundary:
+        window_s = self._contrast.settings.window_s
+        indoor_to = min(end, data.index(data.t_s[start] + window_s))
+        indoor_from = min(indoor_to, data.index(data.t_s[start] + self._trimmer.guard_s))
+        outdoor_from = max(before, data.index(data.t_s[trimmed - 1] - window_s))
+        verdict = self._verdict(data, (indoor_from, indoor_to), (outdoor_from, trimmed))
+        return Boundary(trimmed, EventKind.RETRIEVAL, verdict)
+
+    def _verdict(
+        self, data: _Data, indoor: tuple[int, int], outdoor: tuple[int, int]
+    ) -> ContrastVerdict | None:
+        minimum = self._contrast.settings.min_window_samples
+        if min(indoor[1] - indoor[0], outdoor[1] - outdoor[0]) < minimum:
+            return None
+        return self._contrast.compare(self._assess(data, *indoor), self._assess(data, *outdoor))
+
+    def _assess(self, data: _Data, start: int, end: int) -> IndoorAssessment:
+        return self._classifier.assess(
+            data.t_s[start:end], data.temp_c[start:end], data.rh(start, end)
         )
+
+
+def _indoor_spans(segments: list[Segment]) -> list[tuple[int, int]]:
+    """Merge consecutive indoor-like segments into ``(start, end)`` spans."""
+    spans: list[tuple[int, int]] = []
+    for segment in segments:
+        if not segment.assessment.indoor_like:
+            continue
+        if spans and spans[-1][1] == segment.start:
+            spans[-1] = (spans[-1][0], segment.end)
+        else:
+            spans.append((segment.start, segment.end))
+    return spans

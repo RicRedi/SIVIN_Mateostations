@@ -4,12 +4,18 @@ Every sensor is switched on in the office and then carried into the vineyard; it
 back for service and redeployed. :class:`DeploymentDetector`
 
 1. finds change points in level and variance of temperature (and humidity) with a Gaussian
-   likelihood ratio and binary segmentation (:mod:`sivin.quality.changepoint`),
-2. labels every segment indoor or outdoor (:class:`~sivin.quality.regime.RegimeClassifier`),
-3. reports a ``deployment`` at each indoor → outdoor boundary and a ``retrieval`` at each
-   outdoor → indoor boundary (:class:`~sivin.quality.events.DeploymentEvent`),
-4. reconciles them with known deployment times (:mod:`sivin.quality.timeline`), and
-5. marks every sample recorded while indoor ``PRE_DEPLOYMENT``.
+   likelihood ratio and binary segmentation, locally in fixed windows
+   (:mod:`sivin.quality.changepoint`, :mod:`sivin.quality.windows`),
+2. groups indoor-like segments into candidate indoor runs (absolute rules,
+   :mod:`sivin.quality.regime`), places their boundaries exactly and moves a transport
+   transient to the indoor side (:mod:`sivin.quality.boundaries`),
+3. confirms each boundary by the relative contrast between local windows on both sides
+   (:mod:`sivin.quality.contrast`); a run counts as indoor only if all its boundaries are
+   confirmed and it ends with a redeployment (:mod:`sivin.quality.segmentation`),
+4. reconciles the indoor intervals with known deployment times (:mod:`sivin.quality.timeline`),
+5. marks every sample recorded while indoors ``PRE_DEPLOYMENT``.
+
+Guiding principle: when the evidence is not clear, the detector warns and does not exclude data.
 """
 
 from __future__ import annotations
@@ -18,7 +24,6 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import pairwise
 
 import numpy as np
 import numpy.typing as npt
@@ -27,21 +32,26 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from sivin.core.flags import QcFlag, excluded
 from sivin.core.schema import MeasurementSeries
+from sivin.quality.boundaries import BoundaryRefiner, TransportSettings, TransportTrimmer
 from sivin.quality.changepoint import BinarySegmentation
 from sivin.quality.checks.base import CheckOutcome
-from sivin.quality.events import DeploymentEvent, EventKind, QualityEvent
-from sivin.quality.regime import Regime, RegimeClassifier, RegimeSettings, RegimeVerdict
+from sivin.quality.contrast import ContrastSettings, TransitionContrast
+from sivin.quality.events import DeploymentEvent, EventKind, QualityEvent, Severity
+from sivin.quality.regime import IndoorAssessment, Regime, RegimeClassifier, RegimeSettings
 from sivin.quality.samples import S_PER_DAY, S_PER_H, SampleArrays
-from sivin.quality.segmentation import RegimeSegmenter, RegimeSpan
-from sivin.quality.timeline import ORIGIN, DeploymentTimeline, KnownDeploymentReconciler
+from sivin.quality.segmentation import Boundary, IndoorRun, RegimeSegmenter
+from sivin.quality.timeline import (
+    ORIGIN,
+    IndoorInterval,
+    KnownDeploymentReconciler,
+    indoor_mask,
+)
+from sivin.quality.windows import WindowedChangePoints
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_IGNORE_MASK = int(QcFlag.MISSING | QcFlag.OUT_OF_RANGE | QcFlag.MANUAL_EXCLUDE)
 """Samples with these flags are not used for detection (they would distort the likelihood)."""
-
-MIN_SPREAD_FOR_RATIO_C = 0.1
-"""Daily spread (°C) used instead of a smaller one when reporting spread ratios (display only)."""
 
 
 class ChangePointSettings(BaseModel):
@@ -54,24 +64,37 @@ class ChangePointSettings(BaseModel):
         gt=0,
         description=(
             "Shortest segment in seconds; also the shortest indoor stay (service) that can be "
-            "detected. Project default 1 day, so that every segment has a daily spread."
+            "detected, the minimum separation of change points and the refinement radius. "
+            "Project default 1 day, so that every segment has a daily spread."
         ),
+    )
+    window_s: float = Field(
+        30 * S_PER_DAY,
+        gt=0,
+        description=(
+            "Length (s) of the windows the search runs in; the result does not depend on the "
+            "series length. Project default 30 days."
+        ),
+    )
+    stride_s: float = Field(
+        15 * S_PER_DAY,
+        gt=0,
+        description="Spacing (s) of the window starts (epoch-anchored). Project default 15 days.",
     )
     penalty_factor: float = Field(
         1.0,
         gt=0,
         description=(
-            "Factor c (dimensionless) of the BIC-like penalty c·(p+1)·ln n a split must gain. "
-            "1 = Schwarz/BIC weight. Project default."
+            "Factor c (dimensionless) of the BIC-like penalty c·(p+1)·ln n a split must gain "
+            "(n = samples in the window). 1 = Schwarz/BIC weight. Project default."
         ),
     )
     max_change_points: int = Field(
-        50,
+        30,
         ge=1,
         description=(
-            "Largest number of change points (count). Outdoor weather produces many change "
-            "points that the regime classifier merges again; the cap bounds the work. Project "
-            "default."
+            "Largest number of change points (count) per window; with 1-day minimum segments "
+            "a 30-day window cannot hold more. Project default."
         ),
     )
     temp_variance_floor_c2: float = Field(
@@ -97,6 +120,11 @@ class ChangePointSettings(BaseModel):
         ),
     )
 
+    @property
+    def variance_floors(self) -> tuple[float, float]:
+        """Variance floors of temperature (°C²) and humidity (%²)."""
+        return (self.temp_variance_floor_c2, self.rh_variance_floor_pct2)
+
 
 class DeploymentSettings(BaseModel):
     """Settings of :class:`DeploymentDetector`."""
@@ -107,14 +135,20 @@ class DeploymentSettings(BaseModel):
         default_factory=ChangePointSettings, description="Change-point search."
     )
     regime: RegimeSettings = Field(
-        default_factory=RegimeSettings, description="Indoor/outdoor rules."
+        default_factory=RegimeSettings, description="Absolute indoor-like rules."
+    )
+    contrast: ContrastSettings = Field(
+        default_factory=ContrastSettings, description="Relative confirmation of transitions."
+    )
+    transport: TransportSettings = Field(
+        default_factory=TransportSettings, description="Transport transient handling."
     )
     known_tolerance_s: float = Field(
         6 * S_PER_H,
         ge=0,
         description=(
             "Largest distance in seconds between a detected and a known deployment that still "
-            "counts as agreement; a larger one produces a warning. Project default 6 h."
+            "counts as agreement. Project default 6 h [to be tuned with Q3]."
         ),
     )
     ignore_mask: StrictInt = Field(
@@ -137,7 +171,7 @@ class DeploymentSettings(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class SegmentRecord:
-    """One segment between change points and its regime.
+    """One segment between change points and its absolute assessment.
 
     Attributes
     ----------
@@ -145,19 +179,19 @@ class SegmentRecord:
         Times of the first and the last usable sample of the segment (UTC).
     n_samples : int
         Number of usable samples.
-    verdict : RegimeVerdict
-        Regime, score, confidence and features.
+    assessment : IndoorAssessment
+        Features and absolute indoor-like criteria.
     """
 
     start_utc: pd.Timestamp
     end_utc: pd.Timestamp
     n_samples: int
-    verdict: RegimeVerdict
+    assessment: IndoorAssessment
 
     @property
     def regime(self) -> Regime:
-        """The regime of the segment."""
-        return self.verdict.regime
+        """``INDOOR`` if the segment is indoor-like (absolute rules only), else ``OUTDOOR``."""
+        return self.assessment.regime
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +206,7 @@ class DeploymentResult:
     pre_deployment : numpy.ndarray of bool
         ``True`` for each row recorded while the sensor was indoors (read-only).
     segments : tuple of SegmentRecord
-        The segments and their regimes, for inspection.
+        The segments between change points, for inspection.
     """
 
     events: tuple[QualityEvent, ...]
@@ -183,6 +217,11 @@ class DeploymentResult:
     def transitions(self) -> tuple[DeploymentEvent, ...]:
         """The applied deployments and retrievals."""
         return tuple(e for e in self.events if isinstance(e, DeploymentEvent))
+
+    @property
+    def warnings(self) -> tuple[QualityEvent, ...]:
+        """The warnings."""
+        return tuple(e for e in self.events if e.severity is Severity.WARNING)
 
     def outcome(self) -> CheckOutcome:
         """Return the result as flags and events.
@@ -215,7 +254,7 @@ class DeploymentDetector:
     settings : DeploymentSettings, optional
         Settings; defaults when omitted.
     segmenter : RegimeSegmenter, optional
-        Change-point search and regime labelling; built from ``settings`` when omitted.
+        Indoor-run search; built from ``settings`` when omitted.
     """
 
     __slots__ = ("_segmenter", "_settings")
@@ -231,11 +270,19 @@ class DeploymentDetector:
     @staticmethod
     def _default_segmenter(settings: DeploymentSettings) -> RegimeSegmenter:
         cp = settings.change_points
-        return RegimeSegmenter(
+        search = WindowedChangePoints(
             BinarySegmentation(cp.penalty_factor, cp.min_segment_s, cp.max_change_points),
-            RegimeClassifier(settings.regime),
+            cp.window_s,
+            cp.stride_s,
             cp.min_segment_s,
-            (cp.temp_variance_floor_c2, cp.rh_variance_floor_pct2),
+            cp.variance_floors,
+        )
+        return RegimeSegmenter(
+            search,
+            RegimeClassifier(settings.regime),
+            TransitionContrast(settings.contrast),
+            BoundaryRefiner(cp.min_segment_s, cp.variance_floors),
+            TransportTrimmer(settings.transport),
         )
 
     @property
@@ -254,11 +301,10 @@ class DeploymentDetector:
         ----------
         series : MeasurementSeries
             The measurements; rows flagged with :attr:`DeploymentSettings.ignore_mask` and rows
-            without temperature are not used for detection, but are marked like their
-            neighbours in time.
+            without temperature are not used for detection, but are marked by their time.
         known_deployments : sequence of datetime, optional
             Known deployment times (timezone-aware, e.g. ``placement.from`` of the registry);
-            they override detection (see :mod:`sivin.quality.timeline`).
+            they override detection near themselves (see :mod:`sivin.quality.timeline`).
 
         Returns
         -------
@@ -273,22 +319,28 @@ class DeploymentDetector:
         known = [_aware_utc(k) for k in known_deployments]
         samples = SampleArrays.of(series)
         usable, rh_used = self._usable(samples)
-        segments = self._regimes(samples, usable, rh_used)
-        detected = self._transitions(samples, usable, segments)
+        segments, runs = self._segmenter.split(
+            samples.t_s[usable],
+            samples.temp_c[usable],
+            samples.rh_pct[usable] if rh_used else None,
+        )
+        intervals = [_interval(samples, usable, run) for run in runs if run.applied]
+        unapplied = [_unapplied_warning(samples, usable, run) for run in runs]
+        first_t = samples.timestamp(0) if len(samples) else None
         reconciled = KnownDeploymentReconciler(self._settings.known_tolerance_s).reconcile(
-            detected, known
+            intervals, known, first_t
         )
-        starts_indoor = bool(known) or (
-            bool(segments) and segments[0].verdict.regime is Regime.INDOOR
-        )
-        indoor = DeploymentTimeline(reconciled.transitions, starts_indoor).indoor_mask(samples.t_ns)
+        indoor = indoor_mask(reconciled.intervals, samples.t_ns)
         indoor.setflags(write=False)
-        events = sorted((*reconciled.transitions, *reconciled.warnings), key=lambda e: e.t_utc)
+        events = sorted(
+            (*reconciled.transitions, *reconciled.warnings, *(w for w in unapplied if w)),
+            key=lambda event: event.t_utc,
+        )
         logger.info(
             "Sensor %s: %d transition(s), %d warning(s), %d pre-deployment sample(s).",
             series.sensor_id,
             len(reconciled.transitions),
-            len(reconciled.warnings),
+            len(events) - len(reconciled.transitions),
             int(indoor.sum()),
         )
         records = tuple(
@@ -296,7 +348,7 @@ class DeploymentDetector:
                 samples.timestamp(int(usable[s.start])),
                 samples.timestamp(int(usable[s.end - 1])),
                 s.end - s.start,
-                s.verdict,
+                s.assessment,
             )
             for s in segments
         )
@@ -311,49 +363,57 @@ class DeploymentDetector:
         rh_used = n_base > 0 and int(with_rh.sum()) >= min_rh_fraction * n_base
         return np.flatnonzero(with_rh if rh_used else base), rh_used
 
-    def _regimes(
-        self, samples: SampleArrays, usable: npt.NDArray[np.intp], rh_used: bool
-    ) -> list[RegimeSpan]:
-        return self._segmenter.split(
-            samples.t_s[usable],
-            samples.temp_c[usable],
-            samples.rh_pct[usable] if rh_used else None,
-        )
 
-    def _transitions(
-        self, samples: SampleArrays, usable: npt.NDArray[np.intp], segments: list[RegimeSpan]
-    ) -> list[DeploymentEvent]:
-        # Adjacent regimes always differ (RegimeSegmenter merges equal neighbours), so every
-        # boundary is a transition.
-        events: list[DeploymentEvent] = []
-        for left, right in pairwise(segments):
-            kind = (
-                EventKind.DEPLOYMENT
-                if right.verdict.regime is Regime.OUTDOOR
-                else EventKind.RETRIEVAL
-            )
-            events.append(
-                DeploymentEvent(
-                    kind=kind,
-                    t_utc=samples.timestamp(int(usable[right.start])),
-                    detail=_describe(left.verdict, right.verdict),
-                    confidence=min(left.verdict.confidence, right.verdict.confidence),
-                    origin=ORIGIN,
-                )
-            )
-        return events
-
-
-def _describe(before: RegimeVerdict, after: RegimeVerdict) -> str:
-    shift_c = after.features.temp_median_c - before.features.temp_median_c
-    ratio = max(after.features.daily_spread_c, MIN_SPREAD_FOR_RATIO_C) / max(
-        before.features.daily_spread_c, MIN_SPREAD_FOR_RATIO_C
+def _event(
+    samples: SampleArrays, usable: npt.NDArray[np.intp], boundary: Boundary
+) -> DeploymentEvent:
+    verdict = boundary.verdict
+    assert verdict is not None  # only confirmed boundaries become events
+    return DeploymentEvent(
+        kind=boundary.kind,
+        t_utc=samples.timestamp(int(usable[boundary.position])),
+        detail=verdict.describe(outdoor_first=boundary.kind is EventKind.RETRIEVAL),
+        confidence=verdict.score,
+        origin=ORIGIN,
     )
-    text = f"{before.regime.value} → {after.regime.value}: step {shift_c:+.1f} °C, "
-    text += f"daily spread x{ratio:.1f}"
-    if before.features.rh_median_pct is not None and after.features.rh_median_pct is not None:
-        text += f", humidity {after.features.rh_median_pct - before.features.rh_median_pct:+.0f} %"
-    return text
+
+
+def _interval(
+    samples: SampleArrays, usable: npt.NDArray[np.intp], run: IndoorRun
+) -> IndoorInterval:
+    assert run.deployment is not None  # applied runs always end with a deployment
+    retrieval = None if run.retrieval is None else _event(samples, usable, run.retrieval)
+    deployment = _event(samples, usable, run.deployment)
+    start = None if retrieval is None else retrieval.t_utc
+    return IndoorInterval(start, deployment.t_utc, retrieval, deployment)
+
+
+def _unapplied_warning(
+    samples: SampleArrays, usable: npt.NDArray[np.intp], run: IndoorRun
+) -> QualityEvent | None:
+    """A warning for a run with a confirmed boundary that is not applied, else ``None``."""
+    if not run.partly_confirmed:
+        return None
+    confirmed = [b for b in (run.retrieval, run.deployment) if b is not None and b.confirmed]
+    boundary = confirmed[0]
+    if run.deployment is None:
+        reason = "retrieval without a later redeployment; not applied"
+    else:
+        reason = f"only the {boundary.kind.value} of a possible indoor period is confirmed"
+    verdict = boundary.verdict
+    detail = (
+        reason
+        if verdict is None
+        else f"{reason}: {verdict.describe(boundary.kind is EventKind.RETRIEVAL)}"
+    )
+    return QualityEvent(
+        kind=EventKind.UNCONFIRMED_TRANSITION,
+        t_utc=samples.timestamp(int(usable[boundary.position])),
+        detail=detail,
+        severity=Severity.WARNING,
+        confidence=None if verdict is None else verdict.score,
+        origin=ORIGIN,
+    )
 
 
 def _aware_utc(value: datetime | pd.Timestamp) -> pd.Timestamp:

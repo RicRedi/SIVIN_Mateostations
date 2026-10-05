@@ -35,6 +35,8 @@ class EventKind(StrEnum):
     """Two samples with the same or decreasing timestamps."""
     DEPLOYMENT_MISMATCH = "deployment_mismatch"
     """Detected and known (registry) deployment times disagree."""
+    UNCONFIRMED_TRANSITION = "unconfirmed_transition"
+    """A possible indoor period that is not applied because the evidence is incomplete."""
 
 
 TRANSITION_KINDS: Final = frozenset({EventKind.DEPLOYMENT, EventKind.RETRIEVAL, EventKind.STEP})
