@@ -16,11 +16,12 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 | Class | Module | Responsibility |
 |---|---|---|
 | `PortalSettings` (+ `PortalSelectors`, `PortalTimeouts`) | `settings.py` | URL, folder and tab names, HTML selectors, waiting times, browser options. Frozen pydantic models, unknown keys are rejected. |
-| `PortalCredentials` | `credentials.py` | User name and password, read **only** from the environment (`from_env()`); `repr` masks the password. |
+| `PortalCredentials`, `Secret` | `credentials.py` | User name and password, read **only** from the environment (`from_env()`). The password is a `Secret`: masked in `repr`/`str`/`asdict`, not picklable. |
 | `WebDriverFactory`, `ChromeDriverFactory`, `driver_factory_registry` | `driver.py` | Start the browser with download preferences. New browsers are new registered subclasses. |
-| `PortalClient` | `client.py` | Context manager owning one browser: `login()`, `list_devices()`, `download_export(device)`, `return_to_folder()`. |
+| `PortalClient` | `client.py` | Context manager owning one browser: `login()`, `list_devices()`, `download_export(device)`, `back_to_device_list()`, `return_to_folder()`. Single-threaded use only. |
+| `PortalPage` | `page.py` | Locators, explicit waits and clicks on the portal's pages (used by the client). |
 | `ViewModelParser` | `viewmodel.py` | Pure parser of the DotVVM viewmodel JSON into `PortalDevice` objects. |
-| `DownloadWatcher` | `watcher.py` | Detects the file a click produced: a *new* file (not in the snapshot taken before the click), not partial, with a stable size. |
+| `DownloadWatcher` | `watcher.py` | Detects the file a click produced: a *new*, non-empty, size-stable file that is not a late file of an earlier download and not another sensor's export. |
 | `PortalSession` | `session.py` | One run: login, device list, one export per device; a failing device is recorded, the run goes on. Returns `SessionResult`. |
 
 `import sivin.ingest.portal` loads only the Selenium-free parts (settings, credentials, value
@@ -46,20 +47,29 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
    `ViewModelError`. New devices in the portal are therefore downloaded without any change here.
 4. **For each device:**
    1. wait for the spinner to disappear, click the link containing the device name,
-      pause `settle_delay_s`, wait for the spinner;
+      pause `device_settle_s` (3 s, the legacy value), wait for the spinner;
    2. click the tab containing `Meteorologická data`, wait for the spinner, pause
-      `settle_delay_s`;
-   3. wait for the first **visible** button matching `excel_button_xpath`
-      (`button` with an `i.mdi-file-excel` icon; the other tabs contain hidden ones) — this is the
-      button of the *Historie meteorologických dat* section;
+      `tab_settle_s` (2 s, the legacy value);
+   3. wait for a visible Excel button (`button` with an `i.mdi-file-excel` icon) **inside the
+      section headed `export_section_name`** (*Historie meteorologických dat*,
+      `selectors.section_button_xpath_template`). That the button is visible also shows that the
+      meteorological tab is really active (other tabs have Excel buttons too). If no such button
+      appears, the first visible Excel button anywhere is used and a WARNING is logged (the
+      legacy rule) — then check the section settings;
    4. take a snapshot of the download directory, scroll the button into view and click it;
-   5. wait until a new complete file appears (see below) and return its path;
-   6. `driver.back()` to the device list (as the legacy script did; this assumes that switching
-      the tab adds no browser history entry).
-5. **A failing device** (any Selenium exception, a missing button, a download timeout, a file
-   system error) is recorded as `DeviceFailure(device, reason)`. The client then reloads
-   `portal_url` and opens the folder again (`return_to_folder()`), and the run continues with the
-   next device. If even that fails, it is logged and the next devices fail on their own.
+   5. wait until the new complete file appears (see below) and return its path; a name without
+      any sensor serial is accepted with a WARNING;
+   6. go back to the device list (`back_to_device_list()`): `driver.back()` as in the legacy
+      script, then wait up to `list_check_s` for the device list (the link of the first listed
+      device). If it is not there — e.g. because the tab switch added a history entry — the
+      portal is reloaded and the folder opened again. A failure here is logged; the download is
+      kept.
+5. **A failing device** (any Selenium exception, a missing button, a download timeout or an
+   incomplete file, a file system error) is retried after the client has reloaded `portal_url`
+   and opened the folder again (`return_to_folder()`), up to `attempts_per_device` attempts
+   (default 2). Then it is recorded as `DeviceFailure(device, reason)` (the first error, and the
+   last one if it differed) and the run continues with the next device. If the reload fails
+   too, it is logged and the next devices fail on their own.
 6. **Close the browser** (always, also after an error) and return
    `SessionResult(downloads, failures)`. `result.ok` is `True` when nothing failed; the caller
    decides the exit code.
@@ -73,16 +83,28 @@ returned the *previous* export when a download failed:
 - after the click it polls every `poll_interval_s` and only considers files that were **not**
   there before, whose names do not end with `.crdownload` or `.tmp` and do not start with `.`
   (Chrome on Linux first writes a hidden `.com.google.Chrome.*` file);
-- a candidate is accepted when its size is the same in two consecutive polls;
-- after `download_wait_s` without such a file it raises `DownloadTimeoutError`.
+- a file whose name is the finished name of a download that was still unfinished at the
+  snapshot (`A.xlsx` for `A.xlsx.crdownload`) is never accepted: it is the late end of an
+  earlier, timed-out download. Files left in the directory by a timed-out wait are also
+  remembered and ignored by later waits;
+- when the name contains a sensor serial (the legacy log shows names like
+  `MeteoData_8615620 77678271.xlsx`), it must be the serial of the device being downloaded;
+  another sensor's export is skipped with a WARNING. This also catches late downloads whose
+  partial name gave no hint (Chrome sometimes writes `Unconfirmed 123.crdownload`);
+- a candidate is accepted when its size is the same in two consecutive polls and at least
+  `min_export_size_bytes` (an empty file is never an export);
+- after `download_wait_s` it raises `DownloadIncompleteError` if only too small files appeared,
+  otherwise `DownloadTimeoutError`. A file first seen exactly at the deadline gets one more poll
+  to be confirmed.
 
 When the browser saves a second export of the same day, it appends ` (1)` to the name; that is a
 new name and therefore detected. `SensorId.parse` understands these names.
 
-Only explicit waits (`WebDriverWait` with expected conditions) are used. The one fixed pause is
-`timeouts.settle_delay_s` (default 1 s, the legacy script slept 3 s and 2 s), because DotVVM may
-still re-render after the spinner has gone; it is **to be verified** on the real portal and can
-be set to 0.
+Only explicit waits (`WebDriverWait` with expected conditions) are used. The fixed pauses are
+`timeouts.device_settle_s` and `timeouts.tab_settle_s`, kept at the legacy 3 s and 2 s because
+DotVVM may still re-render after the spinner has gone (the spinner may also not have appeared
+yet when it is first checked). They are **to be tuned** on the first real run; with the
+section-scoped button wait they can probably be shortened.
 
 ## Settings
 
@@ -95,6 +117,9 @@ values.
 | `portal_url` | `https://lemon.e-service.cz/` | URL | Start page (redirects to the login). |
 | `folder_name` | `SIVIN VUT` | text | Folder link that lists our devices. |
 | `meteo_tab_name` | `Meteorologická data` | text | Device tab with the export. |
+| `export_section_name` | `Historie meteorologických dat` | text | Heading of the section whose Excel button is clicked. |
+| `attempts_per_device` | 2 | count | Attempts per device before it is recorded as failed. |
+| `min_export_size_bytes` | 1 | B | Smaller files are incomplete downloads. |
 | `selectors.username_id` | `username` | HTML id | User name input. |
 | `selectors.password_id` | `password` | HTML id | Password input. |
 | `selectors.submit_css` | `input[type='submit']` | CSS | Login button. |
@@ -102,16 +127,19 @@ values.
 | `selectors.viewmodel_id` | `__dot_viewmodel_root` | HTML id | Hidden input with the viewmodel JSON. |
 | `selectors.link_xpath_template` | `//a[contains(., {text})]` | XPath | Folder and device links; `{text}` becomes a quoted literal. |
 | `selectors.tab_xpath_template` | `//a[contains(text(), {text})]` | XPath | Tab link. |
-| `selectors.excel_button_xpath` | `//button[.//i[contains(@class, 'mdi-file-excel')]]` | XPath | Excel export buttons (the first visible one is clicked). |
+| `selectors.excel_button_xpath` | `//button[.//i[contains(@class, 'mdi-file-excel')]]` | XPath | All Excel export buttons; the first visible one is only the fallback. |
+| `selectors.section_button_xpath_template` | heading containing `{text}` → nearest ancestor with an Excel button → its Excel buttons | XPath | Excel button of the export section ([to be verified] against the real HTML). |
 | `timeouts.element_wait_s` | 15 | s | Maximum wait for an element or the spinner. |
 | `timeouts.download_wait_s` | 30 | s | Maximum wait for the export file. |
 | `timeouts.poll_interval_s` | 0.5 | s | Polling interval of waits and of the download watcher. |
-| `timeouts.settle_delay_s` | 1.0 | s | Fixed pause after opening a device and the tab ([to be verified]). |
+| `timeouts.device_settle_s` | 3.0 | s | Fixed pause after opening a device (legacy value, [to be tuned]). |
+| `timeouts.tab_settle_s` | 2.0 | s | Fixed pause after switching to the tab (legacy value, [to be tuned]). |
+| `timeouts.list_check_s` | 5.0 | s | Wait for the device list after `back()` before reloading. |
 | `headless` | `true` | flag | Run without a window. Set `false` to watch the browser locally. |
 | `browser` | `chrome` | name | Registered `WebDriverFactory`. |
 | `download_dir` | `data/downloads` | path | Relative to the project root (ignored by git via `/data/`); the caller resolves it with `PortalSettings.resolved_against(ProjectPaths)`. |
 | `chrome_binary` | unset | path | Browser executable; falls back to `$CHROME_BINARY`, then to the browser chromedriver finds. |
-| `chromedriver_path` | unset | path | chromedriver; falls back to `chromedriver` on `PATH`, then to webdriver-manager (downloads a matching driver, needs internet). |
+| `chromedriver_path` | unset | path | chromedriver; falls back to `$CHROMEWEBDRIVER/chromedriver` (GitHub-hosted runners), then `chromedriver` on `PATH`, then webdriver-manager (downloads a matching driver, needs internet). |
 | `chrome_arguments` | `["--window-size=1920,1080"]` | flags | Extra Chrome arguments; add `--no-sandbox` only when running as root in a container. |
 | `partial_download_suffixes` | `[".crdownload", ".tmp"]` | suffixes | Unfinished downloads. |
 | `ignored_download_prefixes` | `["."]` | prefixes | Hidden temporary files. |
@@ -123,12 +151,15 @@ values.
 | `SIVIN_USER` | yes | Portal user name. |
 | `SIVIN_PASSWORD` | yes | Portal password. |
 | `CHROME_BINARY` | no | Chrome/Chromium executable when `chrome_binary` is not set. |
+| `CHROMEWEBDRIVER` | no | Directory with chromedriver (set by GitHub-hosted runner images). |
 
 Credentials come **only** from the environment: locally from `.env` (git-ignored), in GitHub
 Actions from repository secrets. They are never written to the configuration, never logged and
 masked in `repr`. While they are typed, Selenium's request logger
 (`selenium.webdriver.remote.remote_connection`, which logs request bodies at DEBUG level) is
-raised to WARNING, so a DEBUG run does not leak them either.
+raised to WARNING, so a DEBUG run does not leak them either. That level is process-global;
+a lock serialises the change between threads, but the client as a whole is meant for
+**single-threaded use** (one client at a time, as the CLI and the workflow run it).
 
 ## Running it locally
 
@@ -170,9 +201,12 @@ setting in `config/sivin.yaml` (no code change needed):
 | `PortalLoginError: The login form was not found` | `selectors.username_id`, `selectors.password_id`, `selectors.submit_css`, `portal_url` |
 | `PortalLoginError: No link 'SIVIN VUT' after login` | credentials first; then `folder_name`, `selectors.link_xpath_template` |
 | `ViewModelError: ... has no 'viewModel.Scene...'` or `No section ... has a 'Devices' list` | the viewmodel structure changed: `selectors.viewmodel_id`, and the keys in `viewmodel.py` (code change) |
-| `TimeoutException: No link for device '...'` | `selectors.link_xpath_template`; or the page after `back()` is not the device list |
+| `TimeoutException: No link for device '...'` | `selectors.link_xpath_template`; if every device fails like this, also `selectors.viewmodel_id` / the folder page |
+| WARNING `No Excel button in section ...` | `export_section_name`, `selectors.section_button_xpath_template` |
+| `DownloadIncompleteError` | the portal produced an empty file; `min_export_size_bytes` |
+| WARNING `Skipping ...: it is the export of ...` | a late download of another sensor was seen and ignored; check `download_wait_s` |
 | `TimeoutException: Tab 'Meteorologická data' is not clickable.` | `meteo_tab_name`, `selectors.tab_xpath_template` |
-| `ExportButtonNotFoundError` | `selectors.excel_button_xpath`; the window size in `chrome_arguments` |
+| `ExportButtonNotFoundError` | `selectors.excel_button_xpath`, `selectors.section_button_xpath_template`; the window size in `chrome_arguments` |
 | `TimeoutException: Spinner #UpdateProgress is still visible.` | `selectors.spinner_id`, `timeouts.element_wait_s` |
 | `DownloadTimeoutError` | `timeouts.download_wait_s`; Chrome's download preferences; free disk space |
 
@@ -187,9 +221,10 @@ setting in `config/sivin.yaml` (no code change needed):
   `--disable-dev-shm-usage`) to `chrome_arguments`.
 - **Downloads land elsewhere or a "Save as" dialog appears** — `download_dir` must be absolute
   (`resolved_against`); the factory refuses a relative one.
-- **Every device after the first fails with "No link for device"** — the portal's back
-  navigation does not return to the device list. The client recovers after each failure by
-  reloading the portal; if that also fails, the log says "Returning to the device list failed".
+- **INFO "back() did not return to the device list; reloading the portal" for every device** —
+  the portal's history differs from the legacy assumption; this costs one reload per device but
+  works. If devices still fail with "No link for device" after the reload, the log also says
+  "Returning to the device list failed" and the folder/device-link selectors need checking.
 - **Old exports in `download_dir`** do no harm: only files created after the click are taken.
   Downloaded files are not deleted by the client; the store (WP-1.4) decides what happens to
   them.
