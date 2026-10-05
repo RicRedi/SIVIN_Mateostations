@@ -266,8 +266,8 @@ class Sensor(BaseModel):
         Municipality (obec) the sensor stands in, e.g. ``"Mikulov"``; the first grouping level
         of the web's sensor picker.
     track : str or None
-        Vineyard track (viniční trať) within the municipality, e.g. ``"Turold"``; the second
-        grouping level.
+        Vineyard track (viniční trať) within the municipality, as registered for the wine
+        region; the second grouping level.
     variety : str or None
         Grape variety at the sensor.
     status : {"active", "inactive", "retired"}
@@ -308,7 +308,8 @@ class Sensor(BaseModel):
     track: str | None = Field(
         min_length=1,
         description=(
-            "Vineyard track (viniční trať) within the municipality, e.g. 'Turold'; null if unknown."
+            "Vineyard track (viniční trať) within the municipality, as registered for the "
+            "wine region; null if unknown."
         ),
     )
     variety: str | None = Field(

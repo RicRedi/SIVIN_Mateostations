@@ -155,7 +155,7 @@
               "type": "null"
             }
           ],
-          "description": "Vineyard track (viniční trať) within the municipality, e.g. 'Turold'; null if unknown.",
+          "description": "Vineyard track (viniční trať) within the municipality, as registered for the wine region; null if unknown.",
           "title": "Track"
         },
         "variety": {

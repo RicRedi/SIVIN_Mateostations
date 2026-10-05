@@ -5,8 +5,8 @@ Static map portal for the SIVIN vineyard weather sensors. It is served by GitHub
 site data contract, [MIGRATION_PLAN.md §2.6](../MIGRATION_PLAN.md) (`schema_version: 1`). There
 is no server and no API key.
 
-Stack: TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite, Leaflet (map), uPlot (time
-series), ESLint (typescript-eslint, strict type-checked), Vitest (+ jsdom for DOM components).
+Stack: TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite, Leaflet (map) with
+`leaflet.markercluster` (marker clustering, bundled), uPlot (time series), ESLint (typescript-eslint, strict type-checked), Vitest (+ jsdom for DOM components).
 No UI framework: components are plain TypeScript classes that own a DOM subtree.
 
 ## Run locally
@@ -38,11 +38,13 @@ main.ts  (composition root: builds every object, injects collaborators through c
   ├─ data/      DataClient ── fetch + cache + validate ──► contract/ (types + validators)
   ├─ domain/    TimeSeries, RawSeries, Resampler, QcMask, TimeZone,
   │             TimeWindow, WindowSpec, TimeWindowFactory, ResolutionPolicy, alignSeries
-  ├─ app/       SensorCatalog, ChartDataLoader, ChartPresenter        (no DOM)
-  ├─ state/     Store<T>, AppState, HashStateCodec                    (no DOM)
+  ├─ app/       SensorCatalog, SensorGrouping, SensorQuery,
+  │             ChartDataLoader, ChartPresenter                       (no DOM)
+  ├─ state/     Store<T>, AppState, GroupSelection, HashStateCodec    (no DOM)
   ├─ i18n/      I18n, LanguagePreference, cs/de/en dictionaries
-  └─ ui/        App, HeaderView, MapView, SensorPanel, SensorList, TimeWindowControl,
+  └─ ui/        App, HeaderView, MapView, ClusterIcon, SensorPanel, TimeWindowControl,
                 SeriesChart, EventMarkers, SensorColors, HashSync, palette, dom
+                picker/  SensorPicker, PickerTree, SensorChips
 ```
 
 Dependencies point downwards only: `ui` → `app` → `domain`/`data` → `contract`. There are no
@@ -61,14 +63,20 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `domain/TimeZone` | Unix seconds ↔ wall-clock time of an IANA zone via `Intl` (DST-aware): local midnights, shifting by local days. |
 | `domain/WindowSpec`, `TimeWindow`, `TimeWindowFactory`, `ResolutionPolicy` | What the user asked for (`24h` / `7d` / `30d` / `season` / `custom`) → a concrete `[startT, endT)` with a resolution. Details below. |
 | `domain/alignSeries` | Puts several series on one union time axis for uPlot (`undefined` = no sample, skipped; `null` = gap). |
-| `app/SensorCatalog` | Joins `sensors.geojson`, manifest and `latest.json` into `SensorInfo` per sensor. |
+| `app/SensorCatalog` | Joins `sensors.geojson`, manifest and `latest.json` into `SensorInfo` per sensor (position, elevation, `municipality`, `track`, `variety`, registry `status`, latest values). |
+| `app/SensorGrouping` | Groups sensors municipality → vineyard track for the picker: names in Czech collation with natural number order (`Trať 2` before `Trať 10`), the unassigned group (`null`) last; within a track by label, retired sensors last. |
+| `app/SensorQuery` | The picker's search: every word of the query must occur in id, label, municipality, track or variety; case and diacritics are ignored (`foldText`: NFD, combining marks removed, lower case). |
+| `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and "select all" of a group within the comparison limit: a fully selected group is removed; otherwise its unselected sensors are appended in group order up to 8 and the rest is reported as truncated. |
 | `app/ChartDataLoader` | Loads raw / hourly / daily series and in-window events **per sensor** (`Promise.allSettled`): a sensor whose series fail becomes a failure entry shown as a per-sensor error above the chart, the other sensors still render. A missing or invalid events file degrades to "no events" with a `console.warn`. |
 | `app/ChartPresenter` | Resolves the window from the state (falling back to the default window if a spec cannot be resolved), shows "loading", the data or an error; drops responses of superseded requests. |
 | `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution. Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
 | `i18n/I18n`, `LanguagePreference` | UI strings cs (default) / de / en, manifest labels, number/date formatting. Lookup: language → Czech → key. The language is stored in `localStorage` (every access in `try/catch`). Priority at start: URL hash → stored preference → Czech. |
-| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. |
-| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor list, metadata and latest values of the selected sensors, time-window controls, chart. |
-| `ui/SensorList` | Checkbox list of all sensors (keyboard path to the comparison). |
+| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. **Clustering** (`leaflet.markercluster`): markers closer than about one marker diameter on screen (`CLUSTER_RADIUS_PX` = 28 px) merge into a grey badge with the count; a click on a badge, or Enter on a focused one, zooms in to its sensors (at the highest zoom it spreads them). A badge that hides a selected sensor has a blue ring. Leaflet re-creates a marker's element when it leaves a cluster, so the keyboard attributes are re-applied on every `add`. |
+| `ui/ClusterIcon` | Content and classes of a cluster badge: the count, an accessible name ("Skupina čidel: 5 – přiblížit") and the selection ring. Neutral grey on purpose: the temperature colours belong to single sensors. |
+| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor picker, metadata (incl. municipality and track) and latest values of the selected sensors, time-window controls, chart. |
+| `ui/picker/SensorPicker` | Sensor selection that scales to larger networks (WP-3.5), details below. |
+| `ui/picker/PickerTree` | The grouped checkbox list (composite of group nodes and sensor rows). The DOM is built once; `update` only shows, hides and checks, so focus stays where it is while typing or toggling. |
+| `ui/picker/SensorChips` | The selected sensors as removable chips in their line colour, in selection order; they double as the chart legend. |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
 | `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
 | `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site` (the latter only if the pipeline is configured to publish it), grey bands for `off_site` (below). |
@@ -76,6 +84,34 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
 | `ui/App` | Coordinates store and views: user actions update the store, changes re-render views and reload the chart. |
 | `ui/HashSync` | Two-way binding between store and `location.hash` (`replaceState`, no history spam). |
+
+### Sensor picker
+
+Owner decision 2026-10-05: the selection must scale beyond a handful of sensors. The panel shows
+
+- a **disclosure button** "Čidla (n/N) ▾" (`aria-expanded`, `aria-controls`). It opens a panel
+  with a **search field** (focused on open) and the sensors grouped **municipality → vineyard
+  track** (`municipality`, `track` of the registry; a sensor without a value is listed under
+  *Nezařazeno* on that level). Each group has a disclosure button with its name and
+  "selected/visible" count, and a **tri-state "select all" checkbox** over its *visible*
+  sensors (so "select all" during a search selects the matches only). Selecting a group
+  respects the 8-sensor comparison limit: it adds sensors in list order until 8 are selected and
+  says how many were added ("Srovnat lze nejvýše 8 čidel – ze skupiny bylo přidáno jen 6.");
+  a fully selected group is deselected.
+- **Search** filters by id, label, municipality, track and variety, case- and
+  diacritics-insensitive, every word must match ("ryzl mik"). Starting a search expands all
+  groups. Retired sensors are listed last in their track, struck through and greyed, with
+  "vyřazeno"; the variety is shown under the label.
+- **Chips** below the button: the compared sensors in their line colour with a × button
+  ("Odebrat … ze srovnání"); removing one moves focus to the next chip, or to the button.
+- **Keyboard:** Tab through the controls (native checkboxes and buttons), ↓/↑ move between the
+  visible controls of the open panel, Escape closes it and returns focus to the button; a click
+  outside closes it. On phones (≤ 760 px) the open panel is a **full-screen sheet** with a
+  title "Výběr čidel (n/N)" and a "Hotovo" button.
+- The selection stays in the URL hash (`#s=…`) as before; the open/closed state, the search and
+  collapsed groups are not part of the URL.
+
+Screenshots: `docs/wp_log/img/WP-3.5-*.png`.
 
 ### Time windows and resolution
 
@@ -202,8 +238,14 @@ available through `DataClient.getIndices` but not displayed yet (WP-3.4).
 
 `web/public/data/` holds a **synthetic** data set generated by `scripts/generate-fixture.mjs`
 (seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, a fixed synthetic
-sampling step with a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB; sensor 77799986 has one synthetic
-`off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). It is
+sampling step with a per-sensor phase and ±3 s clock jitter; sensor 77799986 has one synthetic
+`off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). To exercise the picker and the
+clustering at scale (WP-3.5) it has **16 more synthetic sensors** (ids `9xxxxxxx`, label
+"… (demo)") with data for September 2026 only, so there are 20 sensors in the fictional
+municipalities "Obec A/B/C" with tracks "Trať 1–6", one sensor without a track, two without any
+grouping, one `inactive` and one `retired` sensor (≈ 1.4 MB in total). Names, ids and varieties
+of these sensors are invented. The registry in the fixture is the public projection (`notes`
+and `note` are `null`), like the pipeline's output. It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
 
 The badge is controlled at build time by `VITE_DEMO_DATA`: any value other than `false`
@@ -232,7 +274,12 @@ What the real data look like to the portal:
 - `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
   optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
   history); a sensor whose last pipeline build failed has `data_status: "error"` and
-  `last_built_at`. The UI does not use them yet (WP-3.4).
+  `last_built_at`. The UI does not use them yet (WP-3.4); the picker takes the status from
+  `sensors.geojson`.
+- `sensors.geojson` is the **public projection** of the registry: `notes` and every placement's
+  `note` are `null` (owner decision 2026-10-05). `municipality` and `track` group the picker;
+  missing keys are read as `null`. A `site` key (registry format before 2026-10-05) is ignored
+  with a console warning.
 - **Staleness at viewing time.** The manifest carries `stale_after_s`; `SensorCatalog.build`
   marks a latest sample stale if `latest.json` says so **or** if it is older than
   `stale_after_s` at the current time (`withStaleness`), so a pipeline that stopped publishing
@@ -283,6 +330,8 @@ The contract fixes the raw columns to `temp_c` and `rh_pct` and the daily column
 
 `npm test` runs Vitest with V8 coverage over `src/**` and fails below 85 % of lines. Excluded
 from coverage, because they are thin glue over Leaflet, uPlot/canvas or the page bootstrap and
-are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts`,
-`src/ui/SeriesChart.ts`. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
+are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts` (including the
+clustering glue), `src/ui/SeriesChart.ts`. The picker logic (`SensorGrouping`, `SensorQuery`,
+`GroupSelection`) has unit tests; `SensorPicker`, `PickerTree`, `SensorChips` and `ClusterIcon`
+are tested under jsdom on the 20-sensor fixture. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
 other DOM components are tested under jsdom.

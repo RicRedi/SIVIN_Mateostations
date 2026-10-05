@@ -85,7 +85,17 @@ contract), then:
 
 ### `sensors.geojson`
 
-The registry file `paths.sensors_file`, copied byte for byte.
+The **public projection** of the registry file `paths.sensors_file` (owner decision
+2026-10-05: internal notes are not published): the same sensors, keys and order as the
+registry, with every sensor's `notes` and every placement's `note` set to `null`. Everything
+else is published as is, including `portal_name` (required by the contract), `municipality`,
+`track`, `variety`, `status` and the placement history. The text has the canonical form of the
+registry file (2-space indentation). The registry file in the repository keeps its notes.
+
+`PublicRegistryWriter` (`sivin.site.site_files`) writes it with
+`PublicRegistryProjection` (`sivin.site.public_registry`); `tests/site/test_service.py` builds a
+site from a registry whose notes carry marker texts and checks that none of them reaches any
+output file.
 
 ### `latest.json`
 
@@ -195,7 +205,7 @@ A build
    reading or checking its data;
 3. quality-checks and writes the other sensors, computes their indices, and rebuilds every
    sensor when the seasons differ from the last build;
-4. writes manifest, registry copy, `latest.json` and the indices files on every build
+4. writes manifest, public registry, `latest.json` and the indices files on every build
    (`generated_at` changes), but any file only when its bytes change;
 5. deletes files under `series/`, `events/` and `indices/` that are no longer produced (removed
    sensors, months or seasons); other files in the directory are never touched.

@@ -20,7 +20,8 @@ The file is a GeoJSON `FeatureCollection` with one `Point` feature per sensor:
         "id": "77678271",
         "portal_name": "8615620 77678271",
         "label": "77678271 (VUT)",
-        "site": null,
+        "municipality": null,
+        "track": null,
         "variety": null,
         "status": "active",
         "placements": [
@@ -51,7 +52,8 @@ The file is a GeoJSON `FeatureCollection` with one `Point` feature per sensor:
 | `id` | string, 8 digits | yes | Canonical id: the device serial number, e.g. `"77678271"`. Only the canonical form is accepted here. |
 | `portal_name` | string | yes | Device name in the provider's portal, e.g. `"8615620 77678271"`. Never `null` (the web portal relies on it). It must contain the sensor's own serial. |
 | `label` | string | yes | Human-readable name, e.g. the GPX waypoint name `"77678271 (VUT)"`. |
-| `site` | string or `null` | yes | Vineyard or site name (owner question Q4). |
+| `municipality` | string or `null` | yes | Municipality (*obec*) the sensor stands in, e.g. `"Mikulov"`. First grouping level of the web's sensor picker. See [Municipality and track](#municipality-and-track). |
+| `track` | string or `null` | yes | Vineyard track (*viniční trať*) within the municipality, as registered for the wine region. Second grouping level. |
 | `variety` | string or `null` | yes | Grape variety at the sensor (owner question Q4). |
 | `status` | `"active"`, `"inactive"`, `"retired"` | yes | Life-cycle state, see below. |
 | `placements` | array of placements, ≥ 1 | yes | Placement history in time order. |
@@ -59,6 +61,48 @@ The file is a GeoJSON `FeatureCollection` with one `Point` feature per sensor:
 
 **Every key is required**, including the nullable ones: write `null`, do not leave the key
 out. Strings must not be empty (use `null` instead where `null` is allowed).
+
+### Municipality and track
+
+The web portal's sensor picker groups the sensors in two levels, municipality → vineyard track
+(owner decision 2026-10-05); a sensor without a value is listed under *Nezařazeno*
+(unassigned) on that level. Fill them in like this:
+
+- `municipality`: the official name of the municipality (*obec*) whose cadastral area the
+  vineyard lies in, written exactly the same way for every sensor of that municipality
+  (grouping compares the text; `"Mikulov"` and `"Mikulov "` would be two groups — the loader
+  rejects empty strings but not trailing spaces, so take care).
+- `track`: the name of the vineyard track (*viniční trať*) as registered for the wine region,
+  again spelled identically for all sensors of one track. Use `null` if the vineyard is not in
+  a registered track or the name is not known yet.
+- Both stay `null` until known. **Do not derive them from the coordinates by guesswork.**
+
+Examples (fictional names, as in the web's synthetic fixture; not the places of our sensors):
+
+```json
+"municipality": "Obec A",   "track": "Trať 1",   "variety": "Ryzlink vlašský"
+"municipality": "Obec A",   "track": null,       "variety": null
+"municipality": null,       "track": null,       "variety": null
+```
+
+Groups are sorted by name (Czech collation, numbers in natural order: `Trať 2` before
+`Trať 10`); within a track, sensors are sorted by `label` and retired sensors come last.
+
+**Older files with `site`.** Until 2026-10-05 the registry had a single key `site`. An old file
+still loads: `site` is read as `track`, `municipality` as `null`, and a warning names the sensor;
+saving the registry writes the new keys. A sensor that has `site` *and* `municipality` or
+`track` is an error (`'site' was replaced by 'municipality' and 'track' (2026-10-05); remove
+'site', …`). The JSON Schema knows only the new keys, so schema validation (and the web admin
+mode, WP-3.3) rejects `site`. The web portal ignores a `site` key in the published file with a
+console warning.
+
+### What is published
+
+`sivin build-site` publishes `site/data/sensors.geojson` as the **public projection** of this
+file: the same sensors, keys and order, with every sensor's `notes` and every placement's
+`note` set to `null` (owner decision 2026-10-05: internal notes are not published). Everything
+else, `municipality`, `track`, `variety` and `portal_name` included, is public. The file in
+the repository keeps its notes. See [site.md](site.md).
 
 ### Placement
 
@@ -139,8 +183,8 @@ same changes are `SensorRegistry.with_sensor`, `.with_moved` and `.without`, fol
 
 ### Add a sensor
 
-Append a feature with a new `id`, its `portal_name`, a `label`, `site`/`variety`/`notes`
-(`null` if unknown), `status: "active"` and one placement with `to: null` whose `from` is the
+Append a feature with a new `id`, its `portal_name`, a `label`,
+`municipality`/`track`/`variety`/`notes` (`null` if unknown), `status: "active"` and one placement with `to: null` whose `from` is the
 instant the sensor was put up in the vineyard (UTC, `Z`). Set `geometry.coordinates` to
 `[lon, lat]` of that placement.
 
@@ -347,7 +391,9 @@ GeoJsonRegistryStore().save(SensorRegistry(sensors), Path('sensors/sensors.geojs
 ```
 
 The deployment instant `2025-12-01T00:00:00Z` is a **placeholder** until the owner supplies the
-real dates (MIGRATION_PLAN Q3); `site` and `variety` are `null` until Q4 is answered.
+real dates (MIGRATION_PLAN Q3); `variety` is `null` until Q4 is answered. The key `site` of
+the generated file was replaced by `municipality` and `track` (both `null`, to be filled in by
+the owner) on 2026-10-05 (WP-3.5).
 
 The JSON Schema is regenerated with:
 
