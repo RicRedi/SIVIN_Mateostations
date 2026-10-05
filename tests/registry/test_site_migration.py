@@ -75,17 +75,40 @@ class TestModel:
         sensor = Sensor.model_validate(_old_properties(make_sensor, None))
         assert (sensor.municipality, sensor.track) == (None, None)
 
-    @pytest.mark.parametrize("key", ["municipality", "track"])
-    def test_site_together_with_a_new_key_is_an_error(
-        self, make_sensor: SensorFactory, key: str
+    @pytest.mark.parametrize(
+        ("present", "fix"),
+        [
+            (("municipality",), "remove 'site' and add 'track' (null if unknown)"),
+            (("track",), "remove 'site' and add 'municipality' (null if unknown)"),
+            (("municipality", "track"), "remove 'site'"),
+        ],
+    )
+    def test_site_together_with_a_new_key_names_the_fix(
+        self, make_sensor: SensorFactory, present: tuple[str, ...], fix: str
     ) -> None:
-        document = make_sensor().model_dump() | {"site": "x"}
-        if key == "municipality":
-            del document["track"]
-        else:
-            del document["municipality"]
-        with pytest.raises(ValidationError, match=rf"remove 'site'.*'{key}'"):
+        document = _old_properties(make_sensor, "x") | {key: None for key in present}
+        with pytest.raises(ValidationError) as caught:
             Sensor.model_validate(document)
+        (error,) = caught.value.errors()
+        assert error["msg"].endswith(fix)
+        assert "replaced by 'municipality' and 'track'" in error["msg"]
+
+    @pytest.mark.parametrize("site", ["", "   ", 7])
+    def test_bad_site_value_is_reported_on_site(
+        self, make_sensor: SensorFactory, site: object
+    ) -> None:
+        with pytest.raises(ValidationError) as caught:
+            Sensor.model_validate(_old_properties(make_sensor, None) | {"site": site})
+        (error,) = caught.value.errors()
+        assert (
+            "'site' (deprecated, read as 'track') must be a non-empty string or null"
+            in (error["msg"])
+        )
+        assert "track" not in [str(part) for part in error["loc"]]
+
+    def test_site_value_is_normalised(self, make_sensor: SensorFactory) -> None:
+        sensor = Sensor.model_validate(_old_properties(make_sensor, "  Trať   1 "))
+        assert sensor.track == "Trať 1"
 
     def test_replaced_with_site_is_an_error(self, make_sensor: SensorFactory) -> None:
         with pytest.raises(ValidationError, match="replaced by 'municipality' and 'track'"):
@@ -129,3 +152,37 @@ class TestFile:
         ]
         assert all(p["municipality"] is None and p["track"] is None for p in properties)
         assert all("site" not in p for p in properties)
+
+
+class TestWhitespace:
+    @pytest.mark.parametrize("key", ["label", "municipality", "track", "variety"])
+    def test_names_are_stripped_and_collapsed_with_a_warning(
+        self, make_sensor: SensorFactory, key: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        document = make_sensor().model_dump() | {key: "  Obec \t A  (synthetic) "}
+        with caplog.at_level(logging.WARNING, logger="sivin.registry.sensor_input"):
+            sensor = Sensor.model_validate(document)
+        assert getattr(sensor, key) == "Obec A (synthetic)"
+        assert f"'{key}' '  Obec \\t A  (synthetic) ' has extra whitespace" in caplog.text
+        assert "11112222" in caplog.text
+
+    def test_clean_names_do_not_warn(
+        self, make_sensor: SensorFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            make_sensor(municipality="Obec A", track="Trať 1")
+        assert caplog.text == ""
+
+    def test_whitespace_only_is_rejected(self, make_sensor: SensorFactory) -> None:
+        with pytest.raises(ValidationError, match="municipality"):
+            Sensor.model_validate(make_sensor().model_dump() | {"municipality": "   "})
+
+    def test_file_with_padded_names_saves_cleaned(
+        self, make_sensor: SensorFactory, tmp_path: Path
+    ) -> None:
+        properties = make_sensor().model_dump(mode="json") | {"municipality": "Mikulov "}
+        path = _old_file(tmp_path, properties)
+        store = GeoJsonRegistryStore()
+        store.save(store.load(path), path)
+        saved = json.loads(path.read_text(encoding="utf-8"))["features"][0]["properties"]
+        assert saved["municipality"] == "Mikulov"

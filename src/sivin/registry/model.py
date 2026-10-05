@@ -31,6 +31,7 @@ from pydantic import (
 )
 
 from sivin.core.ids import SERIAL_DIGITS, SensorId
+from sivin.registry.sensor_input import migrate_site, normalise_names
 from sivin.registry.settings import (
     MAX_LATITUDE_DEG,
     MAX_LONGITUDE_DEG,
@@ -47,16 +48,6 @@ SensorStatus = Literal["active", "inactive", "retired"]
 (e.g. in service), the last placement may be open or closed. ``retired``: permanently out of
 use, no placement is open.
 """
-
-DEPRECATED_SITE_KEY: Final = "site"
-"""Registry key of the site name before 2026-10-05, replaced by ``municipality`` and ``track``.
-
-Owner decision 2026-10-05 (MIGRATION_PLAN §0.5): the web groups sensors by municipality and
-vineyard track. An old file with ``site`` still loads; the value is read as ``track``.
-"""
-
-SITE_REPLACEMENT_KEYS: Final = ("municipality", "track")
-"""The keys that replaced :data:`DEPRECATED_SITE_KEY`."""
 
 _UTC_SUFFIX: Final = "+00:00"
 """ISO 8601 offset of UTC as written by :meth:`datetime.isoformat`; written as ``Z``."""
@@ -281,7 +272,9 @@ class Sensor(BaseModel):
 
     The key ``site`` of registry files written before 2026-10-05 is accepted as a deprecated
     alias: its value becomes ``track``, ``municipality`` becomes ``None`` and a warning is
-    logged (see :data:`DEPRECATED_SITE_KEY`). Saving the registry writes the new keys.
+    logged. ``label``, ``municipality``, ``track`` and ``variety`` are stripped and internal
+    runs of whitespace collapsed, with a warning when a value changes
+    (:mod:`sivin.registry.sensor_input`). Saving the registry writes the cleaned values.
 
     Raises
     ------
@@ -323,27 +316,10 @@ class Sensor(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_site(cls, data: object) -> object:
-        if not isinstance(data, dict) or DEPRECATED_SITE_KEY not in data:
+    def _prepare(cls, data: object) -> object:
+        if not isinstance(data, dict):
             return data
-        replacements = [key for key in SITE_REPLACEMENT_KEYS if key in data]
-        if replacements:
-            raise ValueError(
-                f"'{DEPRECATED_SITE_KEY}' was replaced by 'municipality' and 'track' "
-                f"(2026-10-05); remove '{DEPRECATED_SITE_KEY}', the sensor already has "
-                f"{' and '.join(repr(key) for key in replacements)}"
-            )
-        migrated = {key: value for key, value in data.items() if key != DEPRECATED_SITE_KEY}
-        logger.warning(
-            "Sensor %s: the registry key '%s' is deprecated (replaced by 'municipality' and "
-            "'track', 2026-10-05); its value %r is read as 'track' and 'municipality' as null. "
-            "Save the registry to write the new keys, then fill in 'municipality' "
-            "(docs/sensors.md).",
-            data.get("id"),
-            DEPRECATED_SITE_KEY,
-            data[DEPRECATED_SITE_KEY],
-        )
-        return migrated | {"municipality": None, "track": data[DEPRECATED_SITE_KEY]}
+        return normalise_names(migrate_site(data))
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

@@ -208,8 +208,11 @@ def test_no_index_value_or_class_without_data(project: Project) -> None:
     assert all(entry["value"] is None for entry in entries.values() if entry["coverage"] == 0)
 
 
-def test_no_registry_note_reaches_the_site(project: Project) -> None:
-    """Owner decision 2026-10-05: internal notes are not published (synthetic note texts)."""
+def test_no_registry_or_offsite_note_reaches_the_site(project: Project) -> None:
+    """Owner decision 2026-10-05: internal notes are not published (synthetic note texts).
+
+    Registry notes are nulled; off-site events carry only the reason category.
+    """
     registry_path = project.root / "sensors" / "sensors.geojson"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     notes = []
@@ -221,8 +224,24 @@ def test_no_registry_note_reaches_the_site(project: Project) -> None:
             notes.append(placement["note"])
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
+    offsite_note = "INTERNAL-OFFSITE-NOTE (synthetic)"
+    log_path = project.root / "sensors" / "offsite_log.yaml"
+    log = log_path.read_text(encoding="utf-8")
+    log_path.write_text(log.replace("Derived from the real export", offsite_note), "utf-8")
+
     make_factory(project).site_service().build()
     for path, content in tree(project.root / "site" / "data").items():
         text = content.decode("utf-8")
         assert not [note for note in notes if note in text], path
         assert "sensor_location.gpx" not in text, path
+        assert offsite_note not in text, path
+        assert "indoor regime" not in text, path
+    events = json.loads(
+        (project.root / "site" / "data" / "events" / f"{REAL_SENSOR}.json").read_text("utf-8")
+    )
+    assert [e["detail"] for e in events["events"] if e["type"] == "off_site"] == ["service"]
+    make_factory(project).quality_service().run()
+    internal = (project.root / "data" / "derived" / "events" / f"{REAL_SENSOR}.json").read_text(
+        encoding="utf-8"
+    )
+    assert offsite_note in internal  # internal tools keep the full text

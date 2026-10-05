@@ -128,7 +128,7 @@ def test_events_file_lists_published_events_only() -> None:
                 "t_end": None,
                 "source": "log",
                 "confidence": None,
-                "detail": "office: synthetic",
+                "detail": "office",
             }
         ],
     }

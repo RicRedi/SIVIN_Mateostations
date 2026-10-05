@@ -100,7 +100,8 @@ class SiteInputsLoader:
     registry : SensorRegistry
         The validated registry.
     registry_file : pathlib.Path
-        The registry file (copied to ``sensors.geojson``).
+        The registry file; its public projection (no internal notes) becomes
+        ``sensors.geojson``.
     offsite_log_file : pathlib.Path
         The off-site log (part of the fingerprint).
     config : SivinConfig
