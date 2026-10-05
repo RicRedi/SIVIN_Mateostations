@@ -163,14 +163,14 @@ def test_read_across_year_boundary_local_new_years_eve(
     directory = store.root / "raw" / "77678271"
     # Local 23:00, 23:30, 00:00, 00:30 on New Year = 22:00..23:30 UTC on 31 Dec -> 2025.csv.
     assert (directory / "2025.csv").read_text().splitlines()[1:] == [
-        "2025-12-31T22:00:00Z,0.1,90.0,nye.csv",
-        "2025-12-31T22:30:00Z,0.2,90.0,nye.csv",
-        "2025-12-31T23:00:00Z,0.3,90.0,nye.csv",
-        "2025-12-31T23:30:00Z,0.4,90.0,nye.csv",
+        "2025-12-31T22:00:00Z,0.1,90.0,,,,nye.csv",
+        "2025-12-31T22:30:00Z,0.2,90.0,,,,nye.csv",
+        "2025-12-31T23:00:00Z,0.3,90.0,,,,nye.csv",
+        "2025-12-31T23:30:00Z,0.4,90.0,,,,nye.csv",
     ]
     assert (directory / "2026.csv").read_text().splitlines()[1:] == [
-        "2026-01-01T00:00:00Z,0.5,90.0,nye.csv",
-        "2026-01-01T00:30:00Z,0.6,90.0,nye.csv",
+        "2026-01-01T00:00:00Z,0.5,90.0,,,,nye.csv",
+        "2026-01-01T00:30:00Z,0.6,90.0,,,,nye.csv",
     ]
     assert store.read(sensor_id).frame[Column.TEMP].tolist() == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
     window = store.read(sensor_id, "2025-12-31T23:30:00Z", "2026-01-01T00:00:00+00:00")
@@ -240,7 +240,7 @@ def test_qc_is_not_stored(
     store.append(make_utc_series(["2026-01-01T00:00:00Z"], [1.0], [2.0], qc=[32]))
     assert store.read(sensor_id).frame[Column.QC].tolist() == [0]
     header = (store.root / "raw" / "77678271" / "2026.csv").read_text().splitlines()[0]
-    assert header == "timestamp_utc,temp_c,rh_pct,source"
+    assert header == "timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source"
 
 
 def test_sensors_lists_only_serial_directories_with_partition_files(
@@ -371,7 +371,7 @@ def test_missing_values_are_filled_column_by_column(
     result = store.append(make_utc_series(["2026-05-01T01:00:00Z"], [11.0], [math.nan], "new.csv"))
     assert result.counts == AppendCounts(filled_values=1, ignored_missing_values=1)
     lines = (store.root / "raw" / "77678271" / "2026.csv").read_text().splitlines()
-    assert lines[1:] == ["2026-05-01T01:00:00Z,11.0,70.0,new.csv"]
+    assert lines[1:] == ["2026-05-01T01:00:00Z,11.0,70.0,,,,new.csv"]
     assert store.read(sensor_id).frame[Column.RH].tolist() == [70.0]
 
 

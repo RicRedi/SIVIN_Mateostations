@@ -1,10 +1,16 @@
 """Column headers of export files and the parser settings.
 
 The provider's exports name their columns in Czech (``Datum a čas``, ``Teplota (°C)``,
-``Vlhkost (%)``); other tools write German or English names, with or without a unit. A
-:class:`ColumnMapping` maps any configured alias to the canonical column, ignoring case,
-diacritics and surrounding whitespace. A unit in parentheses or brackets must be one of the
-accepted units of the column, so ``Teplota (°F)`` is never read as °C.
+``Vlhkost (%)``, ``Srážky (mm)``, ``Celkové srážky (mm)``, ``Nabití baterie (V)``); other tools
+write German or English names, with or without a unit. A :class:`ColumnMapping` maps any
+configured alias to the canonical column, ignoring case, diacritics and surrounding whitespace.
+A unit in parentheses or brackets must be one of the accepted units of the column, so
+``Teplota (°F)`` is never read as °C.
+
+Timestamp, temperature and humidity are **required** (:data:`REQUIRED_CANONICAL_COLUMNS`);
+precipitation, the cumulative precipitation counter and the battery voltage are **optional**
+(:data:`OPTIONAL_CANONICAL_COLUMNS`, WP-1.9): a file without them is still valid, and a
+problem with one of them (an unknown unit, two headers for it) only drops that column.
 
 The formats are reconstructed from legacy code; the CSV header names were confirmed by one real
 export (MIGRATION_PLAN §0.6.1), the other layouts are unverified, so every name is configurable.
@@ -30,11 +36,29 @@ from sivin.core.ids import SensorId
 
 
 class CanonicalColumn(StrEnum):
-    """The columns a parser needs from every table."""
+    """The columns a parser reads from a table."""
 
     TIMESTAMP = "timestamp"
     TEMP = "temp_c"
     RH = "rh_pct"
+    PRECIP = "precip_mm"
+    PRECIP_TOTAL = "precip_total_mm"
+    BATTERY = "battery_v"
+
+
+REQUIRED_CANONICAL_COLUMNS: Final = (
+    CanonicalColumn.TIMESTAMP,
+    CanonicalColumn.TEMP,
+    CanonicalColumn.RH,
+)
+"""Columns every table must have; a table without one of them is rejected."""
+
+OPTIONAL_CANONICAL_COLUMNS: Final = (
+    CanonicalColumn.PRECIP,
+    CanonicalColumn.PRECIP_TOTAL,
+    CanonicalColumn.BATTERY,
+)
+"""Columns read when present (owner decision Q9, 2026-10-05); older exports lack them."""
 
 
 _HEADER_WITH_UNIT: Final = re.compile(r"^(?P<name>.*?)\s*[(\[](?P<unit>[^)\]]*)[)\]]$")
@@ -150,6 +174,74 @@ class ColumnAliases(BaseModel):
             "Qualifiers accepted after a timestamp header. Empty by default, so that a header "
             "such as 'Datum a čas (UTC)' is rejected instead of being read in source_timezone."
         ),
+    )
+    precip_mm: tuple[str, ...] = Field(
+        (
+            "Srážky",
+            "Srážka",
+            "Srážky za interval",
+            "Niederschlag",
+            "Niederschlagsmenge",
+            "Regen",
+            "Precipitation",
+            "Rain",
+            "Rainfall",
+        ),
+        min_length=1,
+        description=(
+            "Header names of the optional column of precipitation in the interval since the "
+            "previous sample (values in mm). 'Srážky (mm)' is the name used by the provider's "
+            "exports (confirmed by the first real export, MIGRATION_PLAN §0.6.1)."
+        ),
+    )
+    precip_total_mm: tuple[str, ...] = Field(
+        (
+            "Celkové srážky",
+            "Srážky celkem",
+            "Kumulativní srážky",
+            "Niederschlag gesamt",
+            "Gesamtniederschlag",
+            "Kumulierter Niederschlag",
+            "Total precipitation",
+            "Cumulative precipitation",
+            "Precipitation total",
+            "Total rain",
+            "Rain total",
+        ),
+        min_length=1,
+        description=(
+            "Header names of the optional column of the device's cumulative precipitation "
+            "counter (values in mm). 'Celkové srážky (mm)' is the name used by the provider's "
+            "exports (confirmed by the first real export)."
+        ),
+    )
+    battery_v: tuple[str, ...] = Field(
+        (
+            "Nabití baterie",
+            "Napětí baterie",
+            "Baterie",
+            "Batterie",
+            "Batteriespannung",
+            "Battery",
+            "Battery voltage",
+        ),
+        min_length=1,
+        description=(
+            "Header names of the optional battery voltage column (values in V). "
+            "'Nabití baterie (V)' is the name used by the provider's exports (confirmed by the "
+            "first real export)."
+        ),
+    )
+    precip_units: tuple[str, ...] = Field(
+        ("mm", "l/m²", "l/m2"),
+        description=(
+            "Units accepted after a precipitation or cumulative precipitation header, "
+            "e.g. 'Srážky (mm)'; 1 l/m² of water equals 1 mm of precipitation."
+        ),
+    )
+    battery_units: tuple[str, ...] = Field(
+        ("V",),
+        description="Units accepted after a battery header, e.g. 'Nabití baterie (V)'.",
     )
 
 
@@ -349,13 +441,16 @@ class HeaderMatch:
     row_index : int
         0-based index of the header row in the table.
     positions : Mapping
-        0-based column position of every canonical column that was found.
+        0-based column position of every canonical column that was found (optional columns
+        only when they were found without a problem).
     headers : Mapping
-        The header text of every canonical column that was found.
+        The header text of every canonical column in ``positions``.
     missing : tuple of CanonicalColumn
-        Canonical columns without an accepted header.
+        Required canonical columns without an accepted header.
     problems : tuple of str
-        Rejected units and ambiguous headers.
+        Rejected units and ambiguous headers of required columns.
+    optional_problems : tuple of str
+        Rejected units and ambiguous headers of optional columns; such a column is not read.
     """
 
     row_index: int
@@ -363,10 +458,11 @@ class HeaderMatch:
     headers: Mapping[CanonicalColumn, str]
     missing: tuple[CanonicalColumn, ...]
     problems: tuple[str, ...]
+    optional_problems: tuple[str, ...] = ()
 
     @property
     def is_complete(self) -> bool:
-        """``True`` if every canonical column was found unambiguously."""
+        """``True`` if every required canonical column was found unambiguously."""
         return not self.missing and not self.problems
 
 
@@ -387,13 +483,20 @@ class ColumnMapping:
             (CanonicalColumn.TIMESTAMP, aliases.timestamp),
             (CanonicalColumn.TEMP, aliases.temp_c),
             (CanonicalColumn.RH, aliases.rh_pct),
+            (CanonicalColumn.PRECIP, aliases.precip_mm),
+            (CanonicalColumn.PRECIP_TOTAL, aliases.precip_total_mm),
+            (CanonicalColumn.BATTERY, aliases.battery_v),
         ):
             for name in names:
                 self._names.setdefault(normalize_label(name), column)
+        precip_units = frozenset(map(normalize_unit, aliases.precip_units))
         self._units: dict[CanonicalColumn, frozenset[str]] = {
             CanonicalColumn.TIMESTAMP: frozenset(map(normalize_unit, aliases.timestamp_units)),
             CanonicalColumn.TEMP: frozenset(map(normalize_unit, aliases.temp_units)),
             CanonicalColumn.RH: frozenset(map(normalize_unit, aliases.rh_units)),
+            CanonicalColumn.PRECIP: precip_units,
+            CanonicalColumn.PRECIP_TOTAL: precip_units,
+            CanonicalColumn.BATTERY: frozenset(map(normalize_unit, aliases.battery_units)),
         }
 
     def classify(self, cell: object) -> HeaderCell:
@@ -451,26 +554,33 @@ class ColumnMapping:
     def _match(row_index: int, cells: Sequence[HeaderCell]) -> HeaderMatch:
         positions: dict[CanonicalColumn, int] = {}
         headers: dict[CanonicalColumn, str] = {}
-        problems: list[str] = []
+        problems: dict[CanonicalColumn, list[str]] = {column: [] for column in CanonicalColumn}
         for position, cell in enumerate(cells):
             if cell.column is None:
                 continue
             if not cell.accepted:
-                problems.append(
+                problems[cell.column].append(
                     f"Column '{cell.text}': unit '{cell.unit}' is not accepted for {cell.column}."
                 )
             elif cell.column in positions:
-                problems.append(
+                problems[cell.column].append(
                     f"Columns '{headers[cell.column]}' and '{cell.text}' both denote {cell.column}."
                 )
             else:
                 positions[cell.column] = position
                 headers[cell.column] = cell.text
-        missing = tuple(column for column in CanonicalColumn if column not in positions)
+        for column in OPTIONAL_CANONICAL_COLUMNS:
+            if problems[column]:
+                positions.pop(column, None)
+                headers.pop(column, None)
+        missing = tuple(column for column in REQUIRED_CANONICAL_COLUMNS if column not in positions)
         return HeaderMatch(
             row_index=row_index,
             positions=MappingProxyType(positions),
             headers=MappingProxyType(headers),
             missing=missing,
-            problems=tuple(problems),
+            problems=tuple(p for column in REQUIRED_CANONICAL_COLUMNS for p in problems[column]),
+            optional_problems=tuple(
+                p for column in OPTIONAL_CANONICAL_COLUMNS for p in problems[column]
+            ),
         )

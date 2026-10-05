@@ -47,7 +47,17 @@ class _DemoCheck(QualityCheck[_DemoSettings]):
 
 class TestRegistry:
     def test_builtin_checks_are_registered(self) -> None:
-        expected = ("missing", "persistence", "range", "sampling", "spike", "step")
+        expected = (
+            "battery",
+            "missing",
+            "persistence",
+            "precip_counter",
+            "precip_range",
+            "range",
+            "sampling",
+            "spike",
+            "step",
+        )
         assert check_registry.ids() == expected
         assert "range" in check_registry
         assert len(check_registry) == len(expected)

@@ -34,7 +34,10 @@ the same bytes (git sees no change when nothing changed).
   line ends with LF.
 - Separator `,`; quoting per RFC 4180: a field is enclosed in `"` only when it contains `,`,
   `"`, CR or LF, and a `"` inside is doubled.
-- First line is the header, exactly `timestamp_utc,temp_c,rh_pct,source`.
+- First line is the header, exactly
+  `timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source` (since WP-1.9; see
+  [Format change in WP-1.9](#format-change-in-wp-19-precipitation-and-battery) for files with
+  the older header `timestamp_utc,temp_c,rh_pct,source`).
 - Then one line per sample, **strictly increasing** in `timestamp_utc` (no duplicates).
 - Every timestamp lies in the year of the file name (UTC).
 
@@ -43,6 +46,9 @@ the same bytes (git sees no change when nothing changed).
 | `timestamp_utc` | time of the sample | UTC | ISO 8601 `YYYY-MM-DDTHH:MM:SSZ`; a fraction of a second is written only when non-zero, as `.` and up to 9 digits without trailing zeros (`2026-01-01T00:00:00.5Z`) | never |
 | `temp_c` | air temperature | °C | decimal number, see below | empty field |
 | `rh_pct` | relative humidity | % | decimal number, see below | empty field |
+| `precip_mm` | precipitation in the interval since the previous sample (export column `Srážky (mm)`) | mm | decimal number, see below | empty field |
+| `precip_total_mm` | the device's cumulative precipitation counter (`Celkové srážky (mm)`) | mm | decimal number, see below | empty field |
+| `battery_v` | battery voltage (`Nabití baterie (V)`) | V | decimal number, see below | empty field |
 | `source` | name of the last export that contributed a value to the row | — | text | empty field = unknown |
 
 **Numbers.** `.` is the decimal point, positional notation (never an exponent), at least one
@@ -59,7 +65,8 @@ min_digits=1)`). Examples: `12.3`, `-0.5`, `100.0`, `0.30000000000000004`. Choic
   reading a file and writing it again reproduces it byte for byte.
 - `-0.0` is written as `-0.0` (it is a distinct `float64`; harmless).
 
-**Reading** is strict: a wrong header, a wrong number of fields, a malformed timestamp or
+**Reading** is strict: a header that is neither the current nor the pre-WP-1.9 one, a wrong
+number of fields, a malformed timestamp or
 number (`nan`, `1e3`, `12`, `12,5` are rejected), non-increasing timestamps or a row outside the
 file's year raise `StoreFormatError` naming the file and line. A malformed file is never
 overwritten by the store; repair it by hand (or restore it from git) and re-run.
@@ -75,12 +82,43 @@ carries any QC bits, the store logs a **warning** with the number of rows per fl
 caller that set flags (in particular `MANUAL_EXCLUDE`) by mistake notices that they are not
 kept.
 
+### Format change in WP-1.9 (precipitation and battery)
+
+Owner decision Q9 (2026-10-05) takes precipitation, the cumulative precipitation counter and
+the battery voltage into the data. The file layout therefore gained three columns between
+`rh_pct` and `source`:
+
+| | Header |
+|---|---|
+| before WP-1.9 (`LEGACY_STORED_COLUMNS`) | `timestamp_utc,temp_c,rh_pct,source` |
+| since WP-1.9 (`STORED_COLUMNS`) | `timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source` |
+
+- **Reading is backward compatible.** `CsvSeriesCodec.read` recognises both headers
+  (`READABLE_LAYOUTS`). A file with the old header is read with `NaN` in the three new
+  columns; every other rule (field count of that layout, number format, ordering) is the same.
+- **Writing always uses the new header.** The store rewrites a file only when its data change
+  (see below). An old file therefore stays byte-for-byte untouched until an append adds a row
+  or fills a value, e.g. the precipitation of rows it already has; then the whole file is
+  written in the new layout. No migration step is needed, and a repository can hold files of
+  both layouts at the same time.
+- **Byte stability** holds for the new layout: reading a file and writing it again reproduces
+  it byte for byte. A file in the old layout is reproduced only as long as it is not rewritten.
+- The new values follow the number format above; an export without these columns (older
+  exports, other devices) gives empty fields.
+- The growth estimate below rises by the three fields: with values such as `0.0,326.4,3.6`
+  about 15 bytes per line, i.e. about 0.26 MB per sensor and year.
+
+The committed synthetic sample `tests/fixtures/storage/legacy_layout/` is a store file in the
+old layout; `tests/storage/test_auxiliary_columns.py` checks reading, leaving it untouched and
+rewriting it.
+
 ## Appending, deduplication and conflicts
 
 `MeasurementStore.append(series)` merges a series into the store, partition by partition. Rows
 are identified by `timestamp_utc` (the sensor is given by the directory). A timestamp that is
-not stored yet adds a row (`new_rows`). For a stored timestamp, `temp_c` and `rh_pct` are merged
-**column by column**:
+not stored yet adds a row (`new_rows`). For a stored timestamp, the value columns `temp_c`,
+`rh_pct`, `precip_mm`, `precip_total_mm` and `battery_v` are merged **column by column**, all
+by the same rules (`VALUE_COLUMNS`):
 
 | Stored value | Incoming value | Result | Counted as |
 |---|---|---|---|
@@ -92,7 +130,11 @@ not stored yet adds a row (`new_rows`). For a stored timestamp, `temp_c` and `rh
 A missing value therefore **never overwrites a measurement**, whatever the policy. This matters
 because a truncated last row of an export typically has missing values. An incoming row whose
 values all equal the stored row counts as `identical_skipped`. Example: stored
-`(temp_c, rh_pct) = (NaN, 70.0)` and incoming `(11.0, NaN)` give `(11.0, 70.0)`.
+`(temp_c, rh_pct) = (NaN, 70.0)` and incoming `(11.0, NaN)` give `(11.0, 70.0)`. Likewise, a
+stored row without precipitation (an old-layout file) gets the precipitation of an export that
+has it (`filled_values`), an export without the column never erases stored precipitation
+(`ignored_missing_values`), and two exports with different precipitation for the same instant
+are a conflict for the policy, exactly as for temperature.
 
 `source` is not compared. A row keeps its stored `source` unless at least one of its values is
 taken from the import (filled or replaced); then it gets the incoming `source`. The same data

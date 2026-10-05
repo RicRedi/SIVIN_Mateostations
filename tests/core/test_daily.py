@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sivin.core.daily import DAILY_COLUMNS, DailyWeather
+from sivin.core.daily import ALL_DAILY_COLUMNS, DailyWeather
 from sivin.core.flags import QcFlag
 from sivin.core.ids import SensorId
 from sivin.core.schema import MeasurementSeries, SchemaError
@@ -56,7 +56,7 @@ def two_days(make_series: SeriesFactory) -> DailyWeather:
 
 def test_hand_computed_aggregates(two_days: DailyWeather) -> None:
     frame = two_days.frame
-    assert list(frame.columns) == list(DAILY_COLUMNS)
+    assert list(frame.columns) == list(ALL_DAILY_COLUMNS)
     assert frame.index.name == "date"
     assert two_days.dates == [date(2026, 1, d) for d in (10, 11, 12, 13)]
     day1, day2 = frame.loc[date(2026, 1, 10)], frame.loc[date(2026, 1, 11)]
@@ -157,7 +157,7 @@ def test_nominal_interval_coverage(sensor_id: SensorId) -> None:
 def test_empty_and_fully_excluded_series(sensor_id: SensorId, make_series: SeriesFactory) -> None:
     empty = DailyWeather.from_series(MeasurementSeries.empty(sensor_id), PRAGUE, 1825.0, EXCLUDE)
     assert len(empty) == 0
-    assert list(empty.frame.columns) == list(DAILY_COLUMNS)
+    assert list(empty.frame.columns) == list(ALL_DAILY_COLUMNS)
     excluded = make_series(["2026-01-10 00:00"], [1.0], [50.0], qc=[int(QcFlag.MANUAL_EXCLUDE)])
     daily = DailyWeather.from_series(excluded, PRAGUE, 1825.0, EXCLUDE)
     assert daily.frame["n_samples"].tolist() == [0]

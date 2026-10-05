@@ -30,7 +30,8 @@ class ValueConflict:
     timestamp_utc : pandas.Timestamp
         The shared UTC timestamp.
     column : str
-        ``"temp_c"`` (°C) or ``"rh_pct"`` (%).
+        ``"temp_c"`` (°C), ``"rh_pct"`` (%), ``"precip_mm"`` (mm), ``"precip_total_mm"`` (mm)
+        or ``"battery_v"`` (V).
     stored_value, incoming_value : float
         The value in the store and the value being appended, in the column's unit.
     stored_source, incoming_source : str

@@ -61,8 +61,11 @@ the first three columns.)
   (`csv_encodings`). The Windows-1250 fallback is an assumption.
 - One title row `Meteo Data;`. The header row is searched for, so any number of title rows
   works, up to `header_search_rows`.
-- Further columns exist (precipitation, cumulative precipitation, battery voltage); unknown
-  columns are ignored.
+- Three further columns hold precipitation, cumulative precipitation and battery voltage.
+  Since WP-1.9 they are read into `precip_mm`, `precip_total_mm` and `battery_v` (owner
+  decision Q9); they are optional, so a file without them is still valid (see
+  [Optional columns](#optional-columns-precipitation-counter-battery)). Other unknown columns
+  are ignored.
 - Decimal comma. Local wall-clock timestamps `%Y-%m-%d %H:%M:%S`, newest row first.
 - A last line `;` (empty cells) follows the data; blank rows are skipped.
 - File name examples: `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv` (legacy
@@ -115,10 +118,34 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
 | `temp_c` | Teplota, Teplota vzduchu, Temperatur, Lufttemperatur, Temperature, Air temperature, Temp | °C, C, degC, deg C, ℃ |
 | `rh_pct` | Vlhkost, Relativní vlhkost, Vlhkost vzduchu, Luftfeuchtigkeit, Relative Luftfeuchtigkeit, Luftfeuchte, Feuchtigkeit, Humidity, Relative humidity, RH | %, % RH, %RH, % rel., pct |
 
+| `precip_mm` (optional) | Srážky, Srážka, Srážky za interval, Niederschlag, Niederschlagsmenge, Regen, Precipitation, Rain, Rainfall | mm, l/m², l/m2 |
+| `precip_total_mm` (optional) | Celkové srážky, Srážky celkem, Kumulativní srážky, Niederschlag gesamt, Gesamtniederschlag, Kumulierter Niederschlag, Total precipitation, Cumulative precipitation, Precipitation total, Total rain, Rain total | mm, l/m², l/m2 |
+| `battery_v` (optional) | Nabití baterie, Napětí baterie, Baterie, Batterie, Batteriespannung, Battery, Battery voltage | V |
+
 - `Teplota (°F)` is rejected (ERROR); it is never read as °C.
 - A qualified timestamp header such as `Datum a čas (UTC)` is rejected by default. Otherwise
   it would be read silently in `source_timezone`.
-- If two columns denote the same canonical column, the file is rejected (ERROR).
+- If two columns denote the same **required** canonical column, the file is rejected (ERROR).
+- The Czech names of the three optional columns are those of the real export (§0.6.1); the
+  German and English aliases are guesses for other tools and are configurable.
+
+### Optional columns (precipitation, counter, battery)
+
+Timestamp, temperature and humidity are required (`REQUIRED_CANONICAL_COLUMNS`). The
+precipitation of the interval since the previous sample (`precip_mm`), the device's cumulative
+precipitation counter (`precip_total_mm`) and the battery voltage (`battery_v`) are optional
+(`OPTIONAL_CANONICAL_COLUMNS`, WP-1.9, owner decision Q9):
+
+- A file without them (older exports, other devices) is valid; the series gets `NaN` in those
+  columns.
+- A problem with an optional column never rejects the file, because whole-row validity
+  concerns temperature and humidity only. An unaccepted unit (`Srážky (in)`) or two headers
+  for the same optional column is a WARNING (`optional-columns`) and that column is not read.
+  Non-numeric cells are a WARNING (`numbers-parseable`) and read as missing, whatever their
+  share. Values outside the gross bounds are a WARNING and are also read as missing: they
+  are unit or column mix-ups (e.g. a battery charge of 85 % under a unitless `Battery`
+  header must not become 85 V), and no quality check would catch them later.
+- A missing optional value never sets `QcFlag.MISSING`.
 
 ## Values
 
@@ -134,6 +161,8 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
   present value is kept in the series (it is not set to `NaN`), but the flag excludes the row
   from indices and from the web chart, and `DailyWeather` does not count it even without the
   flag. Until 2026-10-05 only rows with both values missing were flagged (WP-1.2).
+- The optional columns follow the same number format. A missing precipitation, counter or
+  battery value does **not** make the row invalid (owner decision Q9).
 
 ## Timestamps
 
@@ -228,26 +257,30 @@ configuration section `ingest.validation`. The defaults are project defaults
 | `sensor-id` | the sensor resolves from the file name or the sheet mapping | ERROR |
 | `required-columns` | a header row with timestamp, temperature and humidity exists in the first `header_search_rows` rows; units are accepted; no duplicate columns | ERROR |
 | `data-rows` | at least `min_data_rows` (1) non-blank rows below the header | ERROR |
-| `short-rows` | rows that end before a required column (cut-off line); the missing cells become missing values | WARNING |
-| `numbers-parseable` | share of non-numeric value cells > `max_unparseable_value_share` (5 %) → ERROR; otherwise the values become missing | ERROR / WARNING |
+| `short-rows` | rows that end before a mapped column, required or optional (cut-off line); the missing cells become missing values | WARNING |
+| `optional-columns` | an optional column (precipitation, counter, battery) with an unaccepted unit or two headers; that column is not read | WARNING |
+| `numbers-parseable` | share of non-numeric temperature or humidity cells > `max_unparseable_value_share` (5 %) → ERROR; otherwise the values become missing. Non-numeric cells of an optional column are always a WARNING | ERROR / WARNING |
 | `timestamps-parseable` | share of unreadable timestamps > `max_unparseable_timestamp_share` (5 %) → ERROR; otherwise the rows are dropped | ERROR / WARNING |
 | `values-present` | a temperature or humidity column without any value (empty column, formulas without cached results, e.g. a failed humidity channel) → ERROR: under whole-row validity every row would be `MISSING`, so the file holds no valid measurement (until 2026-10-05 one empty variable was a WARNING) | ERROR |
 | `date-order` | day and month look swapped (see Timestamps, step 2) | ERROR |
 | `timestamps-plausible` | share of timestamps outside the plausible range > `max_implausible_timestamp_share` (5 %) → ERROR; otherwise the rows are dropped | ERROR / WARNING |
 | `row-order` | the table steps back but is too short to decide whether it is newest first; read oldest first | WARNING |
 | `out-of-sequence` | rows more than `max_backward_step_s` earlier than the latest accepted row (clock reset; exact overlap copies excepted) or isolated more than that ahead of their neighbours (glitched timestamp); dropped. Share > `max_implausible_timestamp_share` (5 %) and more than `min_error_rows` → ERROR | ERROR / WARNING |
-| `duplicate-timestamps` | repeated UTC instants (count, and how many conflict); the last one is kept | WARNING |
+| `duplicate-timestamps` | repeated UTC instants (count, and how many conflict in any value column, optional ones included); the last one is kept | WARNING |
 | `backward-steps` | counted backward steps (count and the first 10 source rows); converted in segments | WARNING |
 | `daylight-saving` | ambiguous or nonexistent local times (flagged `TIMESTAMP_SUSPECT`) and the number of unresolved rows dropped (including incomplete transitions) | WARNING |
 | `temperature-bounds` | share of temperatures outside [`temp_min_c`, `temp_max_c`] = [−60, 70] °C > `max_out_of_bounds_share` (5 %) → ERROR (°F or K export, swapped columns); otherwise WARNING | ERROR / WARNING |
 | `humidity-bounds` | same for relative humidity outside [0, 100] % | ERROR / WARNING |
+| `precipitation-bounds` | precipitation per interval outside [`precip_min_mm`, `precip_max_mm`] = [0, 500] mm; never rejects; the values are read as missing | WARNING |
+| `precipitation-total-bounds` | cumulative counter outside [`precip_total_min_mm`, `precip_total_max_mm`] = [0, 100 000] mm; never rejects; read as missing | WARNING |
+| `battery-bounds` | battery voltage outside [`battery_min_v`, `battery_max_v`] = [0, 10] V (catches millivolts and a charge in %); never rejects; read as missing | WARNING |
 | `humidity-fraction` | share of humidity values ≤ `rh_fraction_max_pct` (1 %) > `max_out_of_bounds_share` → humidity given as a 0–1 fraction | ERROR |
 
 **Short files.** A share threshold gives an ERROR only when more than `min_error_rows` (3)
 rows are affected, or all of them. So one footer or comment row in a ten-row file is a
 WARNING (the row is dropped), while a file whose every timestamp is unreadable is still an
 ERROR. This applies to `numbers-parseable`, `timestamps-parseable`, `timestamps-plausible`,
-`out-of-sequence`, the gross bounds rules and `humidity-fraction`.
+`out-of-sequence`, the temperature and humidity bounds rules and `humidity-fraction`.
 
 These gross bounds only guard against unit and column mix-ups. Values outside the bounds
 that stay below the share threshold are reported but kept: the climatological range check
@@ -289,7 +322,7 @@ What differed from it, and how it is handled:
 | Finding | Handling |
 |---|---|
 | File name with underscores instead of spaces and parentheses (`MeteoData_8615620_77799986_VUT_…`); unknown whether the portal or the upload produced it (Q8) | `SensorId.parse` accepts both spellings (WP-0.2); routing (`can_parse`) already accepted any `.csv` and any `MeteoData…` workbook |
-| Three extra columns `Srážky (mm)`, `Celkové srážky (mm)`, `Nabití baterie (V)` | ignored without a finding; adopting them is owner question Q9 |
+| Three extra columns `Srážky (mm)`, `Celkové srážky (mm)`, `Nabití baterie (V)` | read since WP-1.9 as the optional columns `precip_mm`, `precip_total_mm`, `battery_v` (owner decision Q9). In the full export: interval precipitation mostly 0.0 mm, at most 0.9 mm; counter 323.0–326.4 mm; battery 3.0–3.7 V. The interval value of a sample equals the counter increase since the previous sample up to 0.1 mm (rounding) |
 | Rows **newest first** | reversed by the row-order analysis (no finding) |
 | A last line `;` after the data | a blank row, skipped |
 | CRLF line endings | read by the CSV reader (no finding) |

@@ -34,11 +34,14 @@ from sivin.ingest.parsers.sources import CellGrid, Row
 from sivin.ingest.validation import (
     BoolArray,
     ExportInspection,
+    FloatArray,
     InputValidator,
     RowArray,
     TableInspection,
     TimeColumn,
+    ValidationSettings,
     ValueColumn,
+    outside_bounds,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +183,7 @@ class TabularExportReader:
             header_row=header.row_index + 1,
             missing_columns=tuple(str(column) for column in header.missing),
             column_problems=header.problems,
+            optional_column_problems=header.optional_problems,
             source_rows=data.source_rows,
             short_rows=data.short_rows,
         )
@@ -206,16 +210,27 @@ class TabularExportReader:
             ),
             temp=self._value_column(header, data, CanonicalColumn.TEMP),
             rh=self._value_column(header, data, CanonicalColumn.RH),
+            precip=self._optional_column(header, data, CanonicalColumn.PRECIP),
+            precip_total=self._optional_column(header, data, CanonicalColumn.PRECIP_TOTAL),
+            battery=self._optional_column(header, data, CanonicalColumn.BATTERY),
         )
 
-    def assemble(self, table: TableInspection, source_name: str) -> MeasurementSeries:
+    def assemble(
+        self,
+        table: TableInspection,
+        source_name: str,
+        validation: ValidationSettings | None = None,
+    ) -> MeasurementSeries:
         """Build the series of a table that passed validation.
 
         Rows without a UTC timestamp and rows whose daylight-saving conversion is unresolved
         are dropped; a repeated timestamp keeps its last row (``MeasurementSeries.from_records``
         does that and logs it); rows without a temperature **or** without a humidity get
         ``MISSING`` (whole-row validity, owner decision 2026-10-05) and daylight-saving rows
-        get ``TIMESTAMP_SUSPECT``.
+        get ``TIMESTAMP_SUSPECT``. The optional columns (precipitation, counter, battery) are
+        carried over when the table has them and are ``NaN`` otherwise; their values outside the
+        gross bounds of ``validation`` are read as missing (the validator reported them as a
+        WARNING). A missing optional value never sets ``MISSING`` (owner decision Q9).
 
         Parameters
         ----------
@@ -223,6 +238,8 @@ class TabularExportReader:
             A table inspected by :meth:`inspect` whose file passed validation.
         source_name : str
             Name of the source file, stored in the ``source`` column.
+        validation : ValidationSettings, optional
+            The gross bounds of the optional columns; defaults when omitted.
 
         Returns
         -------
@@ -236,6 +253,7 @@ class TabularExportReader:
         """
         if table.sensor_id is None or table.times is None or table.temp is None or table.rh is None:
             raise ValueError(f"Table {table.name!r} was not validated successfully.")
+        bounds = validation or ValidationSettings()
         utc = table.times.utc
         keep = utc.notna().to_numpy() & ~table.times.unresolved
         incomplete = np.isnan(table.temp.parsed) | np.isnan(table.rh.parsed)
@@ -249,6 +267,9 @@ class TabularExportReader:
             table.rh.parsed[keep],
             qc=qc[keep].astype(QC_DTYPE),
             source=source_name,
+            precip_mm=_kept(table.precip, keep, bounds.precip_bounds_mm),
+            precip_total_mm=_kept(table.precip_total, keep, bounds.precip_total_bounds_mm),
+            battery_v=_kept(table.battery, keep, bounds.battery_bounds_v),
         )
 
     def _data_rows(self, rows: Sequence[Row], header: HeaderMatch) -> _DataRows:
@@ -292,6 +313,13 @@ class TabularExportReader:
         values, unparseable = self._numbers.parse(data.cells[column])
         return ValueColumn(header.headers[column], values, unparseable)
 
+    def _optional_column(
+        self, header: HeaderMatch, data: _DataRows, column: CanonicalColumn
+    ) -> ValueColumn | None:
+        if column not in header.positions:
+            return None
+        return self._value_column(header, data, column)
+
 
 class TabularExportParser(ExportParser):
     """Template of the parsers of tabular exports (CSV files and workbooks).
@@ -331,7 +359,10 @@ class TabularExportParser(ExportParser):
                 len(report.errors),
             )
             return ParsedExport((), path, report)
-        series = tuple(self._reader.assemble(table, path.name) for table in inspection.tables)
+        series = tuple(
+            self._reader.assemble(table, path.name, self.validator.settings)
+            for table in inspection.tables
+        )
         logger.info(
             "Export %s read by %s: %d series, %d row(s), %d warning(s).",
             path.name,
@@ -444,6 +475,16 @@ def _reversed(data: _DataRows) -> _DataRows:
         cells={column: values[::-1] for column, values in data.cells.items()},
         short_rows=data.short_rows,
     )
+
+
+def _kept(
+    column: ValueColumn | None, keep: BoolArray, bounds: tuple[float, float]
+) -> FloatArray | None:
+    """The values of an optional column in the kept rows, out-of-bounds values as ``NaN``."""
+    if column is None:
+        return None
+    values = np.where(outside_bounds(column.parsed, bounds), np.nan, column.parsed)
+    return values[keep]
 
 
 def _as_bool(mask: pd.Series) -> BoolArray:

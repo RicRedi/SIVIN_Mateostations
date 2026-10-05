@@ -13,6 +13,11 @@ A new check is a new :class:`ValidationRule` subclass registered with
 The gross physical bounds checked here only guard against unit and column mix-ups (relative
 humidity as a 0-1 fraction, temperature in °F or K). The fine-grained range checks belong to
 quality control (WP-1.5).
+
+The optional auxiliary columns (precipitation, cumulative precipitation, battery voltage;
+WP-1.9) never reject a file: whole-row validity concerns temperature and humidity only (owner
+decision Q9, 2026-10-05), so a problem with an auxiliary column is a WARNING and its affected
+values are read as missing (unparseable cells and values outside the gross bounds alike).
 """
 
 from __future__ import annotations
@@ -240,13 +245,77 @@ class ValidationSettings(BaseModel):
             "instead of a percentage (unit mix-up). Project default [to be verified]."
         ),
     )
+    precip_min_mm: float = Field(
+        0.0,
+        description=(
+            "Lower bound of the precipitation of one sample interval in mm (physical limit: "
+            "an amount of precipitation cannot be negative). Values below it are reported "
+            "(WARNING) and read as missing."
+        ),
+    )
+    precip_max_mm: float = Field(
+        500.0,
+        description=(
+            "Gross upper bound of the precipitation of one sample interval in mm; only guards "
+            "against unit mix-ups and garbage, the plausibility check per interval is quality "
+            "control (check 'precip_range'). Project default, deliberately generous "
+            "[to be verified]."
+        ),
+    )
+    precip_total_min_mm: float = Field(
+        0.0,
+        description=(
+            "Lower bound of the cumulative precipitation counter in mm (a sum of "
+            "non-negative amounts cannot be negative)."
+        ),
+    )
+    precip_total_max_mm: float = Field(
+        100_000.0,
+        description=(
+            "Gross upper bound of the cumulative precipitation counter in mm; only catches "
+            "garbage and unit mix-ups (the first real export reads 323.0-326.4 mm). Project "
+            "default, deliberately generous [to be verified]."
+        ),
+    )
+    battery_min_v: float = Field(
+        0.0,
+        description="Gross lower bound of the battery voltage in V (a voltage reading below 0 V).",
+    )
+    battery_max_v: float = Field(
+        10.0,
+        description=(
+            "Gross upper bound of the battery voltage in V; catches millivolts and column "
+            "mix-ups (the first real export reads 3.0-3.7 V). Project default [to be verified "
+            "against the device data sheet]."
+        ),
+    )
+
+    @property
+    def precip_bounds_mm(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the precipitation per interval in mm."""
+        return self.precip_min_mm, self.precip_max_mm
+
+    @property
+    def precip_total_bounds_mm(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the cumulative precipitation counter in mm."""
+        return self.precip_total_min_mm, self.precip_total_max_mm
+
+    @property
+    def battery_bounds_v(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the battery voltage in V."""
+        return self.battery_min_v, self.battery_max_v
 
     @model_validator(mode="after")
     def _ordered_bounds(self) -> Self:
-        if self.temp_min_c >= self.temp_max_c:
-            raise ValueError("temp_min_c must be lower than temp_max_c")
-        if self.rh_min_pct >= self.rh_max_pct:
-            raise ValueError("rh_min_pct must be lower than rh_max_pct")
+        for name, lower, upper in (
+            ("temp", self.temp_min_c, self.temp_max_c),
+            ("rh", self.rh_min_pct, self.rh_max_pct),
+            ("precip", self.precip_min_mm, self.precip_max_mm),
+            ("precip_total", self.precip_total_min_mm, self.precip_total_max_mm),
+            ("battery", self.battery_min_v, self.battery_max_v),
+        ):
+            if lower >= upper:
+                raise ValueError(f"the lower {name} bound must be lower than the upper one")
         return self
 
 
@@ -336,9 +405,14 @@ class TableInspection:
     header_row : int or None
         1-based row number of the header; ``None`` if no header was found.
     missing_columns : tuple of str
-        Canonical columns (``timestamp``, ``temp_c``, ``rh_pct``) without a matching header.
+        Required canonical columns (``timestamp``, ``temp_c``, ``rh_pct``) without a matching
+        header.
     column_problems : tuple of str
-        Descriptions of headers that were rejected (e.g. an unexpected unit) or ambiguous.
+        Descriptions of headers of required columns that were rejected (e.g. an unexpected
+        unit) or ambiguous.
+    optional_column_problems : tuple of str
+        The same for the optional columns (precipitation, counter, battery); such a column is
+        not read.
     source_rows : numpy.ndarray of int64
         1-based source row number of every data row (non-blank rows below the header), in
         the order of the columns below.
@@ -356,6 +430,10 @@ class TableInspection:
         Why the day/month order of the timestamps looks swapped, if it does.
     times, temp, rh : TimeColumn, ValueColumn or None
         Parsed columns; ``None`` when the header or a required column is missing.
+    precip, precip_total, battery : ValueColumn or None
+        Parsed optional columns (precipitation since the previous sample in mm, cumulative
+        precipitation counter in mm, battery voltage in V); ``None`` when the table does not
+        have the column or a required column is missing.
     """
 
     name: str
@@ -365,6 +443,7 @@ class TableInspection:
     header_row: int | None = None
     missing_columns: tuple[str, ...] = ()
     column_problems: tuple[str, ...] = ()
+    optional_column_problems: tuple[str, ...] = ()
     source_rows: RowArray = field(default_factory=_no_rows)
     short_rows: RowArray = field(default_factory=_no_rows)
     reversed_order: bool = False
@@ -374,11 +453,20 @@ class TableInspection:
     times: TimeColumn | None = None
     temp: ValueColumn | None = None
     rh: ValueColumn | None = None
+    precip: ValueColumn | None = None
+    precip_total: ValueColumn | None = None
+    battery: ValueColumn | None = None
 
     @property
     def n_data_rows(self) -> int:
         """Number of data rows below the header."""
         return len(self.source_rows)
+
+    @property
+    def auxiliary_columns(self) -> tuple[ValueColumn, ...]:
+        """The optional columns that were read (precipitation, counter, battery), in order."""
+        columns = (self.precip, self.precip_total, self.battery)
+        return tuple(column for column in columns if column is not None)
 
     def first_row(self, mask: npt.ArrayLike) -> int | None:
         """Return the source row number of the first data row selected by ``mask``.
@@ -644,6 +732,26 @@ class InputValidator:
         return report
 
 
+def outside_bounds(values: FloatArray, bounds: tuple[float, float]) -> BoolArray:
+    """Tell which values lie outside inclusive bounds.
+
+    Parameters
+    ----------
+    values : numpy.ndarray of float
+        Values in the unit of the bounds; ``NaN`` is never outside.
+    bounds : tuple of float
+        ``(lower, upper)``, inclusive.
+
+    Returns
+    -------
+    numpy.ndarray of bool
+        ``True`` where a value is below ``lower`` or above ``upper``.
+    """
+    lower, upper = bounds
+    with np.errstate(invalid="ignore"):
+        return np.asarray((values < lower) | (values > upper), dtype=np.bool_)
+
+
 def _share(count: int, total: int) -> float:
     return count / total if total else 0.0
 
@@ -784,7 +892,7 @@ class DataRowsRule(TableRule):
 
 @validation_rules.register
 class ShortRowsRule(TableRule):
-    """Rows that end before a required column look cut off (WARNING; cells become missing)."""
+    """Rows that end before a mapped column look cut off (WARNING; cells become missing)."""
 
     rule_id = "short-rows"
 
@@ -793,7 +901,7 @@ class ShortRowsRule(TableRule):
         if len(table.short_rows):
             yield self._issue(
                 Severity.WARNING,
-                f"{len(table.short_rows)} row(s) end before a required column (truncated "
+                f"{len(table.short_rows)} row(s) end before a mapped column (truncated "
                 "line?); the missing cells are treated as missing values.",
                 int(table.short_rows[0]),
                 table.name,
@@ -801,26 +909,51 @@ class ShortRowsRule(TableRule):
 
 
 @validation_rules.register
-class NumbersParseableRule(TableRule):
-    """Temperature and humidity cells must be numbers (decimal comma or point).
+class OptionalColumnsRule(TableRule):
+    """A rejected or ambiguous optional column is not read (WARNING).
 
-    A share of unparseable cells above ``max_unparseable_value_share`` is an ERROR; a smaller
-    share is a WARNING and the values become missing.
+    Optional columns are precipitation, the cumulative precipitation counter and the battery
+    voltage. Unlike a problem with a required column, a problem with one of them does not
+    reject the file (owner decision Q9: validity concerns temperature and humidity only).
+    """
+
+    rule_id = "optional-columns"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield a WARNING per optional column problem (see :meth:`TableRule.check_table`)."""
+        for problem in table.optional_column_problems:
+            yield self._issue(
+                Severity.WARNING,
+                f"{problem} The optional column is not read.",
+                table.header_row,
+                table.name,
+            )
+
+
+@validation_rules.register
+class NumbersParseableRule(TableRule):
+    """Value cells must be numbers (decimal comma or point).
+
+    For temperature and humidity, a share of unparseable cells above
+    ``max_unparseable_value_share`` is an ERROR; a smaller share is a WARNING and the values
+    become missing. For the optional auxiliary columns the same share is reported, but always
+    as a WARNING: their values become missing and the file is kept.
     """
 
     rule_id = "numbers-parseable"
 
     def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
         """Yield findings about non-numeric cells (see :meth:`TableRule.check_table`)."""
-        for column in (table.temp, table.rh):
-            if column is None:
-                continue
+        required = tuple(column for column in (table.temp, table.rh) if column is not None)
+        for column in (*required, *table.auxiliary_columns):
             count = int(column.unparseable.sum())
             if not count:
                 continue
             share = _share(count, table.n_data_rows)
             limit = self.settings.max_unparseable_value_share
             severity = _share_severity(count, table.n_data_rows, limit, self.settings)
+            if column not in required:
+                severity = Severity.WARNING
             consequence = "file rejected" if severity is Severity.ERROR else "read as missing"
             yield self._issue(
                 severity,
@@ -1000,9 +1133,11 @@ class DuplicateTimestampsRule(TableRule):
         """Yield a WARNING with the number of duplicates (see :meth:`TableRule.check_table`)."""
         if table.times is None or table.temp is None or table.rh is None:
             return
-        frame = pd.DataFrame(
-            {"t": table.times.utc.to_numpy(), "temp": table.temp.parsed, "rh": table.rh.parsed}
-        )
+        values = {
+            f"value_{position}": column.parsed
+            for position, column in enumerate((table.temp, table.rh, *table.auxiliary_columns))
+        }
+        frame = pd.DataFrame({"t": table.times.utc.to_numpy(), **values})
         frame = frame[frame["t"].notna() & ~table.times.unresolved]
         repeated = frame["t"].duplicated(keep="last")
         count = int(repeated.sum())
@@ -1090,11 +1225,17 @@ class GrossBoundsRule(TableRule):
 
     A share of present values outside ``[lower, upper]`` above ``max_out_of_bounds_share`` is
     an ERROR (wrong unit or swapped columns); a smaller share is a WARNING and the values are
-    left to quality control (WP-1.5).
+    left to quality control (WP-1.5). A rule with :attr:`can_reject` false (the optional
+    auxiliary columns) reports every finding as a WARNING, and the parser reads those values
+    as missing (:func:`outside_bounds`): a value outside gross bounds of an auxiliary column is
+    a unit or column mix-up (e.g. a battery charge in % under a unitless ``Battery`` header),
+    and no quality check would catch it later.
     """
 
     variable: ClassVar[str]
     unit: ClassVar[str]
+    can_reject: ClassVar[bool] = True
+    """Whether a share above the limit rejects the file (only for required variables)."""
 
     @abstractmethod
     def _column(self, table: TableInspection) -> ValueColumn | None:
@@ -1110,15 +1251,18 @@ class GrossBoundsRule(TableRule):
         if column is None:
             return
         lower, upper = self._bounds()
-        with np.errstate(invalid="ignore"):
-            outside = (column.parsed < lower) | (column.parsed > upper)
+        outside = outside_bounds(column.parsed, (lower, upper))
         count = int(outside.sum())
         if not count:
             return
         share = _share(count, len(column.present))
         limit = self.settings.max_out_of_bounds_share
         severity = _share_severity(count, len(column.present), limit, self.settings)
+        if not self.can_reject:
+            severity = Severity.WARNING
         hint = " (wrong unit or swapped columns?)" if severity is Severity.ERROR else ""
+        if not self.can_reject:
+            hint = "; read as missing"
         yield self._issue(
             severity,
             f"{count} {self.variable} value(s) outside [{lower:g}, {upper:g}] {self.unit} "
@@ -1156,6 +1300,60 @@ class HumidityBoundsRule(GrossBoundsRule):
 
     def _bounds(self) -> tuple[float, float]:
         return self.settings.rh_min_pct, self.settings.rh_max_pct
+
+
+@validation_rules.register
+class PrecipitationBoundsRule(GrossBoundsRule):
+    """Gross bounds of the precipitation per interval (``precip_min_mm`` to ``precip_max_mm``).
+
+    Never rejects the file; values outside are read as missing.
+    """
+
+    rule_id = "precipitation-bounds"
+    variable = "precipitation"
+    unit = "mm"
+    can_reject = False
+
+    def _column(self, table: TableInspection) -> ValueColumn | None:
+        return table.precip
+
+    def _bounds(self) -> tuple[float, float]:
+        return self.settings.precip_bounds_mm
+
+
+@validation_rules.register
+class PrecipitationTotalBoundsRule(GrossBoundsRule):
+    """Gross bounds of the cumulative precipitation counter (never rejects; outside = missing)."""
+
+    rule_id = "precipitation-total-bounds"
+    variable = "cumulative precipitation"
+    unit = "mm"
+    can_reject = False
+
+    def _column(self, table: TableInspection) -> ValueColumn | None:
+        return table.precip_total
+
+    def _bounds(self) -> tuple[float, float]:
+        return self.settings.precip_total_bounds_mm
+
+
+@validation_rules.register
+class BatteryBoundsRule(GrossBoundsRule):
+    """Gross bounds of the battery voltage (``battery_min_v`` to ``battery_max_v``).
+
+    Never rejects the file; values outside (e.g. a charge in %) are read as missing.
+    """
+
+    rule_id = "battery-bounds"
+    variable = "battery voltage"
+    unit = "V"
+    can_reject = False
+
+    def _column(self, table: TableInspection) -> ValueColumn | None:
+        return table.battery
+
+    def _bounds(self) -> tuple[float, float]:
+        return self.settings.battery_bounds_v
 
 
 @validation_rules.register
