@@ -320,3 +320,40 @@ The probes are in `/tmp/claude-0/review-2.1/probe.py` (synthetic data, not commi
   depends on, and it avoids calling an August véraison incomplete in a running season. It inherits major finding 2 (skipped
   days delay the date) and the minor late-deployment case.
 - **Huglin without K → `None`:** accepted. Better than silently using K = 1.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed `7c5d1dd` and `e376300`. The merge `9b7881e` of `wp/0.1-foundation` is clean: outside this WP's scope the
+tree is identical to `wp/0.1-foundation`.
+
+**Gates observed:**
+- `make lint`: `All checks passed!`, `49 files already formatted`.
+- `make type`: `Success: no issues found in 31 source files`.
+- `make test`: `267 passed`.
+- `make cov`: `TOTAL 1361 0 236 0 100%`, every thermal module at 100 % line and branch.
+- Scope unchanged and clean.
+
+**Probes re-run** (synthetic 2025 series at 1825 s steps, `/tmp/claude-0/review-2.1/probe2.py`, not committed):
+- **GFV by default:** `value=None`, `status: "not configured"`.
+- **GFV configured with 1282 / 2528:** DOY 229, `details["date"]` = 2025-08-17.
+- **19-day May gap:** GDD 1304, `complete=True`, `n_missing_days=19`, class `None`; previously it was wrongly `region_i`.
+  Huglin is `complete=False`, class `None`.
+- **Late deployment (June 1):** GFV `value=None`, `status: "accumulation start not covered"`, `n_missing_days_at_start=92`.
+- **Only March 1 missing:** GFV `value=None` as well. This is consistent with the default 0.
+- **K bands:** 40.0 → None, 42.0 → 1.02, 48.0 → 1.05, 48.88 → 1.06, 50.0 → 1.06, 50.01 → None. Upper-inclusive as intended.
+- **Validation:** rejects a single GFV F\*, negative `max_missing_days` / `max_missing_days_at_start`, and an unknown `cap_order`.
+  `max_missing_days: 20` restores a class for the 19-day gap, as designed.
+- **`cap_order`:** the hand example `before_adjustment` gives 28.0 (min(9, 14) + 1.75 = 10.75 on April 5). I recomputed it and it is
+  correct. Both orders are documented as `[to be verified]`.
+
+**Round 1 findings:** all ten are fixed or correctly deferred as the table states. I checked each fix in the code, the docs and
+the probes. The 1282 / 2528 values now appear only as unverified, inactive candidates in `gfv.md`. No literature value is
+presented as certain.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `phenology.py` `_prediction` | A mid-season gap still delays the predicted date while the result stays `complete=True`. Probe: an 18-day May gap moves véraison from 08-17 to 08-30, with `complete=True` and `n_missing_days=18`. This is now reported and documented, and `gfv` is off by default, so it is not blocking. Owner decision: either add a `max_missing_days` guard for phenology like the sums have (value or `complete` withheld above it), or accept it with the documentation. | open (owner) |
+| nit | `bedd.py` `BEDD_DAILY_FORMULAS` | `Callable[..., pd.Series]` disables argument checking for the two formulas. A small `Protocol` with the keyword signature would keep mypy useful. | open |
+| nit | `phenology.py` `max_missing_days_at_start` | The default 0 means one missing first day (e.g. March 1) suppresses the whole season's prediction. This is defensible as strict, and it is documented as "to be tuned". A tolerance of a few days is worth considering on real data. | open |
