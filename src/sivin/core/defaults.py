@@ -12,10 +12,20 @@ DEFAULT_TIMEZONE: Final = "Europe/Prague"
 """Time zone of the vineyards (South Moravia, Czech Republic)."""
 
 LEGACY_SAMPLING_INTERVAL_S: Final = 1825.0
-"""Nominal sampling interval of the sensors in seconds.
+"""Sampling interval of the sensors in seconds as estimated by the legacy scripts.
 
 Taken from the legacy configurations and ``sampl_freq_basic.py``, whose example timestamps are
-30 min 25 s (1825 s) apart.
+30 min 25 s (1825 s) apart. Superseded by :data:`DEFAULT_SAMPLING_INTERVAL_S`, which is measured
+on a real export; kept because several subsystems still derive their defaults from it.
+"""
+
+DEFAULT_SAMPLING_INTERVAL_S: Final = 1830.0
+"""Nominal sampling interval of the sensors in seconds (``time.expected_interval_s``).
+
+Median step between consecutive timestamps of the first real export,
+``MeteoData_8615620_77799986_VUT_20260301_223842.csv`` (sensor 77799986, 3520 rows,
+2025-07-30 to 2026-03-01; MIGRATION_PLAN §0.6.1). The legacy estimate was 1825 s
+(:data:`LEGACY_SAMPLING_INTERVAL_S`).
 """
 
 DEFAULT_MIN_DAILY_COVERAGE: Final = 0.9
