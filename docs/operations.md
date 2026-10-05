@@ -82,9 +82,17 @@ never starts anything, it only downloads the JSON files of the last deployment.
 (`pipeline-data` for `collect`, `pipeline-pages` for `build-site`, `pipeline-deploy` for
 `deploy`), never cancelling a running job. The gate has none, so the no-op run of the other
 cron never waits or cancels anything. A job that finds its group busy waits; GitHub keeps only
-one waiting job per group, so a newer run's job cancels an older waiting one — which is always
-superseded by the newer run (same exports, newer data). With one shared group, the next job of a
-finished run could cancel the waiting `collect` of a newer run; hence three groups.
+one waiting job per group, so a newer run's job cancels an older waiting one. With one shared
+group, the next job of a finished run could cancel the waiting `collect` of a newer run; hence
+three groups. Usually the newer run does everything the cancelled one would have done, with two
+exceptions (only when a run is already running and another one is waiting):
+
+- a manual **skip_fetch** run cancels a waiting **scheduled** `collect`: that day's fetch is
+  skipped. Start the workflow again without `skip_fetch` once nothing is running.
+- a **scheduled** run (or any later run) cancels a waiting manual **full_site_build**: the full
+  rebuild does not happen. Start the workflow again with `full_site_build`.
+
+A cancelled job shows as *cancelled* in the Actions tab.
 
 **Permissions.** The workflow grants nothing by default. `collect` gets `contents: write` (to
 push `data`), `build-site` `contents: read`, `deploy` `pages: write` and `id-token: write`.

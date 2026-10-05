@@ -416,8 +416,18 @@ class TestMarkdown:
 
     def test_links_and_math_are_neutralised(self) -> None:
         assert markdown_text("see https://x.example/a_b|c and www.example.org, $x$") == (
-            "see `https://x.example/a_b\\|c` and `www.example.org,` \\$x\\$"
+            "see `https://x.example/a_b|c` and `www.example.org,` \\$x\\$"
         )
+        assert markdown_text("https://x/a|b", in_table=True) == "`https://x/a\\|b`"
+
+    def test_pipe_in_a_link_is_escaped_only_in_table_cells(self) -> None:
+        summary = RunSummary(
+            record(failures=("fetch: see https://x.example/a|b",)),
+            warnings=(WarningGroup("77678271", "gap", 1, None, None, "https://x.example/a|b"),),
+        )
+        text = MarkdownSummary().render(summary)
+        assert "- fetch: see `https://x.example/a|b`\n" in text
+        assert "| `https://x.example/a\\|b` |" in text
         assert markdown_text("odd `ftp://h/`x") == "odd \\``ftp://h/'x`"
 
     def test_escaping(self) -> None:

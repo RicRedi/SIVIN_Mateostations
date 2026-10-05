@@ -85,9 +85,11 @@ jobs:
     # pending one (never the running one, cancel-in-progress: false). Each job has its own
     # group (pipeline-data, pipeline-pages, pipeline-deploy): with one shared group the next
     # job of a run (queued when its predecessor ends) would cancel a waiting job of a newer
-    # run. Per job, a cancelled pending job is always superseded by a newer run (which fetches
-    # the same exports or deploys newer data), and the order of the runs is kept because each
-    # job only becomes ready after the previous job of its run.
+    # run. The order of the runs is kept because each job only becomes ready after the previous
+    # job of its run. A cancelled pending job is usually superseded by the newer run, except:
+    # a manual skip_fetch run cancels a waiting scheduled collect (that day's fetch is skipped:
+    # run again without skip_fetch), and a later run cancels a waiting manual full_site_build
+    # (run again with full_site_build). See docs/operations.md, "Overlapping runs".
     concurrency:
       group: pipeline-data
       cancel-in-progress: false

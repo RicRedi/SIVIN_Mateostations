@@ -279,13 +279,17 @@ _BARE_LINK: Final = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9+.-]*://|www\.)\S+")
 """A URL (``scheme://...``) or ``www.`` address that GitHub would turn into a link."""
 
 
-def markdown_text(value: str) -> str:
+def markdown_text(value: str, in_table: bool = False) -> str:
     """Escape plain text for GitHub-flavoured Markdown (one line).
 
     Parameters
     ----------
     value : str
         Plain text, e.g. a failure message.
+    in_table : bool, optional
+        The text is a table cell: a ``|`` inside inline code is escaped too (GitHub splits
+        cells on it even there and shows ``\\|`` as ``|``); elsewhere it stays literal,
+        because inside inline code a backslash would be shown.
 
     Returns
     -------
@@ -299,7 +303,9 @@ def markdown_text(value: str) -> str:
     position = 0
     for match in _BARE_LINK.finditer(text):
         parts.append(_MARKDOWN_SPECIAL.sub(r"\\\1", text[position : match.start()]))
-        link = match.group().replace("`", "'").replace("|", "\\|")
+        link = match.group().replace("`", "'")
+        if in_table:
+            link = link.replace("|", "\\|")
         parts.append(f"`{link}`")
         position = match.end()
     parts.append(_MARKDOWN_SPECIAL.sub(r"\\\1", text[position:]))
@@ -331,7 +337,7 @@ class MarkdownSummary(DocumentFormat):
 
 
 def _row(cells: Sequence[str], escape: bool = True) -> str:
-    texts = [markdown_text(cell) if escape else cell for cell in cells]
+    texts = [markdown_text(cell, in_table=True) if escape else cell for cell in cells]
     return "| " + " | ".join(texts) + " |"
 
 
