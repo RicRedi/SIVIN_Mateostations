@@ -144,3 +144,26 @@ def test_create_passes_service_and_options(tmp_path: Path) -> None:
     assert call["options"].experimental_options["prefs"]["download.default_directory"] == str(
         tmp_path
     )
+
+
+def test_chromedriver_from_the_runner_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner_dir = tmp_path / "runner"
+    runner_dir.mkdir()
+    (runner_dir / "chromedriver").write_bytes(b"")
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+
+    factory = ChromeDriverFactory(_settings(tmp_path), {"CHROMEWEBDRIVER": str(runner_dir)})
+
+    assert factory.chromedriver_path() == runner_dir / "chromedriver"
+
+
+def test_missing_runner_chromedriver_falls_back_to_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+
+    factory = ChromeDriverFactory(_settings(tmp_path), {"CHROMEWEBDRIVER": str(tmp_path / "x")})
+
+    assert factory.chromedriver_path() == Path("/usr/bin/chromedriver")

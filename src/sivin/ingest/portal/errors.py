@@ -30,3 +30,7 @@ class ExportButtonNotFoundError(PortalError):
 
 class DownloadTimeoutError(PortalError):
     """Raised when no new, complete file appears in the download directory in time."""
+
+
+class DownloadIncompleteError(PortalError):
+    """Raised when the only new file is smaller than the minimum export size (e.g. empty)."""

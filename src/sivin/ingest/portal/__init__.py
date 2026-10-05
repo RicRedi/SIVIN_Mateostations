@@ -13,8 +13,9 @@ See ``docs/ingest.md``.
 """
 
 from sivin.ingest.portal.clock import Clock, SystemClock
-from sivin.ingest.portal.credentials import PortalCredentials
+from sivin.ingest.portal.credentials import PortalCredentials, Secret
 from sivin.ingest.portal.errors import (
+    DownloadIncompleteError,
     DownloadTimeoutError,
     ExportButtonNotFoundError,
     MissingCredentialsError,
@@ -31,6 +32,7 @@ __all__ = [
     "Clock",
     "DeviceFailure",
     "DirectorySnapshot",
+    "DownloadIncompleteError",
     "DownloadTimeoutError",
     "DownloadWatcher",
     "DownloadedExport",
@@ -43,6 +45,7 @@ __all__ = [
     "PortalSelectors",
     "PortalSettings",
     "PortalTimeouts",
+    "Secret",
     "SessionResult",
     "SystemClock",
     "ViewModelError",

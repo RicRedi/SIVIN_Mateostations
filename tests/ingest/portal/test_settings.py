@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
+import pickle
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +13,7 @@ import pydantic
 import pytest
 from pydantic import BaseModel
 
-from sivin.ingest.portal.credentials import PortalCredentials
+from sivin.ingest.portal.credentials import PortalCredentials, Secret
 from sivin.ingest.portal.errors import MissingCredentialsError
 from sivin.ingest.portal.settings import PortalSelectors, PortalSettings, PortalTimeouts
 from sivin.paths import ProjectPaths
@@ -41,6 +44,11 @@ def test_defaults_are_the_legacy_values() -> None:
     assert "mdi-file-excel" in settings.selectors.excel_button_xpath
     assert settings.timeouts.element_wait_s == 15.0
     assert settings.timeouts.download_wait_s == 30.0
+    assert settings.timeouts.device_settle_s == 3.0
+    assert settings.timeouts.tab_settle_s == 2.0
+    assert settings.export_section_name == "Historie meteorologických dat"
+    assert settings.attempts_per_device == 2
+    assert settings.min_export_size_bytes == 1
     assert settings.headless is True
 
 
@@ -86,14 +94,15 @@ def test_credentials_from_environment() -> None:
     credentials = PortalCredentials.from_env({"SIVIN_USER": "user", "SIVIN_PASSWORD": SECRET})
 
     assert credentials.username == "user"
-    assert credentials.password == SECRET
+    assert credentials.password.reveal() == SECRET
+    assert credentials.password == Secret(SECRET)
 
 
 def test_credentials_default_to_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIVIN_USER", "user")
     monkeypatch.setenv("SIVIN_PASSWORD", SECRET)
 
-    assert PortalCredentials.from_env().password == SECRET
+    assert PortalCredentials.from_env().password.reveal() == SECRET
 
 
 @pytest.mark.parametrize(
@@ -114,15 +123,34 @@ def test_missing_credentials_name_the_variable_only(environ: dict[str, str], mis
 
 def test_empty_credentials_are_rejected() -> None:
     with pytest.raises(MissingCredentialsError):
-        PortalCredentials("user", "")
+        PortalCredentials("user", Secret(""))
 
 
-def test_repr_and_str_never_reveal_the_password() -> None:
-    credentials = PortalCredentials("user", SECRET)
+def test_repr_str_asdict_and_copies_never_reveal_the_password() -> None:
+    credentials = PortalCredentials("user", Secret(SECRET))
 
-    for text in (repr(credentials), str(credentials), f"{credentials}", repr([credentials])):
+    texts = [
+        repr(credentials),
+        str(credentials),
+        f"{credentials}",
+        repr([credentials]),
+        repr(dataclasses.asdict(credentials)),
+        repr(dataclasses.astuple(credentials)),
+        f"{credentials.password:>10}",
+        str(credentials.password),
+        repr(copy.deepcopy(credentials)),
+    ]
+    for text in texts:
         assert SECRET not in text
         assert "***" in text
+    assert copy.deepcopy(credentials) == credentials
+    assert hash(Secret(SECRET)) == hash(Secret(SECRET))
+    assert Secret(SECRET) != SECRET
+
+
+def test_credentials_cannot_be_pickled() -> None:
+    with pytest.raises(TypeError, match="cannot be pickled"):
+        pickle.dumps(PortalCredentials("user", Secret(SECRET)))
 
 
 def test_light_modules_do_not_import_selenium() -> None:

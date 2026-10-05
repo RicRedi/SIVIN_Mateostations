@@ -28,7 +28,8 @@ class PortalSession:
     Parameters
     ----------
     client : PortalClient
-        A client that is not yet open; :meth:`run` opens and closes it.
+        A client that is not yet open; :meth:`run` opens and closes it. Its
+        ``settings.attempts_per_device`` sets how often a failing device is retried.
     """
 
     def __init__(self, client: PortalClient) -> None:
@@ -65,14 +66,48 @@ class PortalSession:
             selected, missing = self._select(listed, devices)
             failures.extend(DeviceFailure(device, NOT_LISTED_REASON) for device in missing)
             for device in selected:
-                try:
-                    downloads.append(DownloadedExport(device, client.download_export(device)))
-                except DEVICE_ERRORS as error:
-                    failures.append(DeviceFailure(device, _describe(error)))
-                    logger.warning("Export of %s failed: %s", device, failures[-1].reason)
-                    self._recover(client)
+                outcome = self._download(client, device)
+                if isinstance(outcome, DeviceFailure):
+                    failures.append(outcome)
+                else:
+                    downloads.append(outcome)
         logger.info("Portal session: %d downloaded, %d failed.", len(downloads), len(failures))
         return SessionResult(tuple(downloads), tuple(failures))
+
+    def _download(
+        self, client: PortalClient, device: PortalDevice
+    ) -> DownloadedExport | DeviceFailure:
+        """Try one device up to ``attempts_per_device`` times, recovering between attempts."""
+        attempts = client.settings.attempts_per_device
+        reasons: list[str] = []
+        for attempt in range(1, attempts + 1):
+            try:
+                path = client.download_export(device)
+            except DEVICE_ERRORS as error:
+                reasons.append(_describe(error))
+                logger.warning(
+                    "Export of %s failed (attempt %d of %d): %s",
+                    device,
+                    attempt,
+                    attempts,
+                    reasons[-1],
+                )
+                self._recover(client)
+                continue
+            self._leave_device(client)
+            return DownloadedExport(device, path)
+        return DeviceFailure(device, _summarise(reasons))
+
+    @staticmethod
+    def _leave_device(client: PortalClient) -> None:
+        """Return to the device list; a failure here never loses the download."""
+        try:
+            client.back_to_device_list()
+        except DEVICE_ERRORS as error:
+            logger.warning(
+                "Export downloaded, but returning to the device list failed: %s",
+                _describe(error),
+            )
 
     @staticmethod
     def _select(
@@ -98,3 +133,12 @@ def _describe(error: BaseException) -> str:
     message = (error.msg if isinstance(error, WebDriverException) else str(error)) or ""
     lines = message.strip().splitlines()
     return f"{type(error).__name__}: {lines[0]}" if lines else type(error).__name__
+
+
+def _summarise(reasons: list[str]) -> str:
+    """Return the first failure reason, plus the last one when a retry failed differently."""
+    if len(reasons) == 1:
+        return reasons[0]
+    if reasons[-1] == reasons[0]:
+        return f"{reasons[0]} ({len(reasons)} attempts)"
+    return f"{reasons[0]} ({len(reasons)} attempts; last: {reasons[-1]})"

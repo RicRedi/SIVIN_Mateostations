@@ -19,7 +19,11 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.remote.webdriver import WebDriver
 
-from sivin.ingest.portal.settings import CHROME_BINARY_ENV_VAR, PortalSettings
+from sivin.ingest.portal.settings import (
+    CHROME_BINARY_ENV_VAR,
+    CHROMEDRIVER_DIR_ENV_VAR,
+    PortalSettings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,15 +152,17 @@ class ChromeDriverFactory(WebDriverFactory):
 
     The browser executable is ``settings.chrome_binary``, else the ``CHROME_BINARY``
     environment variable, else whatever chromedriver finds. chromedriver is
-    ``settings.chromedriver_path``, else ``chromedriver`` on ``PATH``, else a matching one
-    downloaded by webdriver-manager.
+    ``settings.chromedriver_path``, else ``$CHROMEWEBDRIVER/chromedriver`` (GitHub-hosted
+    runners), else ``chromedriver`` on ``PATH``, else a matching one downloaded by
+    webdriver-manager.
 
     Parameters
     ----------
     settings : PortalSettings
         Portal settings; ``download_dir`` must be absolute.
     environ : Mapping[str, str], optional
-        Environment to read ``CHROME_BINARY`` from; :data:`os.environ` when omitted.
+        Environment to read ``CHROME_BINARY`` and ``CHROMEWEBDRIVER`` from; :data:`os.environ`
+        when omitted.
     driver_class : callable, optional
         Constructor of the driver, ``selenium.webdriver.Chrome`` by default (tests pass a fake).
     """
@@ -260,11 +266,17 @@ class ChromeDriverFactory(WebDriverFactory):
         Returns
         -------
         pathlib.Path
-            ``settings.chromedriver_path``, else ``chromedriver`` on ``PATH``, else a driver
-            installed by webdriver-manager (needs network access to its download site).
+            ``settings.chromedriver_path``, else ``$CHROMEWEBDRIVER/chromedriver`` if it
+            exists, else ``chromedriver`` on ``PATH``, else a driver installed by
+            webdriver-manager (needs network access to its download site).
         """
         if self._settings.chromedriver_path is not None:
             return self._settings.chromedriver_path
+        runner_dir = self._environ.get(CHROMEDRIVER_DIR_ENV_VAR)
+        if runner_dir:
+            runner_driver = Path(runner_dir) / CHROMEDRIVER_EXECUTABLE
+            if runner_driver.is_file():
+                return runner_driver
         on_path = shutil.which(CHROMEDRIVER_EXECUTABLE)
         if on_path is not None:
             return Path(on_path)

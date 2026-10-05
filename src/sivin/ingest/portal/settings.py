@@ -13,7 +13,11 @@ from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from sivin.ingest.portal.watcher import DEFAULT_IGNORED_PREFIXES, DEFAULT_PARTIAL_SUFFIXES
+from sivin.ingest.portal.watcher import (
+    DEFAULT_IGNORED_PREFIXES,
+    DEFAULT_MIN_EXPORT_SIZE_BYTES,
+    DEFAULT_PARTIAL_SUFFIXES,
+)
 from sivin.paths import ProjectPaths
 
 TEXT_PLACEHOLDER: Final = "{text}"
@@ -21,6 +25,9 @@ TEXT_PLACEHOLDER: Final = "{text}"
 
 CHROME_BINARY_ENV_VAR: Final = "CHROME_BINARY"
 """Environment variable naming the Chrome/Chromium executable when ``chrome_binary`` is unset."""
+
+CHROMEDRIVER_DIR_ENV_VAR: Final = "CHROMEWEBDRIVER"
+"""Environment variable of GitHub-hosted runner images: the directory containing chromedriver."""
 
 
 class _Settings(BaseModel):
@@ -61,12 +68,24 @@ class PortalSelectors(_Settings):
     excel_button_xpath: str = Field(
         "//button[.//i[contains(@class, 'mdi-file-excel')]]",
         description=(
-            "XPath of the Excel export buttons; the first visible one is clicked, which is the "
-            "one in the 'Historie meteorologických dat' section of the active tab (XPath)."
+            "XPath of all Excel export buttons; the first visible one is the fallback when no "
+            "button is found inside the export section (XPath)."
+        ),
+    )
+    section_button_xpath_template: str = Field(
+        "//*[contains(normalize-space(text()), {text})]"
+        "/ancestor::*[.//button[.//i[contains(@class, 'mdi-file-excel')]]][1]"
+        "//button[.//i[contains(@class, 'mdi-file-excel')]]",
+        description=(
+            "XPath of the Excel buttons inside the section whose heading contains {text} "
+            "(export_section_name): the nearest ancestor of the heading that holds an Excel "
+            "button, then its buttons. A visible match also proves that the meteorological tab "
+            "is shown. Structure assumed from the legacy comments, [to be verified] (XPath "
+            "template)."
         ),
     )
 
-    @field_validator("link_xpath_template", "tab_xpath_template")
+    @field_validator("link_xpath_template", "tab_xpath_template", "section_button_xpath_template")
     @classmethod
     def _has_placeholder(cls, value: str) -> str:
         if TEXT_PLACEHOLDER not in value:
@@ -93,13 +112,28 @@ class PortalTimeouts(_Settings):
         gt=0,
         description="Polling interval of explicit waits and of the download watcher (s).",
     )
-    settle_delay_s: float = Field(
-        1.0,
+    device_settle_s: float = Field(
+        3.0,
         ge=0,
         description=(
-            "Fixed pause after opening a device and after switching to the meteorological tab "
-            "(s), for DotVVM to finish rendering after the spinner disappears. The legacy "
-            "script slept 3 s and 2 s; 1 s is [to be verified] against the real portal."
+            "Fixed pause after clicking a device link (s), for DotVVM to render the device "
+            "page; legacy value 3 s, [to be tuned] on the first real run."
+        ),
+    )
+    tab_settle_s: float = Field(
+        2.0,
+        ge=0,
+        description=(
+            "Fixed pause after switching to the meteorological tab (s); legacy value 2 s, "
+            "[to be tuned] on the first real run."
+        ),
+    )
+    list_check_s: float = Field(
+        5.0,
+        gt=0,
+        description=(
+            "Maximum wait for the device list after going back from a device (s); when it "
+            "does not appear, the client reloads the portal and opens the folder again."
         ),
     )
 
@@ -124,6 +158,24 @@ class PortalSettings(_Settings):
         "Meteorologická data",
         min_length=1,
         description="Text of the device tab with the meteorological data and the export (text).",
+    )
+    export_section_name: str = Field(
+        "Historie meteorologických dat",
+        min_length=1,
+        description="Heading text of the tab section whose Excel button is clicked (text).",
+    )
+    attempts_per_device: int = Field(
+        2,
+        ge=1,
+        description=(
+            "How often a device is tried before it is recorded as failed (count); the client "
+            "returns to the device list before each retry."
+        ),
+    )
+    min_export_size_bytes: int = Field(
+        DEFAULT_MIN_EXPORT_SIZE_BYTES,
+        ge=1,
+        description="Smallest accepted export file (bytes); smaller files are incomplete.",
     )
     selectors: PortalSelectors = Field(
         default_factory=PortalSelectors, description="Locators of the portal's HTML elements."
@@ -154,8 +206,9 @@ class PortalSettings(_Settings):
     chromedriver_path: Path | None = Field(
         None,
         description=(
-            "chromedriver executable (path). When unset, chromedriver on PATH is used, "
-            "otherwise webdriver-manager downloads a matching one."
+            "chromedriver executable (path). When unset: $CHROMEWEBDRIVER/chromedriver (set "
+            "on GitHub-hosted runners), then chromedriver on PATH, then webdriver-manager "
+            "downloads a matching one."
         ),
     )
     chrome_arguments: tuple[str, ...] = Field(
