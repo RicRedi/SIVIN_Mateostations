@@ -100,6 +100,10 @@ were given in whole °F·d (e.g. region II "2501–3000"); the implementation tr
 ## References
 
 - Amerine, M. A., Winkler, A. J. (1944). Composition and quality of musts and wines of
-  California grapes. *Hilgardia*, 15(6), 493–675. [DOI not verified]
+  California grapes. *Hilgardia*, 15(6), 493–675. https://doi.org/10.3733/hilg.v15n06p493
 - Winkler, A. J., Cook, J. A., Kliewer, W. M., Lider, L. A. (1974). *General Viticulture.*
-  University of California Press, Berkeley.
+  2nd ed. University of California Press, Berkeley. ISBN 0-520-02591-1.
+
+Region bounds (≤ 2500, 2501–3000, 3001–3500, 3501–4000, > 4000 °F·d), the 50 °F base and the
+April 1 – October 31 period were checked in WP-L.1 against secondary sources (see
+[literature verification](../literature-verification.md)).

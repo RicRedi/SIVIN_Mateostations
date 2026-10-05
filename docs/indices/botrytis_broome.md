@@ -31,9 +31,10 @@ $$
 | $c$ | wetness × temperature coefficient | 1/(h·°C) | 0.061601 |
 | $d$ | wetness × temperature² coefficient | 1/(h·°C²) | −0.001511 |
 
-The coefficients are the values commonly quoted from Broome et al. (1995). They could **not be
-checked against the paper** in this project and are marked **[to be verified]**. They are
-configurable (`coefficients.*`).
+The coefficients were verified in WP-L.1 against the UC IPM model page "Botrytis Bunch Rot of
+Grape", which quotes the equation of Broome et al. (1995) as
+$\ln(Y/(1-Y)) = -2.647866 - 0.374927\,W + 0.061601\,W T - 0.001511\,W T^2$ (the paper itself
+was not read). They are configurable (`coefficients.*`).
 
 Worked example (also a unit test): $W = 5$ h, $T = 15$ °C gives
 $-2.647866 - 1.874635 + 4.620075 - 1.699875 = -1.602301$, so $Y = 1/(1 + e^{1.602301}) = 0.1677$.
@@ -89,10 +90,10 @@ WP).
 | `max_dry_interruption_h` | 1.0 | h | project default, **to be tuned** |
 | `min_event_duration_h` | 0 (report all) | h | project default, **to be tuned** |
 | `max_wetness_h` | none (no cap) | h | project choice; caps $W$ in the formula |
-| `coefficients.intercept` | −2.647866 | — | Broome et al. (1995) **[to be verified]** |
-| `coefficients.wetness_h` | −0.374927 | 1/h | Broome et al. (1995) **[to be verified]** |
-| `coefficients.wetness_temp` | 0.061601 | 1/(h·°C) | Broome et al. (1995) **[to be verified]** |
-| `coefficients.wetness_temp_sq` | −0.001511 | 1/(h·°C²) | Broome et al. (1995) **[to be verified]** |
+| `coefficients.intercept` | −2.647866 | — | Broome et al. (1995), as quoted by UC IPM |
+| `coefficients.wetness_h` | −0.374927 | 1/h | Broome et al. (1995), as quoted by UC IPM |
+| `coefficients.wetness_temp` | 0.061601 | 1/(h·°C) | Broome et al. (1995), as quoted by UC IPM |
+| `coefficients.wetness_temp_sq` | −0.001511 | 1/(h·°C²) | Broome et al. (1995), as quoted by UC IPM |
 | `risk_bands` | empty (no classes) | — (0-1) | none; see *Interpretation* |
 | `season.*` | 4/1 - 10/31 | — | project default |
 | `sampling.nominal_interval_s` | 1825 | s | legacy configuration |
@@ -130,9 +131,10 @@ regression intercept and has no meaning outside the wetness durations the model 
 - **Bias direction in South Moravia:** in late summer and autumn, nights with RH ≥ 90 % are
   frequent. Expect many short estimated periods and a non-zero daily curve on most nights,
   even when the berries stay dry.
-- **Range of validity.** The model was fitted on a limited range of wetness durations and
-  temperatures (see the paper; not verified here). Values outside that range, for example
-  $W > 24$ h or $T$ near 0 °C or above 30 °C, are extrapolations. With the humidity proxy,
+- **Range of validity.** The model was fitted on detached mature berries with 4, 8, 12, 16 or
+  20 h of wetness at 12–30 °C ($R^2 = 0.75$; UC IPM model page, verified in WP-L.1). Values
+  outside that range, for example $W > 20$ h or $T$ below 12 °C or above 30 °C, are
+  extrapolations. With the humidity proxy,
   multi-day fog or rain spells easily give $W > 24$ h, and $Y$ then **saturates near 1**: for
   example, $W = 48$ h at 20 °C gives $Y = 0.99992$. The optional parameter `max_wetness_h`
   (default: no cap, project choice) caps the $W$ used in the formula. The reported duration of
@@ -158,8 +160,11 @@ regression intercept and has no meaning outside the wetness durations the model 
 
 - Broome, J. C., English, J. T., Marois, J. J., Latorre, B. A., Aviles, J. C. (1995).
   Development of an infection model for Botrytis bunch rot of grapes based on wetness duration
-  and temperature. *Phytopathology*, 85, 97-102. [DOI not verified]
+  and temperature. *Phytopathology*, 85(1), 97-102. https://doi.org/10.1094/Phyto-85-97
 - Sentelhas, P. C., Dalla Marta, A., Orlandini, S., Santos, E. A., Gillespie, T. J.,
   Gleason, M. L. (2008). Suitability of relative humidity as an estimator of leaf wetness
-  duration. *Agricultural and Forest Meteorology*, 148, 392-400. [details to be verified]
-  [DOI not verified]
+  duration. *Agricultural and Forest Meteorology*, 148(3), 392-400.
+  https://doi.org/10.1016/j.agrformet.2007.09.011
+- UC IPM. *Models: Botrytis Bunch Rot of Grape* (online),
+  https://ipm.ucanr.edu/DISEASE/DATABASE/grapebotrytis.html (secondary source of the
+  coefficients and the fitting range; consulted via search index, October 2026).

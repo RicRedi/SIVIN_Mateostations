@@ -504,14 +504,19 @@ quality:
 
 ## References
 
+DOIs verified in WP-L.1 (see [literature verification](literature-verification.md)).
+
 - Killick, R., Fearnhead, P., Eckley, I. A. (2012). Optimal detection of changepoints with a
   linear computational cost. *Journal of the American Statistical Association*, 107(500),
-  1590–1598. [DOI not verified]
+  1590–1598. https://doi.org/10.1080/01621459.2012.737745
 - Page, E. S. (1954). Continuous inspection schemes. *Biometrika*, 41(1/2), 100–115.
-  [DOI not verified]
+  https://doi.org/10.1093/biomet/41.1-2.100
 - Schwarz, G. (1978). Estimating the dimension of a model. *The Annals of Statistics*, 6(2),
-  461–464. [DOI not verified]
+  461–464. https://doi.org/10.1214/aos/1176344136
 - Scott, A. J., Knott, M. (1974). A cluster analysis method for grouping means in the analysis
-  of variance. *Biometrics*, 30(3), 507–512. [DOI not verified]
+  of variance. *Biometrics*, 30(3), 507–512. https://doi.org/10.2307/2529204
 - Zahumenský, I. (2004). *Guidelines on Quality Control Procedures for Data from Automatic
-  Weather Stations.* World Meteorological Organization, Geneva.
+  Weather Stations.* World Meteorological Organization, Geneva. (No DOI.) The thresholds of
+  the checks above are project defaults, not values from this guideline; the guideline's own
+  limits (e.g. a 2 °C step limit for air-temperature samples taken every 6–12 s, persistence
+  of 0.1 °C over 60 min) refer to much denser sampling than ours.

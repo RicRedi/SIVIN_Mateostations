@@ -53,7 +53,7 @@ Chilling (dormancy release) is not modelled.
 
 | Config name | Default | Unit | Source |
 |---|---|---|---|
-| `base_temp_c` | 5.0 | °C | project default [to be verified] |
+| `base_temp_c` | 5.0 | °C | project default [to be verified]; GDD variants with 5 °C and 10 °C bases from January 1 are reported in the budburst literature, but the source of that report could not be confirmed |
 | `period` | January 1 – June 30 | local month-day | project default |
 | `f_star_c_d` | none | °C·d | must be calibrated locally |
 | `max_missing_days_at_start` | 0 | d | project default, to be tuned |
@@ -84,4 +84,4 @@ data.
 
 - García de Cortázar-Atauri, I., Brisson, N., Gaudillère, J. P. (2009). Performance of several
   models for predicting budburst date of grapevine (*Vitis vinifera* L.). *International
-  Journal of Biometeorology*, 53, 317–326. [DOI not verified]
+  Journal of Biometeorology*, 53, 317–326. https://doi.org/10.1007/s00484-009-0217-4
