@@ -5,7 +5,12 @@ live in :mod:`sivin.quality.checks`, deployment detection in :mod:`sivin.quality
 the method is documented in ``docs/quality-control.md``.
 """
 
-from sivin.quality.deployment import DeploymentDetector, DeploymentResult, DeploymentSettings
+from sivin.quality.deployment import (
+    DeploymentDetector,
+    DeploymentResult,
+    DeploymentSettings,
+    DetectorMode,
+)
 from sivin.quality.events import DeploymentEvent, EventKind, EventSource, QualityEvent, Severity
 from sivin.quality.pipeline import QualityPipeline, QualityPipelineSettings, QualityResult
 
@@ -14,6 +19,7 @@ __all__ = [
     "DeploymentEvent",
     "DeploymentResult",
     "DeploymentSettings",
+    "DetectorMode",
     "EventKind",
     "EventSource",
     "QualityEvent",

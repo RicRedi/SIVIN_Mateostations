@@ -13,7 +13,14 @@ back for service and redeployed. :class:`DeploymentDetector`
    (:mod:`sivin.quality.contrast`); a run counts as indoor only if all its boundaries are
    confirmed and it ends with a redeployment (:mod:`sivin.quality.segmentation`),
 4. reconciles the indoor intervals with known deployment times (:mod:`sivin.quality.timeline`),
-5. marks every sample recorded while indoors ``PRE_DEPLOYMENT``.
+5. hands the result to the policy of its :class:`DetectorMode`:
+
+   * ``advisory`` (default since the owner decision of 2026-10-05): the off-site log
+     (MIGRATION_PLAN §2.8) is the source of truth for ``PRE_DEPLOYMENT``. The detector sets
+     **no flags** and reports every detected indoor period that the log does not cover as an
+     ``unlogged_off_site`` warning ("possible unlogged off-site period");
+   * ``enforce`` (the WP-1.5 behaviour): every sample recorded while indoors gets
+     ``PRE_DEPLOYMENT`` and the transitions are reported as events.
 
 Guiding principle: when the evidence is not clear, the detector warns and does not exclude data.
 """
@@ -21,9 +28,12 @@ Guiding principle: when the evidence is not clear, the detector warns and does n
 from __future__ import annotations
 
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
+from typing import ClassVar, Final
 
 import numpy as np
 import numpy.typing as npt
@@ -36,7 +46,7 @@ from sivin.quality.boundaries import BoundaryRefiner, TransportSettings, Transpo
 from sivin.quality.changepoint import BinarySegmentation
 from sivin.quality.checks.base import CheckOutcome
 from sivin.quality.contrast import ContrastSettings, TransitionContrast
-from sivin.quality.events import DeploymentEvent, EventKind, QualityEvent, Severity
+from sivin.quality.events import DeploymentEvent, EventKind, EventSource, QualityEvent, Severity
 from sivin.quality.regime import IndoorAssessment, Regime, RegimeClassifier, RegimeSettings
 from sivin.quality.samples import S_PER_DAY, S_PER_H, SampleArrays
 from sivin.quality.segmentation import Boundary, IndoorRun, RegimeSegmenter
@@ -44,9 +54,11 @@ from sivin.quality.timeline import (
     ORIGIN,
     IndoorInterval,
     KnownDeploymentReconciler,
+    Reconciliation,
     indoor_mask,
 )
 from sivin.quality.windows import WindowedChangePoints
+from sivin.registry.offsite import OffSitePeriod
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +138,38 @@ class ChangePointSettings(BaseModel):
         return (self.temp_variance_floor_c2, self.rh_variance_floor_pct2)
 
 
+class DetectorMode(StrEnum):
+    """What :class:`DeploymentDetector` does with what it finds."""
+
+    ADVISORY = "advisory"
+    """Warn about detected indoor periods the off-site log does not cover; set no flags."""
+    ENFORCE = "enforce"
+    """Mark detected indoor samples ``PRE_DEPLOYMENT`` and report the transitions (WP-1.5)."""
+
+
 class DeploymentSettings(BaseModel):
     """Settings of :class:`DeploymentDetector`."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode: DetectorMode = Field(
+        DetectorMode.ADVISORY,
+        description=(
+            "'advisory' (default, owner decision 2026-10-05): only warnings, no flags; the "
+            "off-site log is the source of truth for PRE_DEPLOYMENT. 'enforce': detected "
+            "indoor samples get PRE_DEPLOYMENT (behaviour of WP-1.5). No unit."
+        ),
+    )
+    log_tolerance_s: float = Field(
+        6 * S_PER_H,
+        ge=0,
+        description=(
+            "Advisory mode: a detected indoor period counts as covered by the off-site log if "
+            "a logged period (touching periods merged) contains it after widening by this many "
+            "seconds on both sides. Project default 6 h, the same as known_tolerance_s "
+            "[to be tuned on real data]."
+        ),
+    )
 
     change_points: ChangePointSettings = Field(
         default_factory=ChangePointSettings, description="Change-point search."
@@ -201,10 +241,13 @@ class DeploymentResult:
     Attributes
     ----------
     events : tuple of QualityEvent
-        Applied transitions (:class:`DeploymentEvent`) and ``deployment_mismatch`` warnings,
-        in time order.
+        ``enforce`` mode: applied transitions (:class:`DeploymentEvent`) and
+        ``deployment_mismatch`` / ``unconfirmed_transition`` warnings. ``advisory`` mode:
+        ``unlogged_off_site`` and ``unconfirmed_transition`` warnings not covered by the
+        off-site log. In time order.
     pre_deployment : numpy.ndarray of bool
-        ``True`` for each row recorded while the sensor was indoors (read-only).
+        ``True`` for each row recorded while the sensor was indoors (read-only); all ``False``
+        in ``advisory`` mode.
     segments : tuple of SegmentRecord
         The segments between change points, for inspection.
     """
@@ -241,31 +284,254 @@ class DeploymentResult:
         tuple of (int, int)
             Half-open row ranges ``[start, stop)`` of consecutive outdoor rows.
         """
-        outdoor = np.concatenate(([False], ~self.pre_deployment, [False])).astype(np.int8)
-        edges = np.flatnonzero(np.diff(outdoor))
-        return tuple((int(a), int(b)) for a, b in zip(edges[::2], edges[1::2], strict=True))
+        return true_ranges(~self.pre_deployment)
+
+
+def true_ranges(mask: npt.NDArray[np.bool_]) -> tuple[tuple[int, int], ...]:
+    """Return the runs of consecutive ``True`` values of a mask.
+
+    Parameters
+    ----------
+    mask : numpy.ndarray of bool
+        One value per row.
+
+    Returns
+    -------
+    tuple of (int, int)
+        Half-open row ranges ``[start, stop)``, in order.
+    """
+    padded = np.concatenate(([False], mask, [False])).astype(np.int8)
+    edges = np.flatnonzero(np.diff(padded))
+    return tuple((int(a), int(b)) for a, b in zip(edges[::2], edges[1::2], strict=True))
+
+
+@dataclass(frozen=True, slots=True)
+class Detection:
+    """What detection found, before the :class:`DetectorMode` policy decides what to report.
+
+    Attributes
+    ----------
+    reconciliation : Reconciliation
+        Indoor intervals, transitions and warnings after applying known deployments.
+    unapplied : tuple of QualityEvent
+        ``unconfirmed_transition`` warnings of runs that were not applied.
+    indoor : numpy.ndarray of bool
+        ``True`` for each row inside an applied indoor interval.
+    first_t_utc : pandas.Timestamp or None
+        Time of the first row; ``None`` for an empty series.
+    """
+
+    reconciliation: Reconciliation
+    unapplied: tuple[QualityEvent, ...]
+    indoor: npt.NDArray[np.bool_]
+    first_t_utc: pd.Timestamp | None
+
+
+class DetectionPolicy(ABC):
+    """Turn a :class:`Detection` into reported events and the ``PRE_DEPLOYMENT`` mask.
+
+    One subclass per :class:`DetectorMode`, registered with :func:`register_policy`.
+
+    Parameters
+    ----------
+    settings : DeploymentSettings
+        Detector settings.
+    """
+
+    mode: ClassVar[DetectorMode]
+
+    def __init__(self, settings: DeploymentSettings) -> None:
+        self._settings = settings
+
+    @abstractmethod
+    def resolve(
+        self, detection: Detection, logged: Sequence[OffSitePeriod]
+    ) -> tuple[tuple[QualityEvent, ...], npt.NDArray[np.bool_]]:
+        """Decide what to report.
+
+        Parameters
+        ----------
+        detection : Detection
+            What detection found.
+        logged : sequence of OffSitePeriod
+            The sensor's periods from the off-site log.
+
+        Returns
+        -------
+        tuple
+            ``(events, pre_deployment)``: the events in any order and one bool per row.
+        """
+
+
+_POLICIES: Final[dict[DetectorMode, type[DetectionPolicy]]] = {}
+"""Policy class per mode; filled by :func:`register_policy` when this module is imported."""
+
+
+def register_policy[P: type[DetectionPolicy]](cls: P) -> P:
+    """Register a :class:`DetectionPolicy` for its ``mode``; use as a class decorator.
+
+    Parameters
+    ----------
+    cls : type[DetectionPolicy]
+        The policy class.
+
+    Returns
+    -------
+    type[DetectionPolicy]
+        The class unchanged.
+
+    Raises
+    ------
+    ValueError
+        If a policy for the mode is already registered.
+    """
+    if cls.mode in _POLICIES:
+        raise ValueError(f"A detection policy for mode {cls.mode!r} is already registered.")
+    _POLICIES[cls.mode] = cls
+    return cls
+
+
+@register_policy
+class EnforcePolicy(DetectionPolicy):
+    """Mark indoor rows ``PRE_DEPLOYMENT``; report transitions and all warnings (WP-1.5)."""
+
+    mode = DetectorMode.ENFORCE
+
+    def resolve(
+        self, detection: Detection, logged: Sequence[OffSitePeriod]
+    ) -> tuple[tuple[QualityEvent, ...], npt.NDArray[np.bool_]]:
+        """Report everything and flag every detected indoor row (see :class:`DetectionPolicy`).
+
+        The off-site log is not consulted.
+        """
+        reconciled = detection.reconciliation
+        events = (*reconciled.transitions, *reconciled.warnings, *detection.unapplied)
+        return events, detection.indoor
+
+
+@register_policy
+class AdvisoryPolicy(DetectionPolicy):
+    """Warn about indoor periods the off-site log does not cover; flag nothing.
+
+    Every applied indoor interval not covered by the log becomes an ``unlogged_off_site``
+    warning; ``unconfirmed_transition`` warnings are kept unless their time is covered.
+    Transitions and ``deployment_mismatch`` warnings are not reported: they describe flags
+    that this mode does not set.
+    """
+
+    mode = DetectorMode.ADVISORY
+
+    def resolve(
+        self, detection: Detection, logged: Sequence[OffSitePeriod]
+    ) -> tuple[tuple[QualityEvent, ...], npt.NDArray[np.bool_]]:
+        """Report uncovered indoor periods as warnings (see :class:`DetectionPolicy`)."""
+        coverage = LoggedCoverage(logged, self._settings.log_tolerance_s)
+        warnings: list[QualityEvent] = []
+        for interval in detection.reconciliation.intervals:
+            start = interval.start_utc if interval.start_utc is not None else detection.first_t_utc
+            if start is None or coverage.covers(start, interval.end_utc):
+                continue
+            warnings.append(_unlogged_warning(interval, start))
+        warnings += [
+            event for event in detection.unapplied if not coverage.covers(event.t_utc, event.t_utc)
+        ]
+        return tuple(warnings), np.zeros_like(detection.indoor)
+
+
+class LoggedCoverage:
+    """Time spans covered by logged off-site periods, widened by a tolerance.
+
+    Periods that touch or overlap after widening are merged, so a stay logged as two
+    consecutive entries (e.g. transport, then office) covers a detection spanning both.
+
+    Parameters
+    ----------
+    periods : sequence of OffSitePeriod
+        The logged periods of one sensor.
+    tolerance_s : float
+        Widening on both sides in seconds.
+    """
+
+    __slots__ = ("_spans",)
+
+    def __init__(self, periods: Sequence[OffSitePeriod], tolerance_s: float) -> None:
+        tolerance = pd.Timedelta(seconds=tolerance_s)
+        spans: list[tuple[pd.Timestamp, pd.Timestamp | None]] = []
+        for period in sorted(periods, key=lambda p: p.from_utc):
+            start = period.start_ts - tolerance
+            end = None if period.end_ts is None else period.end_ts + tolerance
+            if spans and (spans[-1][1] is None or start <= spans[-1][1]):
+                previous_end = spans[-1][1]
+                merged = None if end is None or previous_end is None else max(previous_end, end)
+                spans[-1] = (spans[-1][0], merged)
+            else:
+                spans.append((start, end))
+        self._spans = tuple(spans)
+
+    def covers(self, start: pd.Timestamp, end: pd.Timestamp) -> bool:
+        """Tell whether one widened span contains ``[start, end]``.
+
+        Parameters
+        ----------
+        start, end : pandas.Timestamp
+            Timezone-aware bounds.
+
+        Returns
+        -------
+        bool
+            ``True`` if covered.
+        """
+        return any(low <= start and (high is None or end <= high) for low, high in self._spans)
+
+
+def _unlogged_warning(interval: IndoorInterval, start: pd.Timestamp) -> QualityEvent:
+    """The advisory warning for one detected indoor interval missing in the log."""
+    deployment = interval.deployment
+    return QualityEvent(
+        kind=EventKind.UNLOGGED_OFF_SITE,
+        t_utc=start,
+        end_utc=interval.end_utc,
+        detail=(
+            f"possible unlogged off-site period {_minutes(start)} - "
+            f"{_minutes(interval.end_utc)} UTC ({deployment.detail}); if the sensor was not "
+            "in the vineyard, add the period to sensors/offsite_log.yaml"
+        ),
+        severity=Severity.WARNING,
+        source=EventSource.DETECTED,
+        confidence=deployment.confidence,
+        origin=ORIGIN,
+    )
+
+
+def _minutes(t_utc: pd.Timestamp) -> str:
+    """Format a UTC time as ``YYYY-MM-DD HH:MM``."""
+    return str(t_utc.tz_convert("UTC").strftime("%Y-%m-%d %H:%M"))
 
 
 class DeploymentDetector:
-    """Detect deployments and retrievals and mark indoor samples (see the module docstring).
+    """Detect deployments and retrievals and report them per its mode (module docstring).
 
     Parameters
     ----------
     settings : DeploymentSettings, optional
-        Settings; defaults when omitted.
+        Settings; defaults when omitted (``advisory`` mode).
     segmenter : RegimeSegmenter, optional
         Indoor-run search; built from ``settings`` when omitted.
+    policy : DetectionPolicy, optional
+        What to report; the policy registered for ``settings.mode`` when omitted.
     """
 
-    __slots__ = ("_segmenter", "_settings")
+    __slots__ = ("_policy", "_segmenter", "_settings")
 
     def __init__(
         self,
         settings: DeploymentSettings | None = None,
         segmenter: RegimeSegmenter | None = None,
+        policy: DetectionPolicy | None = None,
     ) -> None:
         self._settings = settings or DeploymentSettings()
         self._segmenter = segmenter or self._default_segmenter(self._settings)
+        self._policy = policy or _POLICIES[self._settings.mode](self._settings)
 
     @staticmethod
     def _default_segmenter(settings: DeploymentSettings) -> RegimeSegmenter:
@@ -294,6 +560,7 @@ class DeploymentDetector:
         self,
         series: MeasurementSeries,
         known_deployments: Sequence[datetime | pd.Timestamp] = (),
+        logged_off_site: Sequence[OffSitePeriod] = (),
     ) -> DeploymentResult:
         """Detect transitions in one series.
 
@@ -305,6 +572,9 @@ class DeploymentDetector:
         known_deployments : sequence of datetime, optional
             Known deployment times (timezone-aware, e.g. ``placement.from`` of the registry);
             they override detection near themselves (see :mod:`sivin.quality.timeline`).
+        logged_off_site : sequence of OffSitePeriod, optional
+            The sensor's periods from the off-site log; in ``advisory`` mode a detected indoor
+            period they cover raises no warning.
 
         Returns
         -------
@@ -330,18 +600,24 @@ class DeploymentDetector:
         reconciled = KnownDeploymentReconciler(self._settings.known_tolerance_s).reconcile(
             intervals, known, first_t
         )
-        indoor = indoor_mask(reconciled.intervals, samples.t_ns)
-        indoor.setflags(write=False)
-        events = sorted(
-            (*reconciled.transitions, *reconciled.warnings, *(w for w in unapplied if w)),
-            key=lambda event: event.t_utc,
+        detection = Detection(
+            reconciliation=reconciled,
+            unapplied=tuple(w for w in unapplied if w),
+            indoor=indoor_mask(reconciled.intervals, samples.t_ns),
+            first_t_utc=first_t,
         )
+        reported, pre_deployment = self._policy.resolve(detection, logged_off_site)
+        pre_deployment = np.array(pre_deployment, dtype=np.bool_)
+        pre_deployment.setflags(write=False)
+        events = sorted(reported, key=lambda event: event.t_utc)
         logger.info(
-            "Sensor %s: %d transition(s), %d warning(s), %d pre-deployment sample(s).",
+            "Sensor %s (%s mode): %d indoor interval(s) detected, %d event(s), "
+            "%d pre-deployment sample(s).",
             series.sensor_id,
-            len(reconciled.transitions),
-            len(events) - len(reconciled.transitions),
-            int(indoor.sum()),
+            self._policy.mode.value,
+            len(reconciled.intervals),
+            len(events),
+            int(pre_deployment.sum()),
         )
         records = tuple(
             SegmentRecord(
@@ -352,7 +628,7 @@ class DeploymentDetector:
             )
             for s in segments
         )
-        return DeploymentResult(tuple(events), indoor, records)
+        return DeploymentResult(tuple(events), pre_deployment, records)
 
     def _usable(self, samples: SampleArrays) -> tuple[npt.NDArray[np.intp], bool]:
         """Return the row positions used for detection and whether humidity is used."""

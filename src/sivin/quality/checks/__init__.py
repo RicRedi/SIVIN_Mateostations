@@ -2,6 +2,8 @@
 
 Importing this package registers every built-in check with :data:`check_registry`:
 ``missing``, ``range``, ``spike``, ``step``, ``persistence`` and ``sampling``.
+:class:`OffSiteCheck` is not registered: it needs the off-site log as a collaborator and is
+created by :class:`~sivin.quality.pipeline.QualityPipeline`.
 """
 
 from sivin.quality.checks.base import (
@@ -12,6 +14,7 @@ from sivin.quality.checks.base import (
     check_registry,
 )
 from sivin.quality.checks.missing import MissingRule, MissingValueCheck, MissingValueSettings
+from sivin.quality.checks.offsite import OffSiteCheck, OffSiteSettings
 from sivin.quality.checks.persistence import PersistenceCheck, PersistenceSettings
 from sivin.quality.checks.range_check import RangeCheck, RangeSettings
 from sivin.quality.checks.sampling import SamplingCheck, SamplingSettings, classify_intervals
@@ -25,6 +28,8 @@ __all__ = [
     "MissingRule",
     "MissingValueCheck",
     "MissingValueSettings",
+    "OffSiteCheck",
+    "OffSiteSettings",
     "PersistenceCheck",
     "PersistenceSettings",
     "QualityCheck",
