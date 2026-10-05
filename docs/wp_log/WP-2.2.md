@@ -13,6 +13,10 @@ interval that crosses local midnight is split there. This fixes the legacy
 Alduchov & Eskridge 1996, legacy coefficients configurable) and VPD (FAO-56) are pure functions.
 Every index has a `docs/indices/<id>.md` page.
 
+**Round 2** addressed the minors of the round 1 review (APPROVE) at the coordinator's request,
+and merged `wp/0.1-foundation` (8f354c0). The changes per finding are in the *Status* column of
+the review table.
+
 ## Changed files
 
 - Package: `src/sivin/analytics/ripening/`
@@ -60,6 +64,27 @@ saturation_vapour_pressure_kpa(temp_c); vapour_pressure_deficit_kpa(temp_c, rh_p
 - No index uses a proxy, so `estimated` is `False` everywhere.
 
 ## How it was verified
+
+Round 2, after merging `wp/0.1-foundation` (8f354c0), in the same venv:
+
+- `make lint` → `All checks passed!`, `51 files already formatted`.
+- `make type` → `Success: no issues found in 34 source files`.
+- `make test` → `291 passed` (101 in `tests/analytics/ripening`).
+- `make cov` → `TOTAL 1489 0 266 0 100%`, `Total coverage: 100.00%`; every ripening module
+  is at 100 %.
+- New hand-computed tests:
+  - Gap rule: steps 1800 / 1800 / 4500 / 7200 s give durations 1800 / 1800 / 4500 / 1825 s,
+    plus 1825 s for the last sample. A −1 °C sample before a 6 h gap gives 1825 s of frost.
+  - Duration-weighted daily mean: 289000 / 9925 = 29.12 °C (the sample mean would be 25.0 °C).
+  - Duration-weighted daytime VPD: 2.2818 kPa (the sample mean would be 2.6527 kPa).
+  - VPD with two RH = 0 % samples: they are counted, and the value is 1.1691 kPa.
+  - Frost: a day with T_min = 0.0 °C has frost hours but no frost night. An `after_date` in
+    another year raises `ValueError`.
+  - `winter_freeze` without the previous autumn: value `None`, status `previous_autumn_missing`.
+  - A generic test over all eight indices with pathological input: details are finite and
+    `json.dumps(..., allow_nan=False)` succeeds.
+
+Round 1:
 
 All commands were run in `/home/user/wt/wp-2.2` with a uv venv: Python 3.12, pandas 3.0.6,
 numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
@@ -109,7 +134,7 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
   definitions (30 / 20 / 25 / 0 / 0 °C), and mark the source `[to be verified]`.
 - **Project defaults without literature** (`[to be tuned]`):
   - VPD threshold 2.0 kPa.
-  - `max_sample_duration_s` 3650 s (2 × 1825 s).
+  - `max_sample_duration_s` 4562.5 s (2.5 × 1825 s).
   - DTR window Aug 1 – Sep 30.
   - Period Apr 1 – Oct 31 for `frost`, `dew_point` and `vpd`.
   - Dormant season Nov 1 – Mar 31.
@@ -121,8 +146,10 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
 ## Decisions and deviations
 
 1. **Duration model:** samples are read as a zero-order hold.
-   - Sample *i* lasts `min(t_{i+1} − t_i, max_sample_duration_s)`.
-   - The last sample of the series lasts `min(last_sample_duration_s, max)`.
+   - Sample *i* lasts `t_{i+1} − t_i` if that step is at most `max_sample_duration_s`
+     (default 4562.5 s = 2.5 × 1825 s). Otherwise the step is a data gap and the sample lasts
+     `nominal_interval_s` (1825 s). This is the WP-2.3 rule, adopted in round 2.
+   - The last sample of the series lasts `nominal_interval_s`, and the cap must not be below it.
    - Durations are taken over all rows, so an excluded or missing value leaves its own
      interval uncounted and does not stretch its predecessor.
    - Intervals are split at local midnight. Because `max_sample_duration_s` is limited to 6 h,
@@ -135,7 +162,7 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
    |---|---|---|
    | `heat_hours` | heat-stress hours (> 30 °C) | other bands |
    | `tropical_days_nights` | number of tropical days | other counts |
-   | `frost` | frost hours ≤ 0 °C over the whole period | `critical_*` from `after_date` |
+   | `frost` | frost hours ≤ 0 °C over the whole period (kept; owner question 4) | `critical_*` from `after_date` |
    | `vpd` | mean daily maximum VPD | hours above threshold, optional daytime mean |
    | `dew_point` | mean of daily mean dew points | mean depression |
 4. **`winter_freeze` crosses New Year with two `Season`s.** One is the previous year's
@@ -150,22 +177,31 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
 7. **Month-day parameters** are `MonthDay` values. They accept `"MM-DD"` strings and
    `{month, day}` mappings, and serialise back to `"MM-DD"`.
 8. **RH edge cases:**
-   - `RH <= 0` gives no dew point (`NaN`), is counted in `n_rh_non_positive` and logged as a
-     warning.
-   - `RH < 0` gives a `NaN` VPD.
+   - `RH <= 0` is invalid for both the dew point and VPD (`NaN`). It is counted in
+     `n_rh_non_positive` and logged as a warning (round 2; VPD accepted 0 % before).
    - `RH > 100 %` passes through unchanged and gives a negative VPD.
 9. **No `ThermalTimeModel`:** none of the eight indices accumulates thermal time, so the class
    suggested in the common rules was not needed here.
+10. **Frost nights** use `T_min < frost_c` (strict), consistent with the ČHMÚ frost day.
+    Frost hours keep `T <= frost_c` (round 2).
+11. **Details never contain `NaN` or infinite numbers.** `RipeningIndex._result` drops them.
+    Daily dew-point means and the daytime VPD mean are weighted by sample duration (round 2).
 
 ## Out of scope
 
 - **`SampleDurations` should move to `sivin.core`** (e.g. `sivin.core.durations`). WP-2.3
-  (Gubler-Thomas, Broome) is expected to carry its own copy until integration. Merging them is
+  (Gubler-Thomas, Broome) carries its own copy until integration. Since round 2 both copies
+  use the same gap rule and default cap, so the unification can preserve behaviour; WP-2.2
+  additionally splits at local midnight, and WP-2.3 tracks gaps for runs. Merging them is
   a contract change for the owner or WP-1.7.
 - **Day completeness for humidity indices:** `DailyWeather.complete_days()` and
   `ClimateIndex._season_days` look at temperature coverage only. This WP filters
   `rh_coverage` inside the package. A `variables=("temp", "rh")` option on `_season_days`
   would serve WP-2.3 too.
+- **WP-1.7 must load the previous autumn into `ctx.daily`.** `winter_freeze` for season *N*
+  needs 1 Nov – 31 Dec of year *N − 1*. If the context factory loads only the season year,
+  the index returns `None` with `details["status"] = "previous_autumn_missing"` and does not
+  report a count over half a winter.
 - **`Season` cannot cross New Year.** A `Season.crossing_new_year` or a `DateWindow` value
   object in `sivin.core.season` would replace the workaround in `winter_freeze`.
 - **`ThresholdClassifier` duplication:** WP-2.1 is building its own classification helpers
@@ -187,7 +223,7 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
    - VPD threshold (2.0 kPa).
    - Frost period (growing season).
    - DTR window (Aug 1 – Sep 30).
-   - `max_sample_duration_s` (3650 s).
+   - `max_sample_duration_s` (4562.5 s).
 4. **Headline value for the web cards:** is the `value` chosen for each multi-figure index
    right (see decision 3)?
 5. **Contract additions** (WP-0.1 contracts, not changed here):
@@ -286,15 +322,15 @@ The midnight split is correct (verified by the tests and the DST runs).
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | `src/sivin/analytics/ripening/durations.py:113` | **Cap semantics differ from WP-2.3.** A sample followed by a gap longer than the cap is stretched to the full cap (3650 s), while WP-2.3 counts only the nominal 1825 s. Example: a sensor stops after a −1 °C sample at 02:00 and the next sample comes at 08:00. This gives 1.01 h of frost here and 0.51 h in WP-2.3. The default cap of exactly 2×1825 s also clips one missed sample by the clock drift. **Fix:** keep the code now; when unifying in core, choose one rule. I recommend WP-2.3's rule: gap → nominal interval, with a cap of about 2.5× nominal. | open |
-| minor | `src/sivin/analytics/ripening/frost.py:103,114` | **Inconsistent frost-day threshold.** A "frost night" in `frost` is `T_min <= 0`, while the ČHMÚ "frost day" in `tropical_days_nights` is `T_min < 0`. Example: a day with T_min = 0.0 °C counts as a frost night but not as a frost day. Both are documented, but the two cards will disagree. **Fix:** use `<` (ČHMÚ) for nights, or state the difference on both doc pages. | open |
-| minor | `src/sivin/analytics/ripening/frost.py:124` | **`after_date` is not checked against `ctx.year`** (`dtr_ripening.start_date` is). Example: `after_date=2025-04-15` with season 2026 silently makes the whole 2026 period critical. **Fix:** raise `ValueError` as `DtrRipeningParams.window` does. | open |
-| minor | `src/sivin/analytics/ripening/dew_point.py:120` | **`NaN` in `details` when no sample gives a dew point.** When every RH on the complete days is ≤ 0, `value` is `None` but `details["mean_depression_c"]` is `NaN`. Verified with 24 samples at RH = 0. Plain `json.dumps` writes `NaN`, which is invalid JSON for the web. **Fix:** apply `nan_to_none` or omit the key. | open |
-| minor | `src/sivin/analytics/ripening/psychrometry.py:153` | **RH = 0 is handled inconsistently.** The dew point treats RH ≤ 0 as a sensor error (`NaN` plus a count), but VPD accepts RH = 0 and gives VPD = e_s. Example: 24 samples at 20 °C / 0 % give a VPD index of 2.338 kPa and 23.5 h above the threshold, from what the dew-point index calls an error. **Fix:** use `rh > 0` in both, or document why VPD differs. | open |
-| minor | `src/sivin/analytics/ripening/dew_point.py:105`, `vpd.py:158` | **Daily dew-point means and the VPD daytime mean are not duration-weighted.** They are arithmetic sample means, so with irregular sampling a dense stretch weighs more. The effect is small at ~1825 s and is consistent with `DailyWeather`. **Fix:** document it, or weight by `SampleDurations` pieces. | open |
-| minor | `src/sivin/analytics/ripening/winter_freeze.py:117` | **Needs data from the previous autumn.** The index reads the previous autumn from `ctx.daily`. If the integration (WP-1.7) builds the context from season-year data only, the autumn part is silently empty: coverage 90/151, `complete=False`. The `IndexContext` docstring says "all available days", so this is correct today. **Fix:** mention it in the WP-1.7 open questions. | open |
-| nit | `src/sivin/analytics/ripening/*.py` | Nine modules define `logger`, but only `dew_point.py` uses it. | open |
-| nit | `src/sivin/analytics/ripening/params.py:101` | `last_sample_duration_s` may exceed `max_sample_duration_s` and is then capped silently. A validator would make this explicit. | open |
+| minor | `src/sivin/analytics/ripening/durations.py:113` | **Cap semantics differ from WP-2.3.** A sample followed by a gap longer than the cap is stretched to the full cap (3650 s), while WP-2.3 counts only the nominal 1825 s. Example: a sensor stops after a −1 °C sample at 02:00 and the next sample comes at 08:00. This gives 1.01 h of frost here and 0.51 h in WP-2.3. The default cap of exactly 2×1825 s also clips one missed sample by the clock drift. **Fix:** keep the code now; when unifying in core, choose one rule. I recommend WP-2.3's rule: gap → nominal interval, with a cap of about 2.5× nominal. | fixed (round 2): WP-2.3 rule adopted (gap → `nominal_interval_s`), default cap 4562.5 s, cap ≥ nominal validated; midnight split kept; tests updated |
+| minor | `src/sivin/analytics/ripening/frost.py:103,114` | **Inconsistent frost-day threshold.** A "frost night" in `frost` is `T_min <= 0`, while the ČHMÚ "frost day" in `tropical_days_nights` is `T_min < 0`. Example: a day with T_min = 0.0 °C counts as a frost night but not as a frost day. Both are documented, but the two cards will disagree. **Fix:** use `<` (ČHMÚ) for nights, or state the difference on both doc pages. | fixed (round 2): frost nights use `T_min < frost_c`; documented on `frost.md`; test with T_min = 0.0 |
+| minor | `src/sivin/analytics/ripening/frost.py:124` | **`after_date` is not checked against `ctx.year`** (`dtr_ripening.start_date` is). Example: `after_date=2025-04-15` with season 2026 silently makes the whole 2026 period critical. **Fix:** raise `ValueError` as `DtrRipeningParams.window` does. | fixed (round 2): `ValueError` when `after_date` is outside `ctx.year`; test added |
+| minor | `src/sivin/analytics/ripening/dew_point.py:120` | **`NaN` in `details` when no sample gives a dew point.** When every RH on the complete days is ≤ 0, `value` is `None` but `details["mean_depression_c"]` is `NaN`. Verified with 24 samples at RH = 0. Plain `json.dumps` writes `NaN`, which is invalid JSON for the web. **Fix:** apply `nan_to_none` or omit the key. | fixed (round 2): `_result` drops NaN/inf details; generic finite-JSON test over all indices |
+| minor | `src/sivin/analytics/ripening/psychrometry.py:153` | **RH = 0 is handled inconsistently.** The dew point treats RH ≤ 0 as a sensor error (`NaN` plus a count), but VPD accepts RH = 0 and gives VPD = e_s. Example: 24 samples at 20 °C / 0 % give a VPD index of 2.338 kPa and 23.5 h above the threshold, from what the dew-point index calls an error. **Fix:** use `rh > 0` in both, or document why VPD differs. | fixed (round 2): VPD treats RH ≤ 0 as invalid, counts `n_rh_non_positive` and logs; tests added |
+| minor | `src/sivin/analytics/ripening/dew_point.py:105`, `vpd.py:158` | **Daily dew-point means and the VPD daytime mean are not duration-weighted.** They are arithmetic sample means, so with irregular sampling a dense stretch weighs more. The effect is small at ~1825 s and is consistent with `DailyWeather`. **Fix:** document it, or weight by `SampleDurations` pieces. | fixed (round 2): duration-weighted via `SampleDurations.daily_means` / `weighted_mean`; tests added |
+| minor | `src/sivin/analytics/ripening/winter_freeze.py:117` | **Needs data from the previous autumn.** The index reads the previous autumn from `ctx.daily`. If the integration (WP-1.7) builds the context from season-year data only, the autumn part is silently empty: coverage 90/151, `complete=False`. The `IndexContext` docstring says "all available days", so this is correct today. **Fix:** mention it in the WP-1.7 open questions. | fixed (round 2): Out of scope note for WP-1.7; missing autumn → value `None` + `status`; test added |
+| nit | `src/sivin/analytics/ripening/*.py` | Nine modules define `logger`, but only `dew_point.py` uses it. | fixed (round 2): unused loggers removed (only `common.py` logs) |
+| nit | `src/sivin/analytics/ripening/params.py:101` | `last_sample_duration_s` may exceed `max_sample_duration_s` and is then capped silently. A validator would make this explicit. | fixed (round 2): `last_sample_duration_s` replaced by `nominal_interval_s`, validated ≤ cap |
 
 **Headline `value` for web cards:**
 - These are sensible: `heat_hours` = hours > 30 °C, `tropical_days_nights` = tropical days,
