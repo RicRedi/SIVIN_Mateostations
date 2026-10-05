@@ -6,29 +6,36 @@ Package `sivin.quality` implements quality control of one sensor's `MeasurementS
 detection of office-to-vineyard deployments and service retrievals (plan §2.7). Six checks
 (`missing`, `range`, `spike`, `step`, `persistence`, `sampling`) are `QualityCheck` subclasses
 registered in `check_registry`, each with a frozen pydantic settings model. `DeploymentDetector`
-finds change points in level and variance with a Gaussian likelihood ratio on prefix sums and
-greedy binary segmentation, labels the segments indoor/outdoor with transparent rules
-(`RegimeClassifier`), refines the regime boundaries, reconciles them with known deployment
-times and marks indoor samples `PRE_DEPLOYMENT`. `QualityPipeline` runs screening checks →
-detection → deployed checks per outdoor stretch and returns the flagged series, events and flag
-counts. The method, parameters and limitations are in `docs/quality-control.md`. Everything was
-verified on synthetic data only.
+finds change points in level and variance (Gaussian likelihood ratio on prefix sums, binary
+segmentation) **locally in epoch-anchored 30-day windows**, groups indoor-like segments
+(absolute rules) into candidate indoor runs, places their boundaries exactly, moves a transport
+transient to the indoor side and **confirms each boundary by the relative contrast of local
+windows on both sides** (plan §2.7 step 2). Only confirmed office stays and confirmed
+retrieval+redeployment pairs are flagged `PRE_DEPLOYMENT`; incomplete evidence produces a
+warning. Known deployment times override detection only near themselves. `QualityPipeline`
+runs screening checks → detection → deployed checks per outdoor stretch. Method, parameters and
+limitations are in `docs/quality-control.md`. Everything was verified on synthetic data only.
+
+Round 2 (after review round 1) reworked the detector for findings M1–M4 and all minors; see
+*Round 2 changes* and the Status column of the review table.
 
 ## Changed files
 
 - `src/sivin/quality/__init__.py` (re-exports), `events.py`, `samples.py`, `changepoint.py`,
-  `regime.py`, `segmentation.py`, `timeline.py`, `deployment.py`, `pipeline.py`
+  `windows.py`, `regime.py`, `contrast.py`, `boundaries.py`, `segmentation.py`, `timeline.py`,
+  `deployment.py`, `pipeline.py`
 - `src/sivin/quality/checks/{__init__,base,missing,range_check,spike,step,persistence,sampling}.py`
 - `tests/quality/synthetic.py` (seeded synthetic generator), `tests/quality/test_*.py`
   (5 test modules)
 - `docs/quality-control.md`, `docs/wp_log/WP-1.5.md`
+- Merge commit of `wp/0.1-foundation` (34f6f18) into this branch (no conflicts).
 
 ### Public API
 
 ```python
 # sivin.quality.events
 class EventKind(StrEnum): DEPLOYMENT, RETRIEVAL, STEP, GAP, IRREGULAR_SAMPLING,
-    NON_POSITIVE_INTERVAL, DEPLOYMENT_MISMATCH
+    NON_POSITIVE_INTERVAL, DEPLOYMENT_MISMATCH, UNCONFIRMED_TRANSITION
 class Severity(StrEnum): INFO, WARNING;  class EventSource(StrEnum): DETECTED, REGISTRY
 @dataclass(frozen=True, slots=True) class QualityEvent: kind, t_utc, detail, severity=INFO,
     source=DETECTED, confidence=None, end_utc=None, origin=""
@@ -48,11 +55,11 @@ StepCheck/Settings, PersistenceCheck/Settings, SamplingCheck/Settings, classify_
 
 # sivin.quality.deployment
 class DeploymentSettings(BaseModel): change_points: ChangePointSettings, regime: RegimeSettings,
-    known_tolerance_s, ignore_mask
+    contrast: ContrastSettings, transport: TransportSettings, known_tolerance_s, ignore_mask
 class DeploymentDetector: __init__(settings=None, segmenter=None);
     detect(series, known_deployments=()) -> DeploymentResult
 @dataclass(frozen=True) class DeploymentResult: events, pre_deployment, segments;
-    transitions, outcome() -> CheckOutcome, deployed_ranges() -> ((start, stop), ...)
+    transitions, warnings, outcome() -> CheckOutcome, deployed_ranges() -> ((start, stop), ...)
 
 # sivin.quality.pipeline
 class QualityPipelineSettings(BaseModel): screening_checks, deployed_checks, check_settings,
@@ -63,82 +70,167 @@ class QualityPipeline: __init__(screening, deployed, detector); from_settings(se
 ```
 
 Building blocks with their own tests: `GaussianSegmentCost`, `BinarySegmentation`
-(`changepoint.py`), `RegimeClassifier` (`regime.py`), `RegimeSegmenter` (`segmentation.py`),
-`KnownDeploymentReconciler`, `DeploymentTimeline` (`timeline.py`), `SampleArrays` (`samples.py`).
+(`changepoint.py`), `WindowedChangePoints` (`windows.py`), `RegimeClassifier`,
+`IndoorAssessment`, `WindowFeatures` (`regime.py`), `TransitionContrast`, `ContrastVerdict`
+(`contrast.py`), `BoundaryRefiner`, `TransportTrimmer` (`boundaries.py`), `RegimeSegmenter`,
+`IndoorRun`, `Boundary` (`segmentation.py`), `KnownDeploymentReconciler`, `IndoorInterval`,
+`indoor_mask` (`timeline.py`), `SampleArrays` (`samples.py`).
 
 ## How it was verified
 
-In `/home/user/wt/wp-1.5`:
+In `/home/user/wt/wp-1.5` (after merging `wp/0.1-foundation` 34f6f18):
 
-- `make lint` → `All checks passed!`, `54 files already formatted`
-- `make type` → `Success: no issues found in 36 source files`
-- `make test` → `358 passed`
-- `make cov` → `Total coverage: 99.95%` (whole package);
-  `pytest --cov=sivin.quality --cov-branch tests/quality` → 1006 statements, 0 missed,
-  1 partial branch, **99 %** for the code added by this WP.
+- `make lint` → `All checks passed!`, `57 files already formatted`
+- `make type` → `Success: no issues found in 39 source files`
+- `make test` → `419 passed`
+- `make cov` → `Total coverage: 99.76%` (whole package);
+  `pytest --cov=sivin.quality --cov-branch tests/quality` → 1298 statements, 3 missed,
+  3 partial branches, **99 %** for the code of this WP (229 tests).
 
-Acceptance criteria (plan §4 WP-1.5 and the brief), all on synthetic data from
-`tests/quality/synthetic.py` (seeded; irregular ~1825 s ± 20 s sampling; outdoor = seasonal
-mean + diurnal sinusoid + AR(1) noise with anti-correlated RH; indoor ≈ 22 °C, RH ≈ 40 %):
+Acceptance tests (all synthetic, `tests/quality/synthetic.py`, which now has day-to-day Markov
+cloudiness, a synoptic anomaly, seasonal and cloud-dependent humidity, fog, heat waves, fronts,
+a car phase and office variants 12/16/22/27/30 °C and humid):
 
 | Criterion | Test | Result |
 |---|---|---|
-| office 3 days → outdoor 10 days: deployment within ±1 sample, all earlier samples `PRE_DEPLOYMENT` | `test_deployment.py::TestOfficeThenVineyard` (8 seeds × 4 season starts) | passes (the test asserts ±1; a manual run found offset 0 in all 32 cases) |
-| 60 days outdoor → no deployment/retrieval (several seeds) | `TestNoTransition::test_sixty_outdoor_days_raise_no_false_alarm` (8 seeds × 4 seasons) | no event, no flag |
-| outdoor → indoor (service) → outdoor → retrieval + deployment | `TestService` (8 seeds, plus a 5-phase case) | passes, both within ±1 sample |
-| known deployment overrides detection; mismatch warns | `TestKnownDeployments` | passes |
-| cold front (−8 °C in 2 h, stays outdoors) is not a transition | `TestNoTransition::test_cold_front_is_not_a_transition` (8 seeds) | passes |
-| each check has positive and negative tests incl. irregular sampling | `test_checks.py` | passes |
-| pipeline order (deployment jump is not a spike/step; indoor data not checked) | `test_pipeline.py::TestPipeline` | passes |
+| office 3 d → outdoor 10 d: deployment ±1 sample, all earlier samples `PRE_DEPLOYMENT` | `TestOfficeThenVineyard::test_deployment_found_within_one_sample` (6 seeds × 4 seasons) | passes |
+| office variants (unheated 12 °C, cool 16 °C, warm 27 °C, hot 30 °C, humid) | `test_office_variants` (4 seeds each) | passes |
+| overcast deployment (winter, summer) | `test_overcast_deployment` | passes |
+| car transport is `PRE_DEPLOYMENT`, deployment at arrival | `test_car_transport_counts_as_pre_deployment` | passes |
+| gaps of 12/12 h, 48 h before, 48 h after the boundary | `TestGapsAtTheBoundary` | passes |
+| 60 days outdoor: no event, several seeds and seasons | `TestNoTransition::test_sixty_outdoor_days_raise_no_false_alarm` | passes |
+| cloudy summer false-alarm rate ≤ 0.1 per sensor-year | `test_cloudy_summer_false_alarm_rate` (10.1 sensor-years) | 0 false transitions |
+| year with fog, heat wave, fronts: no transition | `test_year_with_fog_heat_wave_and_fronts` | passes |
+| cold front is not a transition; sensor only in the office is not flagged | `TestNoTransition` | passes |
+| service visit → retrieval + deployment | `TestService::test_retrieval_and_redeployment` (6 seeds × 4 seasons) | passes |
+| retrieval without redeployment only warns, no flags | `test_retrieval_without_redeployment_only_warns` | passes |
+| same service visit found identically in 1-, 3- and 5-year series | `TestLongSeries` | identical events |
+| known time overrides within tolerance; mismatch warns and keeps detection; known time inside office stay ends it; unknown service + known dates applied with warning; relocation without warning; only later relocation known; known time inside a service visit; before the data | `TestKnownDeployments` | passes |
+| each check positive/negative incl. irregular sampling, fast front not STEP, fog not STUCK | `test_checks.py` | passes |
 
-Additionally checked manually (not a committed test): one year of synthetic outdoor data after
-4 office days (17 469 samples, 3 seeds) → exactly one deployment, no other flags, ~0.13 s per
-pipeline run.
+### Measured on the reviewer's independent generator (round 2)
+
+The reviewer's scripts `/tmp/claude-0/review-1.5/s1.py`–`s8.py` were re-run unchanged against
+this branch (default settings; "correct" = exactly the expected transitions, each within ±1
+sample). These are synthetic rates from the reviewer's model, not field error rates.
+
+| Scenario (n) | winter | spring | summer | autumn | round 1 |
+|---|---|---|---|---|---|
+| office 6 h → outdoor 20 d (20) | 0/20 | 0/20 | 0/20 | 0/20 | 0, 0, 3, 0 /20 |
+| office 1 d → outdoor 20 d (20) | 20/20 | 20/20 | **20/20** | 20/20 | summer 16/20 |
+| office 3 d → outdoor 20 d (20) | 20/20 | 20/20 | 20/20 | 20/20 | summer 19/20 |
+| office 14 d → outdoor 20 d (20) | 20/20 | 20/20 | 19/20 (one at +3) | 20/20 | summer 17/20 |
+| deploy hour 06/10/18/22 UTC, office 3 d (15 each) | 15/15 all | 15/15 all | 15, 14, 15, 15 | 15/15 all | summer 10–12/15 |
+| service 3 h / 12 h (15) | 0/15 | 0/15 | 0/15 | 0/15 | 0–1/15 (Q2) |
+| service 1 d (15) | 14/15 | 14/15 | 9/15 | 15/15 | 13, 8, 11, 13 |
+| service 2 d (15) | 15/15 | 15/15 | 14/15 | 15/15 | 15, 15, 14, 15 |
+| service 5 d (15) | 15/15 | 15/15 | 13/15 | 14/15 | 15, 15, 12, 15 |
+| gaps −6/+0, 0/+6, ±12, −48, +48 h (15 each) | 15/15 each | 15/15 each | 15/15 each | 15/15 each | summer 12–13/15 |
+| car 1.5 h at 35 °C: offset vs arrival | 0 | 0 | 0 or −3 | 0 | −3 everywhere |
+| car 1.5 h at 45/55 °C (`OUT_OF_RANGE`) | 0 | 0 or +2 | 0 | 0 | 0 |
+| overcast winter deployment 5 Jan / 1 Dec (15) | 15/15, 15/15 | | | | 15/15, 15/15 |
+| **overcast summer deployment (15)** | | | **15/15** | | 0/15 |
+
+| Office variant, office 3 d → outdoor 15 d (15) | Correct | Round 1 |
+|---|---|---|
+| cool 16 °C, spring | 15/15 | 15/15 |
+| humid 22 °C, RH 68 %, June | 15/15 | 15/15 |
+| warm 27 °C, RH 55 %, July | 15/15 | 12/15 |
+| **unheated 12 °C, January** | **15/15** | 0/15 |
+| **hot 30 °C, July** | **15/15** | 0/15 |
+| sunny window sill, daily range 6 °C, April | 0/15 (no event, documented limitation) | 0/15 |
+
+| False alarms (no transition in the data) | Runs | False transitions | Other |
+|---|---|---|---|
+| plain year from 1 Jan | 30 seeds | **0** (round 1: 0.07 per sensor-year) | `PRE_DEPLOYMENT` 0 rows; SPIKE/STEP/STUCK/OUT_OF_RANGE/TIMESTAMP_SUSPECT 0 |
+| year with fog, heat wave, fronts, frost nights | 30 seeds | **0** (round 1: 0.13 per sensor-year) | STEP 0.4 rows/yr, max 1 (the −7 °C/0.5 h front, one interval; round 1: 1.5, max 3); STUCK 0 (round 1: 0.4, max 13) |
+| **office 3 d → outdoor 20 d, Jun/Jul/Aug, mixed and overcast** | 180 runs | **0** (round 1: 377); 180/180 true deployments | confidence of true deployments: min 0.5, P5 0.75, median 0.75 |
+| summer only (Jun–Aug, 92 d), own generator in the reviewer's model, mixed and overcast | 60 runs = 15.1 sensor-years | **0 per sensor-year** | — |
+
+| Multi-year (office 3 d → outdoor, 3-day service in the last year, n=6) | Correct | Runtime per series (median) | Round 1 |
+|---|---|---|---|
+| 1 y (17 422 rows) | 6/6 | 0.19 s | 6/6 |
+| 3 y (51 982 rows) | 6/6 | 0.55–0.60 s | 4/6 |
+| 5 y (86 542 rows) | 6/6 | 0.75–0.83 s | 2/6 |
+
+| Known dates (reviewer scenarios B, C, s8) | Result | Round 1 |
+|---|---|---|
+| known = first deployment, service of 1/2/5 d not in registry: 2nd outdoor stretch `PRE_DEPLOYMENT` | 0 % in all seasons; warning in every run where the service was detected | 100 % |
+| relocation office → A → car 1 h → B, both known | 0 mismatch warnings, 0 % outdoor rows flagged | 15/15 warned |
+| only a later relocation known | 0 of 1420 outdoor rows flagged (round 1: 947); office rows still flagged | |
+
+Edge cases (s8): empty, 1 row, 5 rows, all NaN, all out of range, temperature only — no error.
+
+## Round 2 changes
+
+- **M2/M1 — relative confirmation (`contrast.py`).** A boundary is confirmed only if the indoor
+  window is indoor-like (absolute rules, `regime.py`: room band 5–35 °C, daily spread ≤ 4 °C,
+  median RH ≤ 75 %, daily RH spread ≤ 8 %), the outdoor window is not, and at least 2 of 4
+  relative votes hold on local 2-day windows next to the boundary: spread ratio ≥ 2, level
+  difference ≥ 5 °C, outdoor RH ≥ indoor + 15 %, RH-spread ratio ≥ 2. The narrow comfort band
+  (18–27 °C) was replaced by the wide room band plus the steady-humidity criterion, so that 12 °C
+  and 30 °C offices are found and cloudy summer days (RH follows the daily cycle) are not.
+- **M3 — local search (`windows.py`).** Binary segmentation runs in 30-day windows every
+  15 days on an epoch-anchored grid; results are pooled. Cap 30 per window. The result no
+  longer depends on the series length (test `TestLongSeries`).
+- **M4 — known dates (`timeline.py`).** Known times override detection only within the
+  tolerance; unmatched detected deployments (including service pairs) are applied with a
+  warning; a known time inside the detected office stay ends it; a later known time without a
+  matching detection is a relocation (info, no warning, no flags). Answers Q4 with the
+  orchestrator's default.
+- **Applying runs (`segmentation.py`).** A service visit counts only with a confirmed retrieval
+  *and* redeployment; a retrieval without redeployment, a half-confirmed run or a run covering
+  all data is never flagged (`unconfirmed_transition` warning where a boundary was confirmed).
+- **Transport (`boundaries.py`).** Samples next to the boundary outside both the indoor and the
+  outdoor reference range (± 3 °C), for at most 3 h, move to the indoor side. Indoor windows keep
+  3 h distance from the boundary.
+- **Boundary refinement across gaps.** The refinement radius is measured from the samples on
+  both sides of the boundary (a 12–48 h gap at the boundary previously broke detection after the
+  rework; found with the reviewer's scenario H and fixed).
+- **Event detail** comes from the local windows and lists the votes, e.g.
+  `indoor → outdoor: level -15.3 °C, daily spread x3.4, humidity +41 %, votes 4/4`.
+- **Confidence** is the share of relative votes that hold (0.5–1 for confirmed transitions);
+  documented as a heuristic score, not a calibrated probability.
+- **STEP:** new `max_adjacent_fraction = 0.4`; a −10 °C/1 h front (two −5 °C intervals) is no
+  longer a step. A front within one interval still is (documented).
+- **STUCK:** temperature duration 12 h (was 6 h); a run with ≥ 50 % samples at RH ≥ 97 % is exempt
+  for both variables (fog, inversion).
+- **Generator:** see the acceptance table above.
 
 ## What did not work / what was not verified
 
 - **No real data.** Thresholds are project defaults and are not tuned; the detector and the
   checks were never run on a real export (Q1) and never compared with real deployment dates
-  (Q3). The synthetic generator is my own model of the signals, not a fit to real data.
-- The first implementation placed a retrieval about 10 h late when an earlier weather change
-  point lay less than `min_segment_s` before it (the minimum segment duration blocked the exact
-  split). Fixed by the boundary refinement step in `RegimeSegmenter`; covered by the service
-  tests.
+  (Q3). Both synthetic generators are models of the signals, not fits to real data. In
+  particular the steady-humidity rule (indoor daily RH spread ≤ 8 %) relies on the assumption
+  that office humidity is steady and that outdoor humidity follows the daily cycle even under
+  overcast skies; that must be checked on real data.
+- Service visits of about one day are found in 9–15 of 15 runs; shorter visits not at all
+  (Q2). The sunny-window-sill office (daily range 6 °C) is not detected.
 - Physical temperature limits (−50/60 °C), the climatological limits for South Moravia
   (−30/42 °C) and the assumed sensor resolutions (0.1 °C, 1 %) are not verified against the
   sensor data sheet or regional station records.
 - Literature: the range/step/persistence methodology is attributed to Zahumenský (2004) as in
-  the plan; no numeric threshold is quoted from it, because I could not check the guideline's
-  tables here. DOIs are not given (no access to doi.org); all marked `[DOI not verified]`.
+  the plan; no numeric threshold is quoted from it. DOIs are not given (no access to doi.org);
+  all marked `[DOI not verified]`.
 
 ## Decisions and deviations from the brief
 
-1. **Two check lists instead of one.** `QualityPipelineSettings` has `screening_checks` (whole
-   series, before detection: `missing`, `sampling`, `range`) and `deployed_checks` (per outdoor
-   stretch, after detection: `spike`, `step`, `persistence`). The brief asked for "a list of
-   enabled checks" and "deployment detection first"; detection first would let a gross error
-   (e.g. −999) fake a regime change, so missing/range/sampling run before it and the detector
-   ignores `MISSING`/`OUT_OF_RANGE` rows. Indoor data are still never judged by outdoor
-   expectations.
-2. **`step` events come from `StepCheck`, not from the detector.** `DeploymentEvent` supports the
-   `step` type, but the detector reports only `deployment`/`retrieval`; level shifts within a
-   regime are found by `StepCheck` (`QualityEvent(kind=STEP)`), so a step is not reported twice.
-3. **`MISSING` rule defaults to `all`** (row flagged only when both variables are `NaN`) because
-   the `qc` field is shared by temperature and humidity; `rule: any` is available.
-4. **Sampling:** intervals that are whole multiples of 1825 s (missed samples) are regular; only
-   off-grid intervals get `TIMESTAMP_SUSPECT`. Gaps produce events but no flag (no sample is
-   wrong). Non-positive intervals cannot occur in a valid `MeasurementSeries`; the rule is in
-   `classify_intervals` and tested on raw arrays.
-5. **Known deployments:** only deployments are overridden (the interface has no retrieval times);
-   detected retrievals are kept, an unmatched detected deployment becomes a warning and is not
-   applied, and with known times the sensor counts as indoors before the first one (rules in
-   `docs/quality-control.md`).
-6. **Binary segmentation** is greedy by gain with a BIC-like penalty and a cap
-   (`max_change_points = 50`), followed by boundary refinement; PELT (Killick et al. 2012) is
-   cited for the method family only.
-7. Module `checks/range_check.py` instead of `checks/range.py` (avoids shadowing the builtin name
-   in imports); `segmentation.py`, `changepoint.py`, `regime.py`, `timeline.py`, `samples.py`
-   split from `deployment.py` to keep classes small (plan §1.2).
+1. **Two check lists instead of one** (`screening_checks` before detection, `deployed_checks`
+   per outdoor stretch after it). Accepted by the reviewer in round 1.
+2. **`step` events come from `StepCheck`, not from the detector.** Accepted in round 1.
+3. **`MISSING` rule defaults to `all`.** Accepted in round 1.
+4. **Sampling:** whole multiples of 1825 s are regular; gaps are events only. Accepted.
+5. **Known deployments** override detection only near themselves (round 2, orchestrator
+   decision on M4; rules in `docs/quality-control.md`).
+6. **Plan §2.7 step 2** names the distance from the "comfort band"; it is implemented as a wide
+   room band (5–35 °C) in the absolute rules plus the relative votes, because an office outside
+   the comfort band must be detectable (orchestrator decision on M2).
+7. **A sensor whose data are all indoor is not flagged** (no contrast to confirm anything; it
+   is flagged retroactively once the deployment is in the data, because the pipeline reruns on
+   the stored history).
+8. Module `checks/range_check.py` instead of `checks/range.py`; the detector is split into
+   small modules (plan §1.2).
 
 ## Out of scope
 
@@ -149,26 +241,26 @@ pipeline run.
   the same registry logic; the generic `Registry[T]` proposed in the WP-0.1 note would serve
   both (and `ExportParser` in WP-1.2).
 - Integration (WP-1.7 / WP-3.2): add `quality: QualityPipelineSettings` to `SivinConfig`
-  (proposed YAML in `docs/quality-control.md` → *Configuration*), pass
-  `placement.from` of the registry (WP-1.1) as `known_deployments`, write `QualityResult.events`
-  to `data/derived/events/<sensor_id>.json` and the site contract (`type`, `t`, `source`,
-  `confidence`, `detail`), and log `deployment_mismatch` warnings into the run summary
-  (`data/runs/*.jsonl`). Proposed CLI command: `sivin qc [--sensor ID] [--dry-run]` that runs
-  the pipeline on the stored series and prints the flag counts and events.
-- `SamplingSettings.expected_interval_s` defaults to `LEGACY_SAMPLING_INTERVAL_S`;
-  once wired, it should be taken from `time.expected_interval_s` to keep one source.
+  (proposed YAML in `docs/quality-control.md` → *Configuration*), pass `placement.from` of the
+  registry (WP-1.1) as `known_deployments`, write `QualityResult.events` to
+  `data/derived/events/<sensor_id>.json` and the site contract (`type`, `t`, `source`,
+  `confidence`, `detail`), and log `deployment_mismatch` / `unconfirmed_transition` warnings
+  into the run summary (`data/runs/*.jsonl`). Proposed CLI command:
+  `sivin qc [--sensor ID] [--dry-run]`. The site contract should describe `confidence` as a
+  heuristic score.
+- `SamplingSettings.expected_interval_s` defaults to `LEGACY_SAMPLING_INTERVAL_S`; once wired,
+  it should be taken from `time.expected_interval_s` to keep one source.
 
 ## Open questions for the owner
 
-1. **Q3:** known deployment dates and any service visits per sensor are needed to tune
-   `known_tolerance_s`, the comfort band and the regime thresholds. Was any sensor brought back
-   to the office after its first deployment?
-2. Is a minimum detectable service stay of one day acceptable (`min_segment_s`), or are short
-   visits (hours) common?
+1. **Q3:** known deployment dates and any service visits per sensor are needed to tune the
+   absolute and relative thresholds and `known_tolerance_s`.
+2. **Q2:** is a minimum detectable service stay of about one day acceptable, or are short visits
+   (hours) common? Shorter visits stay vineyard data.
 3. Climatological temperature limits for South Moravia: confirm or provide (default −30/42 °C),
    and the temperature/humidity resolution of the sensors (assumed 0.1 °C and 1 %).
-4. Should a detected redeployment that is missing in the registry be applied (data accepted)
-   instead of only warned about (data stay `PRE_DEPLOYMENT` until the next known deployment)?
+4. Q4 (redeployment missing in the registry) is answered by the orchestrator's round-2 default:
+   applied with a warning. Confirm or change.
 
 ## Review
 
@@ -286,18 +378,18 @@ information, but it is not a probability.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/quality/regime.py:236-267` | False retrievals on cloudy summer days (absolute rules) | open |
-| major | `src/sivin/quality/regime.py:191-213`, `segmentation.py:346` | Plan §2.7 step 2 (relative confirmation) not implemented, deviation not declared | open |
-| major | `src/sivin/quality/deployment.py:68-76`, `changepoint.py:197` | Fixed change-point cap makes the result depend on series length | open |
-| major | `src/sivin/quality/timeline.py:458-470`, `deployment.py:281` | Known deployments discard detected redeployments; outdoor data excluded permanently | open |
-| minor | `src/sivin/quality/regime.py:213`, `deployment.py:340`, `docs/quality-control.md:266-271` | Confidence is an uncalibrated rule-score margin, not a probability | open |
-| minor | `src/sivin/quality/timeline.py:463-468` | Every relocation produces a `deployment_mismatch` warning | open |
-| minor | `src/sivin/quality/segmentation.py:355-368` | Transport (car) rows left as vineyard data | open |
-| minor | `src/sivin/quality/deployment.py:347-356` | Event detail compares whole merged regimes, so the numbers can mislead | open |
-| minor | `src/sivin/quality/checks/step.py:270-281` | A fast convective front is flagged `STEP` | open |
-| minor | `src/sivin/quality/checks/persistence.py:404-417` | Long isothermal fog can be flagged `STUCK` | open |
-| minor | `tests/quality/synthetic.py:36-45`, `tests/quality/test_deployment.py` | Test generator has no cloud or synoptic variability, so tests miss the M1–M3 failures | open |
-| nit | `docs/quality-control.md:340-342` | Service visits shorter than a day go undetected and their rows count as vineyard data | open |
+| major | `src/sivin/quality/regime.py:236-267` | False retrievals on cloudy summer days (absolute rules) | fixed (round 2): absolute steady-humidity rule + relative confirmation; 0 false transitions in 180 summer runs (was 377) and in 30 plain/30 extreme years; overcast summer deployment 15/15 |
+| major | `src/sivin/quality/regime.py:191-213`, `segmentation.py:346` | Plan §2.7 step 2 (relative confirmation) not implemented, deviation not declared | fixed (round 2): `contrast.py` implements §2.7 step 2 on local windows; 12 °C and 30 °C offices 15/15; comfort band replaced by room band (declared, deviation 6) |
+| major | `src/sivin/quality/deployment.py:68-76`, `changepoint.py:197` | Fixed change-point cap makes the result depend on series length | fixed (round 2): epoch-anchored 30-day windows (`windows.py`); 1/3/5-year service 6/6 each; `TestLongSeries` checks identical events |
+| major | `src/sivin/quality/timeline.py:458-470`, `deployment.py:281` | Known deployments discard detected redeployments; outdoor data excluded permanently | fixed (round 2): orchestrator default (Q4); unmatched detections applied with warning; 2nd outdoor stretch 0 % flagged; later relocation only: 0 of 1420 rows |
+| minor | `src/sivin/quality/regime.py:213`, `deployment.py:340`, `docs/quality-control.md:266-271` | Confidence is an uncalibrated rule-score margin, not a probability | fixed (round 2): confidence = share of relative votes; documented as heuristic score in docs and code |
+| minor | `src/sivin/quality/timeline.py:463-468` | Every relocation produces a `deployment_mismatch` warning | fixed (round 2): a later known time without matching detection is a relocation (info, no warning); 0 warnings in 60 runs |
+| minor | `src/sivin/quality/segmentation.py:355-368` | Transport (car) rows left as vineyard data | fixed (round 2): `TransportTrimmer`; 35 °C car offset 0 vs arrival except a few summer runs (−3) where the car lies within the outdoor range |
+| minor | `src/sivin/quality/deployment.py:347-356` | Event detail compares whole merged regimes, so the numbers can mislead | fixed (round 2): detail from local 2-day windows next to the boundary, with votes |
+| minor | `src/sivin/quality/checks/step.py:270-281` | A fast convective front is flagged `STEP` | fixed (round 2): `max_adjacent_fraction` 0.4; −10 °C/1 h front no longer STEP; a front within one interval still is (documented) |
+| minor | `src/sivin/quality/checks/persistence.py:404-417` | Long isothermal fog can be flagged `STUCK` | fixed (round 2): exemption when ≥ 50 % of the run has RH ≥ 97 % for both variables; temperature duration 12 h; STUCK 0 in 30 extreme years |
+| minor | `tests/quality/synthetic.py:36-45`, `tests/quality/test_deployment.py` | Test generator has no cloud or synoptic variability, so tests miss the M1–M3 failures | fixed (round 2): generator with Markov cloudiness, synoptic anomaly, seasonal/cloud RH, fog, heat waves, fronts, car, office variants; new acceptance tests |
+| nit | `docs/quality-control.md:340-342` | Service visits shorter than a day go undetected and their rows count as vineyard data | open, documented (owner question Q2; orchestrator: stays) |
 
 **M1. False retrievals on cloudy summer days (absolute rules).** A cloudy-but-dry summer day
 (median 18–23 °C, daily spread 3.2–4.3 °C, RH median 69–72 %) scores S = 0.5–0.68 and is
