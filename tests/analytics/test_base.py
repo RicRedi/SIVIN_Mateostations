@@ -203,6 +203,9 @@ def test_index_result_validation_and_read_only_details(sensor_id: SensorId) -> N
         ({"min_season_coverage": -0.1}, "min_season_coverage must be within 0-1"),
         ({"exclude_mask": 1024}, "unknown QC flag bits"),
         ({"exclude_mask": -1}, "unknown QC flag bits"),
+        ({"exclude_mask": True}, "must be an int"),
+        ({"latitude_deg": 200.0}, "within -90..90"),
+        ({"latitude_deg": -90.5}, "within -90..90"),
     ],
 )
 def test_index_context_consistency(
