@@ -55,7 +55,8 @@ def test_legacy_file_is_read_unchanged_with_nan_auxiliary_columns(
     frame = legacy_store.read(sensor_id).frame
     np.testing.assert_array_equal(frame[Column.TEMP].to_numpy(), [12.5, 12.25, math.nan])
     assert frame[Column.RH].tolist() == [80.0, 81.5, 82.0]
-    assert frame[Column.SOURCE].tolist() == ["20260501_060000"] * 3
+    # The full source of the old file reads back as the short export identifier.
+    assert frame[Column.SOURCE].tolist() == ["20260501T060000"] * 3
     assert frame[[Column.PRECIP, Column.PRECIP_TOTAL, Column.BATTERY]].isna().all().all()
 
 
@@ -89,9 +90,9 @@ def test_filling_the_new_columns_rewrites_the_file_in_the_current_layout(
     assert result.counts == AppendCounts(filled_values=8)
     assert _partition(legacy_store).read_text().splitlines() == [
         CURRENT_HEADER,
-        "2026-05-01T00:00:00Z,12.5,80.0,0.0,323.0,3.6,20260502_060000",
-        "2026-05-01T00:30:30Z,12.25,81.5,0.3,323.3,3.6,20260502_060000",
-        "2026-05-01T01:01:00Z,,82.0,0.0,323.3,,20260502_060000",
+        "2026-05-01T00:00:00Z,12.5,80.0,0.0,323.0,3.6,20260502T060000",
+        "2026-05-01T00:30:30Z,12.25,81.5,0.3,323.3,3.6,20260502T060000",
+        "2026-05-01T01:01:00Z,,82.0,0.0,323.3,,20260502T060000",
     ]
     rewritten = _digest(_partition(legacy_store))
     again = legacy_store.append(export)

@@ -24,6 +24,7 @@ from sivin.storage.conflicts import ConflictDecision, ConflictPolicy, PreferNewe
 from sivin.storage.errors import StoreFormatError
 from sivin.storage.merge import DEFAULT_MAX_RECORDED_CONFLICTS, AppendCounts, SeriesMerger
 from sivin.storage.partitioning import Partitioning, YearPartitioning
+from sivin.storage.source import ExportSourceIds
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,9 @@ class MeasurementStore:
 
     Appending is idempotent: rows are deduplicated on ``timestamp_utc``, identical rows are
     skipped, and a file is only rewritten when its data change. Every file is replaced
-    atomically. QC flags are not stored; :meth:`read` returns ``qc = 0``.
+    atomically. QC flags are not stored; :meth:`read` returns ``qc = 0``. The ``source`` of a
+    row is stored as the short identifier of its export (:class:`ExportSourceIds`, owner
+    decision 2026-10-05); full file names in older files are shortened when read.
 
     Parameters
     ----------
@@ -82,9 +85,11 @@ class MeasurementStore:
     max_recorded_conflicts : int, optional
         Conflicts kept in :attr:`AppendResult.conflicts` per append (and logged one by one per
         partition file).
+    source_ids : ExportSourceIds, optional
+        Shortens the ``source`` of incoming and stored rows to export identifiers.
     """
 
-    __slots__ = ("_codec", "_merger", "_partitioning", "_root", "_writer")
+    __slots__ = ("_codec", "_merger", "_partitioning", "_root", "_source_ids", "_writer")
 
     def __init__(
         self,
@@ -94,8 +99,10 @@ class MeasurementStore:
         conflict_policy: ConflictPolicy | None = None,
         writer: AtomicFileWriter | None = None,
         max_recorded_conflicts: int = DEFAULT_MAX_RECORDED_CONFLICTS,
+        source_ids: ExportSourceIds | None = None,
     ) -> None:
         self._root = root
+        self._source_ids = source_ids if source_ids is not None else ExportSourceIds()
         self._codec = codec if codec is not None else CsvSeriesCodec()
         self._partitioning = partitioning if partitioning is not None else YearPartitioning()
         policy = conflict_policy if conflict_policy is not None else PreferNewest()
@@ -121,7 +128,8 @@ class MeasurementStore:
         ----------
         series : MeasurementSeries
             Measurements of one sensor. Its ``qc`` column is not stored; set flags are logged
-            as a warning with a count per flag.
+            as a warning with a count per flag. Its ``source`` values (export file names) are
+            stored as short export identifiers.
 
         Returns
         -------
@@ -138,6 +146,7 @@ class MeasurementStore:
         if series.is_empty:
             return AppendResult(series.sensor_id)
         _warn_dropped_flags(series)
+        series = self._source_ids.shorten(series)
         counts = AppendCounts()
         conflicts: list[ConflictDecision] = []
         pending: list[_PendingWrite] = []
@@ -180,8 +189,9 @@ class MeasurementStore:
         Returns
         -------
         MeasurementSeries
-            Rows in ascending time order with a ``source`` column and ``qc = 0``; empty for an
-            unknown sensor or an empty range.
+            Rows in ascending time order with a ``source`` column (short export identifiers,
+            ``""`` when unknown) and ``qc = 0``; empty for an unknown sensor or an empty
+            range.
 
         Raises
         ------
@@ -328,7 +338,7 @@ class MeasurementStore:
             keys = self._partitioning.keys_of(series.timestamps)
             if bool((keys != key).any()):
                 raise StoreFormatError(f"{path}: holds rows outside partition {key!r}.")
-        return series
+        return self._source_ids.shorten(series)
 
 
 def _warn_dropped_flags(series: MeasurementSeries) -> None:

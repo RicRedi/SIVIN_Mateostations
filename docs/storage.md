@@ -49,7 +49,7 @@ the same bytes (git sees no change when nothing changed).
 | `precip_mm` | precipitation in the interval since the previous sample (export column `Srážky (mm)`) | mm | decimal number, see below | empty field |
 | `precip_total_mm` | the device's cumulative precipitation counter (`Celkové srážky (mm)`) | mm | decimal number, see below | empty field |
 | `battery_v` | battery voltage (`Nabití baterie (V)`) | V | decimal number, see below | empty field |
-| `source` | name of the last export that contributed a value to the row | — | text | empty field = unknown |
+| `source` | short identifier of the last export that contributed a value to the row (see [Source identifiers](#source-identifiers-wp-17)) | — | text | empty field = unknown |
 
 **Numbers.** `.` is the decimal point, positional notation (never an exponent), at least one
 digit after the point, and otherwise the **shortest** digit string that reads back as exactly
@@ -221,13 +221,39 @@ would add (concurrent writers, indexes, transactions over many rows) is not need
 
 ## Growth estimate
 
-At the nominal interval of 1825 s a sensor gives 365 × 86 400 / 1825 = 17 280 samples per year.
-A line without a source name (`2026-01-01T00:00:00Z,12.3,81.5,`) has 32 bytes, so about
-0.55 MB per sensor and year; this is the 0.5 MB of MIGRATION_PLAN §2.5. With a full export file
-name in `source` (e.g. `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`, 84-byte line)
-it is about 1.45 MB per sensor and year. Tens of sensors therefore mean tens of MB per year,
-well within what git and the pipeline handle. Each changed year file is a new git blob; git
-stores successive versions as compressed deltas when it packs the repository.
+At the nominal interval of 1830 s (`time.expected_interval_s`) a sensor gives
+365 × 86 400 / 1830 ≈ 17 230 samples per year. A line with all values and a short source
+identifier (`2026-01-01T00:00:00Z,12.3,81.5,0.0,326.4,3.6,20260301T223842`, 61 bytes with
+the line break) gives about 1.05 MB per sensor and year; without precipitation and battery
+values (an export without those columns, 50 bytes) it is about 0.86 MB. Before WP-1.7 the full export file name was stored
+(e.g. `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`, about 1.45 MB per sensor-year
+even without the auxiliary values). Tens of sensors therefore mean tens of MB per year, well
+within what git and the pipeline handle. Each changed year file is a new git blob; git stores
+successive versions as compressed deltas when it packs the repository.
+
+## Source identifiers (WP-1.7)
+
+Owner decision of 2026-10-05: the `source` column holds a **short identifier of the export**,
+not its file name. The full file name of every processed export is recorded in the run log
+(`RunRecord.files`, `data/runs/<YYYY-MM-DD>.jsonl`). `ExportSourceIds`
+(`sivin/storage/source.py`) derives the identifier:
+
+| File name | Identifier |
+|---|---|
+| ends with the export time `_YYYYMMDD_HHMMSS` (optionally ` (n)`) before the extension, e.g. `MeteoData_8615620_77799986_VUT_20260301_223842.csv` | `20260301T223842` |
+| a bare `YYYYMMDD_HHMMSS` | `YYYYMMDDTHHMMSS` |
+| anything else, e.g. `MeteoData_8615620 77678271.xlsx` | `h` + the first 12 hex digits of SHA-256 of the file name without directories, e.g. `he23fdca307a7` |
+| already an identifier, or empty | unchanged |
+
+- `MeasurementStore.append` shortens the sources of the incoming series before merging, so the
+  conflict records (`ConflictDecision`, run log) name identifiers too.
+- **Backward compatible reading:** files written before WP-1.7 hold full file names. The
+  store shortens them when it reads a partition (`read` and the merge of `append`), so callers
+  always see identifiers. Such a file is not rewritten just for that; it gets identifiers in
+  all rows the next time an append changes its data (the same rule as the WP-1.9 layout change).
+- The export time is the portal's time of the download (local time in the file name), not a
+  measurement time. Two exports of the same sensor in the same second would share an
+  identifier; this does not happen with one download per sensor and run.
 
 ## Migration path to Parquet
 

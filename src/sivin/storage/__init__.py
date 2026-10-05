@@ -21,6 +21,7 @@ from sivin.storage.errors import MeasurementConflictError, StoreError, StoreForm
 from sivin.storage.merge import AppendCounts, MergeOutcome, SeriesMerger
 from sivin.storage.partitioning import Partitioning, YearPartitioning, partitioning_registry
 from sivin.storage.runlog import RunLog, RunRecord
+from sivin.storage.source import ExportSourceIds
 from sivin.storage.store import AppendResult, MeasurementStore
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "ConflictDecision",
     "ConflictPolicy",
     "CsvSeriesCodec",
+    "ExportSourceIds",
     "MeasurementConflictError",
     "MeasurementStore",
     "MergeOutcome",
