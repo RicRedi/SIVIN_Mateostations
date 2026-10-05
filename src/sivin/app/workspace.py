@@ -20,6 +20,10 @@ INDICES_DIR: Final = "indices"
 """Directory below ``paths.derived_dir`` with one indices file per season."""
 
 
+class ProjectNotFoundError(SetupError):
+    """Raised when the command does not run inside a project (no ``pyproject.toml`` found)."""
+
+
 @dataclass(frozen=True, slots=True)
 class Workspace:
     """The project root and its configuration, with every configured path made absolute.
@@ -55,8 +59,10 @@ class Workspace:
 
         Raises
         ------
+        ProjectNotFoundError
+            If no project root is found.
         SetupError
-            If no project root is found or the configuration is invalid.
+            If the configuration is invalid.
         """
         paths = _discover(start, config_file)
         target = config_file if config_file is not None else paths.resolve(DEFAULT_CONFIG_FILE)
@@ -113,4 +119,4 @@ def _discover(start: Path | None, config_file: Path | None) -> ProjectPaths:
                 return ProjectPaths.discover(config_file.resolve().parent)
             except ProjectRootNotFoundError:
                 pass
-        raise SetupError(str(error)) from error
+        raise ProjectNotFoundError(str(error)) from error

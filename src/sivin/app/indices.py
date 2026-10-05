@@ -14,7 +14,7 @@ import pandas as pd
 
 from sivin.analytics.base import ClimateIndex, IndexContext, IndexRegistry, IndexResult
 from sivin.app.json_files import JsonFileWriter
-from sivin.app.outcome import Outcome
+from sivin.app.outcome import Outcome, UnknownIndexError
 from sivin.app.quality import SENSOR_ERRORS, QualityService
 from sivin.config.sections import AnalyticsConfig, TimeConfig
 from sivin.core.daily import DailyWeather
@@ -39,10 +39,6 @@ INDICES_SUFFIX: Final = ".json"
 
 _LAST_MONTH: Final = 12
 _LAST_DAY: Final = 31
-
-
-class UnknownIndexError(ValueError):
-    """Raised when a requested index id is not registered."""
 
 
 @dataclass(frozen=True, slots=True)

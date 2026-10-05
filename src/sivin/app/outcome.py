@@ -59,3 +59,7 @@ class SetupError(RuntimeError):
 
     The message is meant for the user and names what to fix; it never contains a secret.
     """
+
+
+class UnknownIndexError(ValueError):
+    """Raised when a requested index id is not registered (a usage error of ``sivin indices``)."""

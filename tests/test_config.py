@@ -106,8 +106,8 @@ def test_models_are_frozen() -> None:
         AnalyticsConfig(unknown=1)  # type: ignore[call-arg]
 
 
-def test_config_and_cli_do_not_import_pandas() -> None:
-    """The configuration layer must not pull in the analytics stack (pandas)."""
+def test_cli_does_not_import_pandas() -> None:
+    """``sivin --version`` must stay fast: the CLI imports the subsystems only when needed."""
     code = "import sys, sivin.cli; print('pandas' in sys.modules)"
     output = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True

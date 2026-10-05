@@ -34,9 +34,8 @@ from sivin.app.indices import (
     IndexSelection,
     IndicesReport,
     SeasonWindow,
-    UnknownIndexError,
 )
-from sivin.app.outcome import Outcome
+from sivin.app.outcome import Outcome, UnknownIndexError
 from sivin.app.quality import QualityReport, iso_utc
 from sivin.core.flags import QcFlag
 from sivin.core.ids import SensorId

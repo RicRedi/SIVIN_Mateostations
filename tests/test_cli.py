@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -9,7 +10,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from sivin import __version__, cli
+from sivin import __version__
+from sivin.cli import main as cli
 from sivin.config import SivinConfig
 from sivin.logging_setup import setup_logging
 
@@ -32,14 +34,15 @@ def test_version() -> None:
 
 def test_no_arguments_shows_help() -> None:
     result = runner.invoke(cli.app, [])
-    assert "config" in result.output
+    for command in ("config", "sensors", "fetch", "ingest", "qc", "indices", "run"):
+        assert command in result.output
 
 
 def test_config_show_with_explicit_file(tmp_path: Path, no_global_logging_setup: list[str]) -> None:
     path = tmp_path / "custom.yaml"
     path.write_text("analytics:\n  min_daily_coverage: 0.8\n", encoding="utf-8")
     result = runner.invoke(
-        cli.app, ["--log-level", "debug", "config", "show", "--config", str(path)]
+        cli.app, ["--log-level", "debug", "--config", str(path), "config", "show"]
     )
     assert result.exit_code == 0, result.output
     shown = yaml.safe_load(result.output)
@@ -78,9 +81,28 @@ def test_config_show_defaults_outside_project(monkeypatch: pytest.MonkeyPatch) -
 def test_config_show_reports_invalid_file(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("analytics:\n  min_daily_coverag: 0.8\n", encoding="utf-8")
-    result = runner.invoke(cli.app, ["config", "show", "--config", str(path)])
-    assert result.exit_code == 1
+    result = runner.invoke(cli.app, ["--config", str(path), "config", "show"])
+    assert result.exit_code == 3
     assert "analytics.min_daily_coverag" in result.output
+
+
+def test_config_show_invalid_project_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "pyproject.toml").touch()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "sivin.yaml").write_text("time:\n  zone: UTC\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(cli.app, ["config", "show"])
+    assert result.exit_code == 3
+    assert "time.zone: Extra inputs are not permitted" in result.output
+
+
+def test_config_schema_json_and_markdown() -> None:
+    result = runner.invoke(cli.app, ["config", "schema"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["title"] == "SivinConfig"
+    result = runner.invoke(cli.app, ["config", "schema", "--markdown"])
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("### `paths`")
 
 
 def test_invalid_log_level(monkeypatch: pytest.MonkeyPatch) -> None:

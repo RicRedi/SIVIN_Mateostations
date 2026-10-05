@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING
 from sivin.analytics.base import index_registry
 from sivin.app.catalog import SensorCatalog, SensorCatalogLoader, SensorsCheck
 from sivin.app.indices import IndexContextFactory, IndexSelection, IndicesService
-from sivin.app.ingest import DirectoryExports, ExportReader, IngestService, Quarantine
+from sivin.app.ingest import (
+    DirectoryExports,
+    ExportReader,
+    IngestService,
+    Quarantine,
+    export_files,
+)
 from sivin.app.quality import EventsWriter, QualityService
 from sivin.app.run import Clock, ExportSource, RunRecorder, RunService
 from sivin.app.workspace import Workspace
@@ -155,6 +161,29 @@ class ServiceFactory:
         )
         quarantine = Quarantine(self._workspace.quarantine_dir, ingest.quarantine_mode)
         return IngestService(reader, self.store(), self.catalog().registry, quarantine, dry_run)
+
+    def export_paths(self, files: Sequence[Path], from_dir: Path | None = None) -> list[Path]:
+        """Return the files ``sivin ingest`` processes.
+
+        Parameters
+        ----------
+        files : sequence of pathlib.Path
+            Files named on the command line.
+        from_dir : pathlib.Path, optional
+            A directory whose exports (``ingest.file_patterns``) are added. Without files and
+            without a directory, the download directory (``ingest.portal.download_dir``) is
+            used.
+
+        Returns
+        -------
+        list of pathlib.Path
+            The given files, then the directory's exports sorted by name.
+        """
+        paths = list(files)
+        directory = from_dir if from_dir is not None or paths else self._workspace.download_dir
+        if directory is not None and directory.is_dir():
+            paths += export_files(directory, self._workspace.config.ingest.file_patterns)
+        return paths
 
     def quality_service(self, dry_run: bool = False) -> QualityService:
         """Return the QC service.
