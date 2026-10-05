@@ -13,6 +13,46 @@ the app runs on a deterministic **synthetic** fixture in `web/public/data/` (547
 resolution and language are kept in the URL hash. A CI workflow `.github/workflows/web.yml` runs
 the four web gates. Architecture and usage are in `docs/web.md`.
 
+## Changes in round 2
+
+These address the round-1 review; the statuses are in the Review table below.
+
+- **URL robustness (major):** the hash codec accepts only real calendar dates (they must
+  round-trip through `Date`) and years 2000–2100, for both `from`/`to` and `y`. As a safety net,
+  `ChartPresenter.windowFor` falls back to the default 7-day window if a window cannot be built.
+- **Store notifications are no longer re-entrant,** and `HashSync` always writes the latest
+  state. Unknown sensor ids are now removed from the URL after a `hashchange` (there is a test).
+- **Per-sensor loading:** a sensor that fails gets its own error line above the chart, and the
+  others still render. A missing or invalid events file means "no events" plus a
+  `console.warn`.
+- **QC display mask:** the web uses `DISPLAY_EXCLUDE_MASK`, the default mask without MISSING. A
+  `null` value already means missing, so a valid temperature is no longer hidden when only RH is
+  null. All other excluding flags still hide the whole row.
+- **UTC raw months:** documented in `docs/web.md` as the interpretation WP-3.2 must follow, and
+  added to the owner questions. The month selection was not widened.
+- **Accessibility:**
+  - Map markers are keyboard buttons: `role="button"`, in the tab order, with an accessible
+    name and `aria-pressed`. Enter/Space selects; Ctrl/⌘ + Enter/Space compares.
+  - Only the chart canvas has `role="img"`, so the legend and event buttons stay accessible.
+- **Colours:**
+  - Line colours are assigned in selection order (`SensorColors`) and are stable while a sensor
+    stays selected, so the at most 8 compared sensors never share a colour.
+  - New line palette: all colours ≥ 3:1 against white and colour-blind checked; the ratios are
+    in `docs/web.md`.
+  - The stale fill is darker (4.24:1).
+  - The map scale now has no near-white class: blues below 10 °C and YlOrBr from 10 °C up.
+- **Map legend:** it is a `<details>` element, collapsed by default below 600 px.
+- **Concrete window:** a line under the time controls shows the window actually drawn (local
+  from–to) and the resolution.
+- **Hourly means** are stamped at the bin centre (`h + 1800`).
+- **Point caps:** an explicit raw resolution is capped at 31 days and hourly at 92 days. Beyond
+  that, the next coarser resolution is used.
+- **Fixture:** samples now have ±3 s clock jitter, and the fixture was regenerated (546,421 bytes).
+- **Code structure and tests:**
+  - `SeriesChart` was split; the event markers are now `ui/EventMarkers.ts`.
+  - `App` depends on small view interfaces, and is now covered by a jsdom test with stub views.
+  - `EventMarkers` is tested with a fake uPlot.
+
 ## Changed files
 
 - `web/package.json`, `web/package-lock.json`, `web/tsconfig.json`, `web/vite.config.ts`
@@ -26,9 +66,9 @@ the four web gates. Architecture and usage are in `docs/web.md`.
 - `web/src/state/*`: `Store`, `AppState` (+ selection helpers), `HashStateCodec`
 - `web/src/i18n/*`: `I18n`, `LanguagePreference`, `languages`, `cs`/`de`/`en`
 - `web/src/ui/*`: `App`, `HeaderView`, `MapView`, `SensorPanel`, `SensorList`,
-  `TimeWindowControl`, `SeriesChart`, `HashSync`, `palette`, `dom`; `web/src/styles.css`,
+  `TimeWindowControl`, `SeriesChart`, `EventMarkers`, `SensorColors`, `HashSync`, `palette`, `dom`; `web/src/styles.css`,
   `web/src/main.ts`, `web/src/vite-env.d.ts`
-- `web/tests/**`: 12 test files (96 tests)
+- `web/tests/**`: 14 test files (128 tests)
 - `web/scripts/generate-fixture.mjs`, `web/scripts/screenshot.mjs`
 - `web/public/data/**`: synthetic fixture (29 files incl. `README.md`)
 - `.github/workflows/web.yml`
@@ -43,20 +83,20 @@ Gates, run in `/home/user/wt/wp-3.1/web` after `rm -rf node_modules dist coverag
 ```
 npm run lint       → eslint . (no output, exit 0)
 npm run typecheck  → tsc --noEmit (no output, exit 0)
-npm test           → Test Files  12 passed (12)
-                     Tests  96 passed (96)
-                     Statements   : 99.58% ( 712/715 )
-                     Branches     : 88.53% ( 278/314 )
-                     Functions    : 100% ( 210/210 )
-                     Lines        : 99.56% ( 681/684 )
-npm run build      → dist/index.html 0.84 kB, dist/assets/index-*.css 23 kB,
-                     dist/assets/index-*.js 242 kB (gzip 81 kB), ✓ built
+npm test           → Test Files  14 passed (14)
+                     Tests  128 passed (128)
+                     Statements   : 99.43% ( 875/880 )
+                     Branches     : 89.24% ( 332/372 )
+                     Functions    : 100% ( 239/239 )
+                     Lines        : 99.4% ( 842/847 )
+npm run build      → dist/assets/index-*.css 23.5 kB,
+                     dist/assets/index-*.js 246.6 kB (gzip 82.0 kB), ✓ built
 ```
 
 - **Coverage scope:** `src/**/*.ts`, minimum 85 % lines (enforced in `vite.config.ts`).
-  Excluded as thin glue: `src/main.ts`, `src/ui/App.ts`, `src/ui/MapView.ts` (Leaflet) and
-  `src/ui/SeriesChart.ts` (uPlot/canvas). The DOM components without those libraries are tested
-  under jsdom.
+  Excluded as thin glue: `src/main.ts`, `src/ui/MapView.ts` (Leaflet) and
+  `src/ui/SeriesChart.ts` (uPlot/canvas). `App` (stub views), `EventMarkers` (fake uPlot) and
+  the other DOM components are tested under jsdom.
 - **Tests with hand-computed expectations:**
   - Contract validation: the whole fixture passes, and broken files fail with exact messages.
   - `DataClient.getRawRange`: month selection across a boundary, windows outside the data,
@@ -83,7 +123,17 @@ npm run build      → dist/index.html 0.84 kB, dist/assets/index-*.css 23 kB,
   - The language switch updates the title, the hash and `localStorage`.
   - An unknown sensor id in the hash is dropped.
   - Event markers are rendered.
-- **Fixture:** `npm run fixture` is deterministic (same md5 on rerun). It is 546,574 bytes,
+- **Round 2 browser checks:** headless Chromium against `vite preview`, using the reviewer's
+  `drive2.mjs` plus my own script. No page errors in any of them:
+  - URLs with `to=2026-13-45`, `0001…9999` + `r=hourly`, `y=0000`, and a `hashchange` to
+    `2026-02-30` all fall back to `w=7d` and the chart renders.
+  - All four markers have `tabindex=0`, `role=button` and a name like
+    `77678271 (VUT): 11,1 °C`, and Enter on a marker selects it.
+  - With a 404 on one raw month of 77680921 and on `events/77678271.json`, one per-sensor error
+    line is shown and 77678271 still renders.
+  - The canvas has `role=img`; the plot host has no role.
+  - The legend is collapsed at 390 px and opens on click; it is open at 1440 px.
+- **Fixture:** `npm run fixture` is deterministic (same md5 on rerun). It is 546,421 bytes,
   well under 3 MB.
 
 Screenshots (Chromium, `npm run screenshot`). Map tiles are **blank** because the sandbox cannot
@@ -106,12 +156,13 @@ reach the OpenStreetMap tile servers:
   synthetic fixture.
 - **Browsers and devices:** only headless Chromium was tested; no Firefox, Safari or real phones.
   No screen-reader test was done.
-- **Map keyboard access:** Leaflet circle markers are not keyboard-focusable. The keyboard path is
-  the checkbox list in the panel.
+- **Map keyboard access:** since round 2 the markers are keyboard buttons (Tab, Enter/Space,
+  Ctrl/⌘ + Enter/Space). This was checked only in headless Chromium, with no screen reader. In
+  round 1 this note wrongly said the markers were not focusable.
 - **Date inputs:** the native `<input type="date">` shows the browser's locale (US format in
   headless Chromium), not the UI language.
-- **`ui/App.ts`:** not unit-tested. Its behaviour was only checked with the headless interaction
-  script above, which is not committed.
+- **Event markers and per-sensor errors:** checked in Chromium and with jsdom tests; not checked
+  with a screen reader.
 
 ## Deviations from the brief (and why)
 
@@ -129,10 +180,12 @@ reach the OpenStreetMap tile servers:
   30 Sep, would show an empty 24 h / 7 d chart; real data lag behind by up to a cron interval.
 - **7 d / 30 d count local calendar days** (same wall-clock time), so they are 7 d ± 1 h across a
   DST change. 24 h is exactly 86,400 s.
-- **QC-excluded samples are hidden at raw resolution too**, not only in hourly means, so the
+- **QC-excluded samples are hidden at raw resolution too** (with `DISPLAY_EXCLUDE_MASK` since round 2, i.e. MISSING is handled per value), not only in hourly means, so the
   office period of a sensor appears as a gap before its deployment marker.
-- **Hourly means are stamped with the start of the hour.**
-- **Comparison is capped at 8 sensors**, the size of the colour-blind-checked palette. A further
+- **Hourly means are stamped at the centre of the hour** (round 2; round 1 used the start).
+- **Point caps:** an explicitly chosen raw resolution is capped at 31 days and hourly at 92
+  days; beyond that, the next coarser resolution is used.
+- **Comparison is capped at 8 sensors**, the size of the colour-blind-checked palette. Colours are assigned in selection order. A further
   sensor is refused with a message.
 - **The fixture placement dates are synthetic** (1 Jun 2026, and 3 Jun for 77799986). The plan's
   §2.4 example uses `2025-12-01` as its own placeholder. Real dates wait for Q3.
@@ -164,10 +217,27 @@ reach the OpenStreetMap tile servers:
 2. **Two y-axes:** temperature (left) and humidity (right) share one chart, as the brief
    requires. Dataviz guidelines advise against dual axes; the alternative is two stacked charts
    with a shared time axis. Keep it as is?
-3. **Marker colours:** the map's neutral class 10–15 °C is almost white, so on a mild day the
+3. **Marker colours** (resolved in round 2: the scale now uses blues below 10 °C and YlOrBr
+   from 10 °C up, with no near-white class; please confirm you like it). Original question: the map's neutral class 10–15 °C is almost white, so on a mild day the
    markers look empty (see the desktop screenshot, 11 °C). Is the diverging scale centred near
    the vine base temperature acceptable, or would you prefer a sequential scale?
-4. **Should relative presets end at "now"** instead of at the end of the data?
+4. **Should relative presets end at "now"** instead of at the end of the data? The concrete
+   window is now shown under the controls.
+5. **Contract clarification of §2.6: raw months are UTC months.** The web reads
+   `raw/<YYYY-MM>.json` as the UTC calendar month and expects `raw_months` to list UTC keys.
+   §2.6 does not say this. Please confirm, so that WP-3.2 writes UTC months; with local months,
+   up to two hours around each month boundary would be lost.
+6. **Per-variable QC flags:** `qc` is one value per row, but a row holds two variables. WP-0.1
+   raised the same question. Until it is decided:
+   - the web ignores MISSING for display (`null` already marks a missing value);
+   - every other excluding flag hides both variables of the row, so a temperature SPIKE also
+     hides that row's humidity.
+
+   Should `qc` become per variable (e.g. `qc_temp`, `qc_rh`)? That would be a contract change.
+7. **Complete list of lenient readings** (reviewer nit 12), adding to question 1: the validators
+   also accept a missing `site`, `variety` or `notes` in the registry (read as `null`), and
+   `null` for an index `value`. The cleaner contract is that WP-3.2 always writes these keys,
+   with `null` where needed.
 
 ## Review
 
@@ -211,21 +281,21 @@ Lint and typecheck: clean. Vitest: 12 files, 96 tests passed; lines 99.56 %, bra
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | web/src/state/HashStateCodec.ts:79, web/src/domain/TimeZone.ts:111, web/src/domain/TimeWindowFactory.ts:68 | A malformed custom date in a shared URL breaks the whole app | open |
-| minor | web/src/ui/HashSync.ts:18 (with web/src/ui/App.ts:85-88) | After a `hashchange`, unknown sensor ids stay in the URL | open |
-| minor | web/src/app/ChartDataLoader.ts:53 | One missing or unexpected events file (or one failing raw month) fails the chart for every selected sensor | open |
-| minor | web/src/domain/RawSeries.ts:73 | The row-level `qc` with MISSING hides a valid temperature when only RH is missing (seen in the fixture) | open (owner question) |
-| minor | web/src/data/DataClient.ts:102 | `raw/<YYYY-MM>` is read as a UTC month, which §2.6 does not say | open (owner question) |
-| minor | web/src/ui/MapView.ts:62 | Map markers are unnamed, inoperable tab stops; the hand-off says they are not focusable | open |
-| minor | web/src/ui/SeriesChart.ts:65 | `role="img"` wraps the uPlot legend and the focusable event-marker buttons | open |
-| minor | web/src/ui/palette.ts:19 | Colour by registry index wraps at 8, so two compared sensors can share a colour | open |
-| minor | web/src/ui/palette.ts:7-16 | Several sensor line colours are below 3:1 against white | open |
-| minor | web/src/ui/TimeWindowControl.ts (render) | Relative presets end at the data end, but the concrete window is never shown | open |
-| nit | web/src/domain/Resampler.ts:56 | Hourly means stamped at the start of the hour draw 30 min early compared with raw | open |
-| nit | web/src/contract/validateSensors.ts:39-45, validateMeta.ts:394 | Lenient readings go beyond the hand-off list | open |
-| nit | web/src/domain/Resampler.ts:44-45 | No bound on the hourly bin count | open |
-| nit | web/scripts/generate-fixture.mjs | The fixture step is exactly 1825 s with no clock drift or jitter | open |
-| nit | web/vite.config.ts:310-315 | `App.ts` is excluded from coverage, but it is coordination logic | open |
+| major | web/src/state/HashStateCodec.ts:79, web/src/domain/TimeZone.ts:111, web/src/domain/TimeWindowFactory.ts:68 | A malformed custom date in a shared URL breaks the whole app | fixed (round 2): only real dates in years 2000–2100 are accepted; `windowFor` falls back to the default window; tests added |
+| minor | web/src/ui/HashSync.ts:18 (with web/src/ui/App.ts:85-88) | After a `hashchange`, unknown sensor ids stay in the URL | fixed (round 2): store notifications are not re-entrant and `HashSync` writes the latest state; `App.test.ts` covers this |
+| minor | web/src/app/ChartDataLoader.ts:53 | One missing or unexpected events file (or one failing raw month) fails the chart for every selected sensor | fixed (round 2): data load per sensor with a per-sensor error line; events fall back to none plus a warning |
+| minor | web/src/domain/RawSeries.ts:73 | The row-level `qc` with MISSING hides a valid temperature when only RH is missing (seen in the fixture) | fixed in the web (round 2): `DISPLAY_EXCLUDE_MASK` without MISSING, documented; per-variable QC is open question 6 |
+| minor | web/src/data/DataClient.ts:102 | `raw/<YYYY-MM>` is read as a UTC month, which §2.6 does not say | accepted (round 2): UTC months kept and documented in `docs/web.md` for WP-3.2; open question 5 |
+| minor | web/src/ui/MapView.ts:62 | Map markers are unnamed, inoperable tab stops; the hand-off says they are not focusable | fixed (round 2): `role=button`, a name, `aria-pressed`, Enter/Space; docs updated |
+| minor | web/src/ui/SeriesChart.ts:65 | `role="img"` wraps the uPlot legend and the focusable event-marker buttons | fixed (round 2): `role=img` and the name are on the canvas only |
+| minor | web/src/ui/palette.ts:19 | Colour by registry index wraps at 8, so two compared sensors can share a colour | fixed (round 2): colours are assigned in selection order and stay stable while selected (`SensorColors`) |
+| minor | web/src/ui/palette.ts:7-16 | Several sensor line colours are below 3:1 against white | fixed (round 2): new palette with all colours ≥ 3:1 and CVD checked; ratios documented and tested |
+| minor | web/src/ui/TimeWindowControl.ts (render) | Relative presets end at the data end, but the concrete window is never shown | fixed (round 2): a "Zobrazeno from – to · resolution" line under the controls |
+| nit | web/src/domain/Resampler.ts:56 | Hourly means stamped at the start of the hour draw 30 min early compared with raw | fixed (round 2): stamped at the bin centre |
+| nit | web/src/contract/validateSensors.ts:39-45, validateMeta.ts:394 | Lenient readings go beyond the hand-off list | accepted (round 2): the lenient readings are kept, and the complete list is now open question 7 |
+| nit | web/src/domain/Resampler.ts:44-45 | No bound on the hourly bin count | fixed (round 2): URL years are limited to 2000–2100, explicit hourly is capped at 92 days and raw at 31 days |
+| nit | web/scripts/generate-fixture.mjs | The fixture step is exactly 1825 s with no clock drift or jitter | fixed (round 2): ±3 s Gaussian clock jitter added |
+| nit | web/vite.config.ts:310-315 | `App.ts` is excluded from coverage, but it is coordination logic | fixed (round 2): `App` is covered by a jsdom test with stub views; `SeriesChart` was split (204 lines incl. imports; `EventMarkers` is 91) |
 
 #### Details
 
