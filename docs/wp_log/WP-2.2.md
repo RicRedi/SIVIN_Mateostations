@@ -197,7 +197,129 @@ numpy 2.5.3, pydantic 2.13.5, ruff 0.16.10, mypy 2.4.0.
 
 ## Review
 
-Verdict: _pending_
+Verdict: APPROVE (round 1)
+
+Reviewer: independent review session. Every number below was run or computed by hand in this
+review; scripts are in `/tmp/claude-0/review-2.2/` (outside the repo).
+
+**Gates (run by the reviewer in `/home/user/wt/wp-2.2`):**
+- `make lint type test`: lint clean, mypy strict clean, `268 passed`.
+- `make cov`: `TOTAL 1449 0 250 1 99%`, `Total coverage: 99.94%`. Every ripening module is at
+  100 % except `vpd.py` at 99 % (partial branch 137->139).
+
+**Scope:** `git diff --stat bcde7d9...HEAD` touches only `src/sivin/analytics/ripening/**`,
+`tests/analytics/ripening/**`, the eight `docs/indices/*.md` files of this WP and this note.
+No shared file is changed. There are no `type: ignore` comments in `src/`. The one in the tests
+checks that a frozen model rejects assignment. There are no `print` calls.
+
+**Science checks (against literature I know with certainty):**
+- Cool Night Index (Tonietto & Carbonneau 2004, Agric. For. Meteorol. 124, 81–97):
+  - The definition, the mean September T_min, is correct.
+  - The classes are correct: CI+2 ≤ 12, CI+1 12–14, CI-1 14–18, CI-2 > 18 °C.
+  - Putting a value on a boundary into the cooler class (`<=`) matches the usual reading of the
+    table. Keeping it `[to be verified]` is still fine.
+- Magnus form, Alduchov & Eskridge (1996): a = 17.625 and b = 243.04 °C are correct, and so is
+  the dew-point inversion T_d = bγ/(a−γ).
+- FAO-56 eq. 11: e_s = 0.6108·exp(17.27T/(T+237.3)) kPa is correct, and so is e_a = e_s·RH/100.
+- ČHMÚ characteristic days are correct:
+  - tropical day T_max ≥ 30 °C;
+  - summer day T_max ≥ 25 °C;
+  - frost day T_min < 0 °C;
+  - ice day T_max < 0 °C;
+  - tropical night T_min ≥ 20 °C.
+  The calendar-day approximation for the tropical night is documented.
+- Background citations:
+  - The heat bands, frost thresholds and winter thresholds are presented correctly. Each is a
+    "MIGRATION_PLAN §3.2 default", and the paper is labelled "background … `[to be verified]`".
+    No number is attributed to a paper that might not contain it.
+  - Poling (2008) is explicitly not used for numbers.
+  - The bibliographic data of Mori et al. (2007), Greer & Weedon (2012), Poling (2008),
+    Amerine & Winkler (1944) and Tonietto & Carbonneau (2004) match my knowledge.
+
+**Hand recomputations (all match the code):**
+- Dew point:
+  - 20 °C / 50 %: γ = ln 0.5 + 17.625·20/263.04 = 0.646953, so T_d = 243.04·0.646953/16.978047 =
+    9.2611 °C. The code gives 9.261107.
+  - −10 °C / 80 %: γ = −0.223144 − 0.756308 = −0.979452, so T_d = −12.7951 °C. The code gives
+    −12.795104.
+- VPD:
+  - e_s(30) = 0.6108·exp(1.938272) = 4.24357 kPa, so VPD at 20 % RH = 0.8·4.24357 = 3.39486 kPa.
+    The code gives 3.394452.
+  - e_s(20) = 2.33828 kPa matches the code.
+- Frost hours with drifting 1826 s sampling (own synthetic night, 2026-04-12):
+  - Six samples ≤ 0 °C give 6·1826/3600 = 3.04333 h. Two of them ≤ −2 °C give 1.01444 h.
+  - The code gives 3.043333 h and 1.014444 h, with 1 frost night and a minimum of −2.5 °C.
+  - With one of the six marked SPIKE, the hand value is 5·1826/3600 = 2.53611 h. The code gives
+    2.536111 h.
+- DST days with 1825 s sampling from local midnight to past the next midnight:
+  - 2026-10-25 gives 25.0 h and 2026-03-29 gives 23.0 h (hand: 25 h and 23 h).
+- `winter_freeze` over a leap-year winter (season 2024, 2023-11-01 … 2024-03-31):
+  - n_period_days = 30+31+31+29+31 = 152, and the code reports n_days 152 with coverage 1.0.
+  - A −16 °C sample on 2024-02-29 and a −21 °C sample on 2023-12-31 give 2 damage days and
+    1 severe day.
+  - The DST transitions inside the window do not matter, because the selection works on local
+    `DailyWeather` days.
+
+**`SampleDurations`: duration logic and comparison with the WP-2.3 copy
+(`src/sivin/analytics/disease/sampling.py` on `wp/2.3-disease-models`).** This matters when the
+two copies are unified.
+
+| Aspect | WP-2.2 (this branch) | WP-2.3 |
+|---|---|---|
+| Step ≤ cap | step | step |
+| Step > cap | **cap** (3650 s; the sample before a gap is stretched to the cap) | **nominal interval** (1825 s) |
+| Default cap | 3650 s = 2·1825 | 4562.5 s = 2.5·1825 |
+| Last sample | min(1825, cap) | 1825 |
+| Cap validation | 0 < cap ≤ 6 h; cap < `last_sample_duration_s` is accepted silently | cap ≥ nominal |
+| Split at local midnight | yes | no (runs only) |
+| Excluded or missing row | interval uncounted (unknown), predecessor not stretched | same: durations measured on all rows; invalid samples end a run |
+| Gap flag (`followed`) | none | yes; needed for runs |
+
+Concrete differences:
+- A step of 4000 s gives 3650 s here and 4000 s in WP-2.3.
+- A step of 7200 s gives 3650 s here and 1825 s in WP-2.3.
+- One missed sample with +2 s clock drift (step 3652 s) loses 2 s here and nothing in WP-2.3.
+
+The QC interaction is correct and conservative. An excluded sample's own interval counts as
+unknown and is not attributed to a neighbour (verified above: SPIKE gives 5 samples, not 6).
+The midnight split is correct (verified by the tests and the DST runs).
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| minor | `src/sivin/analytics/ripening/durations.py:113` | **Cap semantics differ from WP-2.3.** A sample followed by a gap longer than the cap is stretched to the full cap (3650 s), while WP-2.3 counts only the nominal 1825 s. Example: a sensor stops after a −1 °C sample at 02:00 and the next sample comes at 08:00. This gives 1.01 h of frost here and 0.51 h in WP-2.3. The default cap of exactly 2×1825 s also clips one missed sample by the clock drift. **Fix:** keep the code now; when unifying in core, choose one rule. I recommend WP-2.3's rule: gap → nominal interval, with a cap of about 2.5× nominal. | open |
+| minor | `src/sivin/analytics/ripening/frost.py:103,114` | **Inconsistent frost-day threshold.** A "frost night" in `frost` is `T_min <= 0`, while the ČHMÚ "frost day" in `tropical_days_nights` is `T_min < 0`. Example: a day with T_min = 0.0 °C counts as a frost night but not as a frost day. Both are documented, but the two cards will disagree. **Fix:** use `<` (ČHMÚ) for nights, or state the difference on both doc pages. | open |
+| minor | `src/sivin/analytics/ripening/frost.py:124` | **`after_date` is not checked against `ctx.year`** (`dtr_ripening.start_date` is). Example: `after_date=2025-04-15` with season 2026 silently makes the whole 2026 period critical. **Fix:** raise `ValueError` as `DtrRipeningParams.window` does. | open |
+| minor | `src/sivin/analytics/ripening/dew_point.py:120` | **`NaN` in `details` when no sample gives a dew point.** When every RH on the complete days is ≤ 0, `value` is `None` but `details["mean_depression_c"]` is `NaN`. Verified with 24 samples at RH = 0. Plain `json.dumps` writes `NaN`, which is invalid JSON for the web. **Fix:** apply `nan_to_none` or omit the key. | open |
+| minor | `src/sivin/analytics/ripening/psychrometry.py:153` | **RH = 0 is handled inconsistently.** The dew point treats RH ≤ 0 as a sensor error (`NaN` plus a count), but VPD accepts RH = 0 and gives VPD = e_s. Example: 24 samples at 20 °C / 0 % give a VPD index of 2.338 kPa and 23.5 h above the threshold, from what the dew-point index calls an error. **Fix:** use `rh > 0` in both, or document why VPD differs. | open |
+| minor | `src/sivin/analytics/ripening/dew_point.py:105`, `vpd.py:158` | **Daily dew-point means and the VPD daytime mean are not duration-weighted.** They are arithmetic sample means, so with irregular sampling a dense stretch weighs more. The effect is small at ~1825 s and is consistent with `DailyWeather`. **Fix:** document it, or weight by `SampleDurations` pieces. | open |
+| minor | `src/sivin/analytics/ripening/winter_freeze.py:117` | **Needs data from the previous autumn.** The index reads the previous autumn from `ctx.daily`. If the integration (WP-1.7) builds the context from season-year data only, the autumn part is silently empty: coverage 90/151, `complete=False`. The `IndexContext` docstring says "all available days", so this is correct today. **Fix:** mention it in the WP-1.7 open questions. | open |
+| nit | `src/sivin/analytics/ripening/*.py` | Nine modules define `logger`, but only `dew_point.py` uses it. | open |
+| nit | `src/sivin/analytics/ripening/params.py:101` | `last_sample_duration_s` may exceed `max_sample_duration_s` and is then capped silently. A validator would make this explicit. | open |
+
+**Headline `value` for web cards:**
+- These are sensible: `heat_hours` = hours > 30 °C, `tropical_days_nights` = tropical days,
+  `vpd` = mean daily maximum, and `dew_point` = mean dew point (low information but harmless).
+- `frost` is questionable. Its value is the frost hours over the whole April–October period, so
+  October frosts after harvest count as much as a frost in May. Once `after_date` (modelled
+  budburst) is passed, `critical_frost_h` is the risk figure a grower wants on the card.
+- Suggestion for the owner (Open question 4): with `after_date` set, make `critical_frost_h` the
+  headline, or let the web card show it.
+
+**Deviations assessment:**
+1. Duration model (zero-order hold, cap, midnight split, excluded rows not stretched): sound.
+   The difference from WP-2.3 is described above.
+2. Hour metrics on complete days only: consistent with the daily indices. Accepted. A complete
+   day can still miss up to 10 % of its time, which is not rescaled. That is acceptable but
+   could be documented.
+3. Headline values: acceptable. See the `frost` remark above.
+4. `winter_freeze` as the winter ending in the season year, built from two `Season`s: correct,
+   including leap years (verified for 152 days). DST does not affect it.
+5. `dtr_ripening.start_date` replaces only the start and must lie in `ctx.year`: accepted.
+6. `frost` period Apr–Oct: acceptable for South Moravia. It is `[to be tuned]`.
+7. `MonthDayValue` serialisation: accepted.
+8. RH edge cases: documented. See the RH = 0 inconsistency above.
+9. No `ThermalTimeModel`: justified, because no index here accumulates thermal time.
+
+**Tests:** hand-computed and meaningful. The irregular-sampling tests place samples exactly on
+the band transitions. That proves invariance under the zero-order-hold definition, which is what
+the acceptance criterion requires. My own drifting-sampling and DST runs confirm it.
