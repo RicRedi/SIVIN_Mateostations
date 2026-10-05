@@ -311,3 +311,74 @@ add to step 5 "open the portal after the scheduled run".
 7. **Keep-alive for the 60-day rule (open question 3):** recommend no keep-alive now; the daily
    bot commits are likely activity, and the docs say how to notice and re-enable. Revisit only if
    the banner ever appears.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed `fe9e033..0e737da` (the review section's round-1 Status column was updated by the
+worker; each "fixed" status below was re-checked by the reviewer).
+
+Gates observed in `/home/user/wt/wp-4.1`: `make lint` → all checks passed, 295 files already
+formatted; `make type` → no issues in 179 source files; `make test` → 1951 passed; `make cov`
+→ 1951 passed, total 99 %, `app/summary.py`, `app/summary_formats.py`,
+`cli/commands/summary.py` 100 %; actionlint 1.7.12 + shellcheck (throwaway venv) → no findings.
+
+Own checks (local, nothing on GitHub):
+
+- **Gate:** re-extracted from the YAML and executed with a fake `date` for every day of 2026,
+  both crons, delays 0–180 min in 15-min steps (9490 cases): exactly one run per day, always the
+  06:00-Prague cron, 0 deviations. The workflow and the gate job carry no `concurrency`.
+- **End to end** (bare origin, step scripts from the YAML, real `sivin`, SYNTHETIC export):
+  first run creates `data` with README and the `.gitignore` from `DATA_BRANCH_GITIGNORE`;
+  after deleting `.gitignore` on `data`, a run with a SYNTHETIC export, a garbage export
+  (quarantined), `data/.env`, `data/raw.tmp` and `site/data/x.tmp` committed only store,
+  runs, derived, site files and a rewritten `.gitignore` (message `94 new rows from 2 files, 1
+  rejected, 0 other failures (exit code 1)`); `data/downloads/` and `data/quarantine/` files
+  committed earlier by hand were removed from the branch by the next run; a concurrent push
+  gives the new `::error::` line and step exit 1, no force; the documented rollback
+  (`git restore --source=<good sha> --staged --worktree -- data site`) left `data/` and
+  `site/` identical to `<good sha>` (later `raw/` file removed); `build-site` step under
+  `set -euo pipefail` on the pushed SHA reuses the sensor; the web build step with
+  `GITHUB_REPOSITORY=ricredi/SIVIN_Mateostations` prints `Base path: /SIVIN_Mateostations/` and
+  `dist/index.html` references `/SIVIN_Mateostations/assets/…`.
+- **`sivin report --format json`:** one JSON object with `record`, `started_at`, `files`,
+  `new_rows`, `rejected_files`, `failures`, `warning_kinds`, `outcome`; `record: false` and
+  zeros with `--since` after the last run (exit 0); counts only, no free text, so nothing to
+  leak; the commit step falls back to a message without counts on any failure.
+- **Markdown escaping:** `$` escaped; `scheme://…` and `www.…` become inline code.
+
+Concurrency analysis (job-level groups `pipeline-data` / `pipeline-pages` / `pipeline-deploy`,
+GitHub semantics: one running + at most one pending job per group, a newly queued job cancels
+the pending one, never the running one):
+
+- **Older deploy over a newer site:** not by the scheduler. Job k of run B is queued only after
+  B's job k−1 finished, which by the serialisation of group k−1 is after A's job k−1 finished,
+  i.e. after A's job k was queued; so in every group A's job is queued (and runs) before B's, or
+  A's pending job is cancelled by B's. B's data commit always contains A's (B's `collect`
+  checks out `data` only after A's `collect` pushed). Only a manual *Re-run* of an old run's
+  `build-site`/`deploy` deploys older data — the documented rollback, intended.
+- **Two concurrent pushes from `collect`:** impossible within the workflow (one group; also
+  for re-runs of an old `collect`, which check out the current `data`). Pushes from outside
+  are caught by the non-forced push (verified).
+- **Manual run during a scheduled run:** its gate passes at once; its `collect` waits, then
+  checks out the `data` commit the scheduled run pushed, so no rejection; its `build-site` and
+  `deploy` follow the scheduled ones in order. Correct.
+- **Why not one shared group:** the worker's argument holds — with one group the
+  `build-site` of run A, queued when A's `collect` ends, would cancel a newer run's waiting
+  `collect`. Three groups is the right design. Accept the deviation.
+- **Caveat (finding below):** the cancelled pending job is not always "superseded by the
+  same work": a manual `skip_fetch` run queued behind a long run cancels a waiting scheduled
+  `collect`, so that day's fetch is skipped; a scheduled run likewise cancels a waiting manual
+  `full_site_build`. Rare (needs three overlapping runs) and self-healing on the next day as far
+  as the exports cover the missed samples, but the docs state the opposite.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| — | round-1 table | All 9 round-1 findings re-checked: fixed as described (base path from `GITHUB_REPOSITORY` with guard; enforced exclusions incl. removal of previously committed junk; job-level concurrency; no event payload in `ref`; `::error::` on rejected push; `set -euo pipefail` in build-site; counts from `report --format json --since`; `$`/links escaped; exact rollback command). | verified |
+| minor | docs/operations.md:81-87, .github/workflows/pipeline.yml:88-90 | "A cancelled pending job is always superseded by a newer run (same exports, newer data)" is not true when the newer run is a manual `skip_fetch` run (the waiting scheduled fetch is dropped for the day) or when the cancelled one is a manual `full_site_build`. Fix: state the caveat ("if you start a manual run while another is running and one is waiting, the waiting one is cancelled; start a normal run afterwards if a fetch was dropped"); no code change needed. | open |
+| nit | src/sivin/app/summary_formats.py:302 | `\|` inside the inline-code link is right in a table cell but shows a literal backslash in list items (Failures, Export files). Escape `|` only in table cells, or replace it by `%7C`. | open |
+
+Deviation assessment (round 2): the three-group concurrency is accepted (analysis above). The
+round-1 recommendations on the gate, `site/data` on `data`, the quarantine exclusion (now
+enforced by the workflow, accepted without reservation) and keep-alive (none for now) stand.
