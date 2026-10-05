@@ -207,7 +207,120 @@ though:
 4. Q8, Q9, Q10, Q11 from the plan remain open; nothing in this WP depends on their answers.
 
 ## Review
-Verdict: _pending_
+
+Verdict: APPROVE (round 1)
+
+Reviewer: independent reviewer agent, 2026-10-05. Diff reviewed: `11f71ef...c09eddf`.
+
+### Gates observed (run by the reviewer in `/home/user/wt/wp-0.2`)
+
+- `make lint type test`: ruff check passed, 193 files already formatted, mypy strict clean on
+  116 source files, **1306 passed**.
+- `make cov`: 1306 passed, total 99.93 % (required 85 %). `core/daily.py`, `core/ids.py`,
+  `core/schema.py`, `ingest/parsers/{columns,tabular}.py`, `ingest/validation.py` and
+  `quality/checks/missing.py` are at 100 % line and branch coverage.
+- `cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build`:
+  0 vulnerabilities, lint and tsc clean, **14 files, 130 tests passed**, build OK.
+
+### Independent checks (throwaway scripts in `/tmp/claude-0/review-0.2/`)
+
+- **Full real export:** parsed `/tmp/claude-0/realexport/…223842.csv` with default settings. It
+  is accepted with no issue: 3520 rows, 2025-07-30 08:22:29Z to 2026-03-01 21:27:05Z, median
+  step 1830 s, all `qc` = 0.
+- **Fixture byte-exactness:** fixture lines 1–2 = original lines 1–2; lines 3–152 = original
+  3–152; lines 153–302 = original 3373–3522; the trailing `;` line and the final CRLF are
+  identical. The file has 303 LF, all of them CRLF, and no BOM. The README provenance (rows,
+  ranges, artificial 1638.25 h cut gap, no DST) matches the file.
+- **Hand-derived test values** were re-derived from the raw lines: 47 rows on 2026-02-28; the
+  five oldest timestamps and steps 12 736 s, 84 398 s, 49 s and 139 d + 2154 s; first and last
+  values. All match.
+- **CRLF safety:** I cloned the branch with `core.autocrlf=true` and with `input`. The fixture
+  stayed byte-identical (md5 equal), because git does not convert files whose index copy
+  already contains CRLF. Only a future `* text=auto` plus `git add --renormalize` rewrites it.
+  It would also rewrite the 15 synthetic CRLF fixtures. `test_raw_file_layout_is_the_original`
+  would then fail loudly. There is no silent risk today.
+- **SensorId:** 48 hand-picked adversarial names, plus a 300 000-case random fuzz of old
+  (`11f71ef`) against new `SensorId.parse`. **No name accepted before resolves differently
+  now**; 11 fuzz names are newly accepted, all underscore spellings. The trailing
+  `20260301_223842` is never taken as an id. `MeteoData_77799986_20260301.csv`,
+  `…_VUT_20260301.csv`, 8-digit device numbers, a missing `MeteoData_` prefix and a lowercase
+  prefix are all rejected with `ValueError`. Lowercase labels, labels with digits (`VUT2`,
+  `V2T`), `.CSV`/`.xlsx`, copy suffixes and POSIX and Windows paths are accepted. Labels with
+  an inner `_`, with diacritics, or starting with a digit are rejected (see m2).
+  `is_portal_export_name` and `PortalCsvParser.can_parse` accept the real name.
+- **Whole-row rule, store paths.** Synthetic series: 144 rows at 1830 s, 10 rows with only the
+  temperature missing, 10 with only the humidity missing. Written with `MeasurementStore.append`
+  and read back, every row has `qc` = 0 and the NaN values survive.
+  - store → `DailyWeather`: 124 valid samples. The 20 half-rows are dropped and all
+    count/coverage columns are equal, so it is **safe without flags**.
+    Edge cases also passed: all rows half-missing, a single row, and the 25 h DST day
+    (coverage clipped to 1).
+  - store → `SensorAligner` (default config) **without QC**: **20 grid points are valid for
+    one variable and not the other**. This shows the per-variable code below is reachable.
+  - store → `QualityPipeline` (default `missing` with `any`) → `SensorAligner`: 20 rows
+    `MISSING`, 0 half-valid grid points. **Safe once the QC pipeline runs first.**
+
+### Classification of the remaining per-variable code (hand-off *Out of scope*)
+
+| Location | Safe without the MISSING flag? | Why |
+|---|---|---|
+| `analytics/disease/botrytis.py:455-460` `_covered_days` | **safe** | reads `DailyWeather` coverage, which checks the values directly |
+| `analytics/ripening/common.py:100` (`rh_coverage`) | **safe** | the same; the column equals `coverage` |
+| `analytics/ripening/common.py:156` `count_non_positive_humidity` | **safe** | only counts and logs artefacts, no result value |
+| `alignment/grid.py:302` (`notna() \| notna()`) | low risk | only widens the grid span by an end sample with one value |
+| `analytics/disease/botrytis.py:289-309` | **risk on unflagged data** | an RH-only row counts as wet and extends a wetness period |
+| `analytics/disease/powdery_mildew.py:72` | **risk on unflagged data** | day eligibility comes from `DailyWeather` (safe), but the per-sample hours use temperature-only rows |
+| `analytics/ripening/durations.py:60,140,270` | **risk on unflagged data** | values masked by flags only, `NaN` per variable |
+| `alignment/strategies.py:104` | **risk on unflagged data** | reproduced above: half-valid grid points |
+| `web` (`DISPLAY_EXCLUDE_MASK`) | risk on unflagged data | a `null` without MISSING keeps the other value (documented in `docs/web.md`) |
+
+All five "risk" rows are correct **if and only if** the QC pipeline (or the parser) has set
+`MISSING` before them. `MeasurementStore.read` returns `qc = 0`, so the integration (WP-1.7,
+site build) must run `QualityPipeline` on store data before analytics, alignment or the site
+export. Alternatively, these places should use `MeasurementSeries.complete_mask`. Nothing wires
+store data into them yet (no caller in `src/`), so this is not a defect of this WP. The
+orchestrator should schedule it (hand-off open question 3).
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| minor | docs/architecture.md:66-77 | "Every layer applies the same rule": the table leaves out analytics and alignment, which do **not** apply it on their own (see the classification). It also does not say that store data come back with `qc = 0`, so QC must run before them. Input: store → aligner → 20 half-valid grid points. Fix: add a row "analytics, alignment, web: rely on `MISSING`; run `QualityPipeline` on store data first" (or reword "every layer"). | open |
+| minor | src/sivin/core/ids.py:61 | The underscore label is `[A-Za-z][A-Za-z0-9-]*`, while the spaced variant accepts any label. If spaces were replaced by `_`, a multi-word label (`VUT Brno` → `VUT_Brno`) or one with diacritics (`VÚT`) is rejected. Today all four labels are `VUT` (sensors.geojson), and a mismatch fails loudly (`sensor-id` error), never resolving to a wrong sensor. Fix if Q8 shows such names: allow non-digit-leading Unicode letters and document it. | open |
+| nit | src/sivin/core/ids.py:60 | The device number in the underscore variant is limited to 1–7 digits (deliberate, for disambiguation). If the portal ever issues 8-digit device numbers, those names fail loudly. Worth one line in `docs/data-format.md`. | open |
+| nit | tests/fixtures/exports/README.md:9-12 | Still says the layouts are "not verified on a real export (owner questions Q1 and Q2)", two paragraphs after the new exception note. The worker already touched this file. | open |
+| nit | docs/wp_log/WP-0.2.md (*Out of scope*) | The 1825 s list leaves out prose mentions in `alignment/grid.py:32-37`, `alignment/aligner.py:3`, `analytics/ripening/durations.py:3`, `quality/checks/sampling.py:3` and `analytics/disease/sampling.py:3`. `docs/alignment.md:99` now wrongly says its 1825 default is "same as `time.expected_interval_s`". | open |
+| nit | web/tests/Resampler.test.ts:91-96 | The gap test still uses 1825 s offsets, and no test pins `RAW_GAP_THRESHOLD_S` = 5490 s numerically. Harmless, because the test uses the symbol. | open |
+
+No blocker or major finding.
+
+### Acceptance criteria / DoD
+
+- The real export parses unchanged under its original name, with no finding (verified on the
+  fixture and on the full file).
+- Row-validity tests exist in core (`test_daily`, `test_schema`), parsers (`test_portal`,
+  `test_validation`), QC (`test_checks`) and web (`Resampler.test.ts`).
+- The 1830 s default is consistent across `core/defaults.py`, `config.py`, `config/sivin.yaml`,
+  `ParserSettings` and `web/src/domain/Resampler.ts`. The remaining 1825 s defaults are outside
+  the WP's scope and listed.
+- Web mask: `DISPLAY_EXCLUDE_MASK === DEFAULT_EXCLUDE_MASK` (311). `main.ts` still uses
+  `DISPLAY_EXCLUDE_MASK`. Tests cover MISSING hiding the row at raw and hourly resolution,
+  with hand-computed values (`[null, 11]`, hourly mean 11).
+- Gates green; changed-code coverage 100 %; docs updated; hand-off note complete.
+
+### Deviations assessment
+
+- `tests/fixtures/exports/README.md` (3 lines): **accepted.** Without it a real file would sit
+  under a README that calls everything synthetic, which CLAUDE.md forbids.
+- `tests/ingest/conftest.py`, `tests/ingest/test_fixtures.py`: **accepted.** They are matching
+  ingest tests. Without the change the generator check would fail on the real file.
+- `tests/analytics/disease/test_botrytis.py` (one assertion), `tests/test_cli.py`,
+  `tests/test_config.py`: **accepted.** They are direct consequences of the `DailyWeather` and
+  default changes, and the botrytis index result is unchanged. No production code outside
+  scope changed.
+- `values-present` one-empty-variable → ERROR (brief-sanctioned). Note for the owner: such a
+  file is quarantined as a whole, so its valid other variable never reaches the store.
+  It stays in quarantine and can be re-imported if the rule ever changes.
+- `DailyWeather` constructor now rejects frames whose `rh_*` columns differ from `n_samples` /
+  `coverage` (hand-off open question 2). It is consistent with the decision and all in-repo
+  code passes; I see no problem.
