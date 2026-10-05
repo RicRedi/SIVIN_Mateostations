@@ -11,7 +11,7 @@ and it rejects bad files with a full report instead of importing them.
   `TabularExportParser`, and one reading class, `TabularExportReader`: header search, column
   aliases, decimal-comma numbers, local timestamps, row order, local → UTC and series
   assembly.
-- `InputValidator` runs 16 registered `ValidationRule` classes, one class per rule, over an
+- `InputValidator` runs 21 registered `ValidationRule` classes, one class per rule, over an
   `ExportInspection` and returns a frozen `ValidationReport`. A file with an ERROR yields
   `series == ()`. Parsers never raise because of file content.
 - Rows that step back in time (device clock correction, overlapping exports) are handled by a
@@ -20,29 +20,43 @@ and it rejects bad files with a full report instead of importing them.
 - Fixtures are synthetic and generated deterministically. `docs/data-format.md` documents the
   formats and states prominently that they are not verified on a real export (Q1/Q2).
 
+**Round 2** addressed the review of round 1. The details for each finding are in the *Status*
+column of the review table.
+- **Row order.** Order repair now splits at every backward step except one inside the repeated
+  hour of a fall-back, and it counts those steps when deciding newest-first. Ambiguous rows
+  without ordinary rows on both sides of the transition in their segment are dropped. The
+  review's exhaustive check gives 0 misplaced rows in 5152 files.
+- **Implausible timestamps.** Timestamps outside a plausible range are dropped, and so are rows
+  more than `max_backward_step_s` earlier than rows already read.
+- **New rules:** `values-present`, `date-order`, `timestamps-plausible`, `row-order` and
+  `large-backward-steps`.
+- **Short files.** Share thresholds now also need more than `min_error_rows` affected rows
+  before they give an ERROR.
+- **Oversized number cells** are now unparseable instead of crashing the parser.
+
 ## Changed files
 
 - `src/sivin/ingest/validation.py`: `Severity`, `ValidationIssue`, `ValidationReport`,
   `ValidationSettings`, the inspection value objects (`ExportInspection`, `TableInspection`,
   `TimeColumn`, `ValueColumn`), `ValidationRule`/`TableRule`, `ValidationRuleRegistry`
-  (`validation_rules`), `InputValidator` and the 16 rules.
+  (`validation_rules`), `InputValidator` and the 21 rules.
 - `src/sivin/ingest/parsers/__init__.py`: importing it registers the parsers.
 - `src/sivin/ingest/parsers/base.py`: `ExportParser`, `ParsedExport`, `ParserRegistry`
   (`parser_registry`), `UnsupportedExportError`, `AmbiguousExportError`.
 - `src/sivin/ingest/parsers/columns.py`: `CanonicalColumn`, `ColumnAliases`, `ParserSettings`,
   `ColumnMapping`, `HeaderCell`, `HeaderMatch`, `normalize_label`, `normalize_unit`.
-- `src/sivin/ingest/parsers/cells.py`: `NumberParser`, `TimestampParser`.
+- `src/sivin/ingest/parsers/cells.py`: `NumberParser`, `TimestampParser`, `DateOrderCheck`.
 - `src/sivin/ingest/parsers/sources.py`: `CellGrid`, `CsvGridReader`, `WorkbookReader`,
   `GridReadError`.
-- `src/sivin/ingest/parsers/order.py`: `RowOrder`, `OrderRepair`, `SplitAtBackwardSteps`,
-  `RowOrderAnalyser`.
-- `src/sivin/ingest/parsers/tabular.py`: `SensorTable`, `LoadedTables`,
+- `src/sivin/ingest/parsers/order.py`: `RowOrder`, `WallClock`, `OrderRepair`,
+  `SplitAtBackwardSteps`, `RowOrderAnalyser`.
+- `src/sivin/ingest/parsers/tabular.py`: `SensorTable`, `LoadedTables`, `PlausibleRange`,
   `TabularExportReader`, `TabularExportParser`.
 - `src/sivin/ingest/parsers/portal.py`: `PortalCsvParser`, `PortalXlsxParser`,
   `is_portal_export_name`, `sensor_from_file_name`.
 - `src/sivin/ingest/parsers/legacy.py`: `LegacyWorkbookParser`.
 - `tests/ingest/**`: 11 test modules and `conftest.py`.
-- `tests/fixtures/exports/**`: `make_fixtures.py`, `README.md` and 18 generated files.
+- `tests/fixtures/exports/**`: `make_fixtures.py`, `README.md` and 20 generated files.
 - `docs/data-format.md`, `docs/wp_log/WP-1.2.md`.
 - A merge of `wp/0.1-foundation` (8f354c0, the final converter), as the orchestrator asked.
 
@@ -68,7 +82,45 @@ validation_rules: ValidationRuleRegistry   # @validation_rules.register
 
 ## How it was verified
 
-All commands ran in `/home/user/wt/wp-1.2` after merging `wp/0.1-foundation` at 8f354c0, with
+Round 2, in `/home/user/wt/wp-1.2`, same tools:
+
+- `make lint` → `All checks passed!`, `56 files already formatted`.
+- `make type` → `Success: no issues found in 30 source files`.
+- `make test` → `352 passed`.
+- `make cov` → `TOTAL 1963 0 392 0 100%`. Coverage of `sivin.ingest` →
+  `TOTAL 1120 0 206 0 100%` (statements and branches).
+- The reviewer's scripts in `/tmp/claude-0/review-1.2/` were re-run:
+  - `t4.py` (the exhaustive overlap check, 5152 files) → `bad 0`. Rows still lost: 2002 in
+    total. They are repeated-hour rows without ordinary rows on both sides, and overlap copies;
+    every loss is reported.
+  - `t5.py`: the second export's repeated hour is kept and placed correctly.
+  - `t7.py`: the clock-reset rows to 2000 are dropped (WARNING), and the row in 2099 is
+    dropped (WARNING).
+  - `t8.py`: the 400-digit cell is read as unparseable, with no crash.
+  - `t1.py`: an empty temperature column gives a WARNING, both columns empty give an ERROR,
+    and the US dates (`1/13/2026`) give a `date-order` ERROR.
+
+  Only `h.py` was changed, so that it passes a fixed `latest_timestamp`; the run date is
+  2026-10-05, earlier than the fixtures from late October.
+- New tests:
+  - the two blocker inputs from the review, plus the minor case (repeated hour kept after an
+    overlap);
+  - a seeded subset of 400 of the exhaustive overlap cases (0 misplaced rows);
+  - clock reset, a row in 2099, and a mostly implausible file;
+  - a run-time-based upper bound;
+  - a short newest-first table (WARNING `row-order`);
+  - the fixtures `broken/month_first` (ERROR `date-order`) and `broken/formula_values`
+    (ERROR `values-present`);
+  - one empty variable (WARNING);
+  - a footer row in a short file;
+  - the `min_error_rows` table;
+  - an oversized integer cell, and huge integers, floats and inf strings in the robustness
+    grids;
+  - a date-formatted cell read as midnight.
+- Tests fix `latest_timestamp` to 2030-01-01 (`tests/ingest/conftest.py::make_settings`), so
+  that their results do not depend on the day they run.
+
+Round 1, all commands ran in `/home/user/wt/wp-1.2` after merging `wp/0.1-foundation` at 8f354c0, with
 ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 
 - `make lint` → `All checks passed!`, `56 files already formatted`.
@@ -106,9 +158,20 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 - **No real export was available.** The column names, the title row, the XLSX layout, the
   row order (oldest or newest first) and the decimal format are all reconstructed from legacy
   code (Q1). The source time zone `Europe/Prague` is unconfirmed (Q2).
-- The Windows-1250 CSV fallback, the default thresholds (5 % shares, −60/70 °C,
-  RH ≤ 1 % as a fraction, newest-first share 0.9) and the alias lists are project
-  assumptions marked `[to be verified]`.
+- The Windows-1250 CSV fallback, the default thresholds and the alias lists are project
+  assumptions marked `[to be verified]`. The thresholds are:
+  - 5 % shares and `min_error_rows` 3;
+  - −60/70 °C gross temperature bounds;
+  - RH ≤ 1 % read as a fraction;
+  - newest-first share 0.75 with at least 4 steps;
+  - `max_backward_step_s` 2 h;
+  - plausible timestamps from 2020-01-01 to the run time plus 1 day;
+  - long step 48 × 1825 s.
+- Repeated-hour rows at the start or end of a file, or of an overlap segment, are dropped
+  (reported), even when they are genuine. With data only on one side of the transition they
+  cannot be told apart from an overlap.
+- A long overlap (more than 2 h) keeps the first export's values. If the second export
+  differs, it is dropped and only counted; it is not compared with the first.
 - A °F temperature column with plausible-looking values (e.g. a winter export, 30–45 °F) and a
   header without a unit is not detected. It is caught only through its header or when more
   than 5 % of the values exceed 70.
@@ -129,11 +192,11 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 2. **Duplicates keep the last row** (orchestrator instruction; `from_records` behaviour). The
    count and the number of conflicting duplicates are reported as a WARNING.
 3. **Order repair** (orchestrator follow-up): the brief's "non-monotonic order" rule is now
-   `backward-steps`. It is detected **before** conversion on the rows outside daylight-saving
-   hours, and it reports the count and the first 10 source rows. The chosen repair is
-   **split into monotonic segments**: no row is dropped, and the converter is called once per
-   segment. Reversal only happens when ≥ `newest_first_min_share` (0.9) of the steps go back in
-   time.
+   `backward-steps`. It is detected **before** conversion and reports the count and the first
+   10 source rows. Since round 2 every backward step counts, except one between two ambiguous
+   rows of the same fall-back day. The chosen repair is **split into monotonic segments**: no
+   row is dropped, and the converter is called once per segment. Reversal happens only with at
+   least 4 counted steps, of which at least 75 % go back in time.
 4. **Unresolved daylight-saving rows are dropped** (orchestrator instruction). The count is in
    the `daylight-saving` WARNING.
 5. **Additions to the briefed shapes:**
@@ -143,9 +206,14 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
    - `ParserRegistry.for_file(path, settings=None, validator=None)`, because the parsers need
      settings;
    - `ParserSettings` fields beyond the four in the brief: `newest_first_min_share`,
-     `csv_delimiter`, `csv_encodings`, `legacy_sheet_sensors`;
-   - extra rules `expected-tables`, `short-rows`, `daylight-saving` and `humidity-fraction`
-     (the brief's "RH in 0–1" guard).
+     `newest_first_min_steps`, `max_backward_step_s`, `earliest_timestamp`,
+     `latest_timestamp`, `max_future_s`, `expected_interval_s`, `long_step_factor`,
+     `csv_delimiter`, `csv_encodings` and `legacy_sheet_sensors`;
+   - `ValidationSettings.max_implausible_timestamp_share` and `.min_error_rows`;
+   - `TabularExportReader(..., now_utc=None)`;
+   - extra rules `expected-tables`, `short-rows`, `daylight-saving`, `humidity-fraction` (the
+     brief's "RH in 0–1" guard), `values-present`, `date-order`, `timestamps-plausible`,
+     `row-order` and `large-backward-steps`.
 6. **`can_parse` uses the file name only**, so the decisions are cheap and do not overlap:
    - `portal-csv` takes any `*.csv`;
    - `portal-xlsx` takes a workbook whose name starts with `MeteoData` or names a sensor;
@@ -159,7 +227,23 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
 8. **A unit qualifier on the timestamp header** (e.g. `Datum a čas (UTC)`) is rejected by
    default (`ColumnAliases.timestamp_units = ()`), so a UTC export is never read as local
    time.
-
+9. **Incomplete transitions are checked in every table**, not only in repaired ones as the
+   orchestrator's decision says. Rows of the repeated hour repeated by an overlap at the end
+   of a file (`… 01:33; 02:03; 02:33; 02:03; 02:33`) form one segment with exactly one clock
+   jump. The converter places them one hour late. They cannot be told apart from a genuine
+   export that stops inside the transition. Both are dropped and reported.
+10. **The day/month swap guard counts long steps** instead of comparing the median step with
+    `expected_interval_s`. With 30-minute sampling only one step per day changes under a
+    day/month swap, so the median stays at about 1825 s and cannot see the swap. The guard
+    also fires when the other date order reads more cells (`1/13/2026`).
+11. **`values-present`:** ERROR only when both variables have no value at all. One empty
+    variable is a WARNING, because the other variable (usually temperature) is still valuable,
+    e.g. with a failed humidity channel.
+12. **Long backward steps:** rows more than `max_backward_step_s` earlier than the latest row
+    read so far are dropped until the clock is back. This handles both a clock reset and a long
+    overlap with one rule; in an overlap the first export's copy wins.
+13. **Date-only cells:** read as local midnight, because openpyxl returns them as a `datetime`
+    and they cannot be told apart. The docstring now says so.
 ## Out of scope
 
 - `pyproject.toml`: add `types-openpyxl` to the `dev` extra, so that the targeted
@@ -188,8 +272,13 @@ ruff 0.16.10, mypy 2.4.0, pandas 3.0.6 and openpyxl 3.1.5:
    number format and whether there are further columns.
 3. Q2: are the export timestamps local time with daylight saving or UTC? Does the device clock
    get corrected (backward steps)?
-4. Are the validation thresholds acceptable as starting values: 5 % unparseable values or
-   timestamps, 5 % out of bounds, −60/70 °C gross temperature bounds?
+4. Are the validation thresholds acceptable as starting values?
+   - 5 % unparseable values or timestamps, but an ERROR only when more than 3 rows are
+     affected;
+   - 5 % out of bounds;
+   - −60/70 °C gross temperature bounds;
+   - plausible timestamps from 2020-01-01 to the run time plus 1 day;
+   - drop rows more than 2 h earlier than rows already read.
 
 ## Review
 
@@ -211,16 +300,16 @@ Reviewer: independent reviewer agent. Reproduction scripts are outside the repos
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| blocker | `src/sivin/ingest/parsers/order.py:83-89`, `:131-149` | Order repair cannot see backward steps between a daylight-saving row and an ordinary row. The DST hour can then be resolved wrongly and fabricated instants are imported. | open |
-| major | `src/sivin/ingest/validation.py` (no rule) | A file without any measured value is accepted with **no findings**. Examples are an empty temperature column, an empty file body below a valid header, or an XLSX with formulas and no cached values. | open |
-| major | `src/sivin/ingest/parsers/cells.py:103-105` | An XLSX integer cell too large for a float crashes `parse` with `OverflowError`. This breaks the acceptance criterion "no file content can crash the parser". | open |
-| major | `src/sivin/ingest/validation.py`, `parsers/order.py` | There is no plausibility check on timestamps. After a clock reset, rows are imported at 1999. Rows in 2099 are accepted with no findings. | open |
-| minor | `src/sivin/ingest/parsers/order.py:83-89` | An overlap that starts before the fall-back drops the whole repeated hour (6 rows), even though either export alone could be resolved. No `backward-steps` warning is given because the step goes from a DST row to an ordinary row. This has the same root cause as the blocker. | open |
-| minor | `src/sivin/ingest/parsers/cells.py:39-45`, `columns.py:179` | A day/month swap is undetectable. A month-first file (`1/5/2026`) whose days are all ≤ 12 is read silently as day-first, with month-long steps between consecutive samples. | open |
-| minor | `src/sivin/ingest/validation.py:160-212`, `columns.py:186` | The share thresholds behave badly on short files. One footer or comment row in a file with fewer than 20 rows rejects the file (more than 5 %). A newest-first file of about 10 rows with one irregular step falls below 0.9 and is not reversed, which leads into the blocker. | open |
-| nit | `src/sivin/ingest/parsers/cells.py:122-124` | The docstring says date-only cells are unparseable. openpyxl returns `datetime(2026, 1, 5, 0, 0)` for a date cell, and it is accepted as local midnight. | open |
-| nit | `src/sivin/ingest/validation.py:672` | Extra worksheets of a portal XLSX are reported as "without a sensor mapping". The message is meant for the legacy parser. | open |
-| nit | history (`e03c8bb`, `895294e`) | `tests/fixtures/exports/__pycache__/make_fixtures.cpython-312.pyc` was committed in e03c8bb and removed in 895294e. The branch is unpushed, so squash or rewrite before the merge so the binary is not in the history. | open |
+| blocker | `src/sivin/ingest/parsers/order.py:83-89`, `:131-149` | Order repair cannot see backward steps between a daylight-saving row and an ordinary row. The DST hour can then be resolved wrongly and fabricated instants are imported. | fixed (dfa01a9): `WallClock.steps` counts every backward step except ambiguous → ambiguous on the same day; this decides both splitting and newest-first. Ambiguous groups without ordinary rows on both sides in their segment are dropped, in every table (deviation 9). `t4.py` → bad 0 of 5152. Both inputs are tests, plus a seeded subset of 400 cases |
+| major | `src/sivin/ingest/validation.py` (no rule) | A file without any measured value is accepted with **no findings**. Examples are an empty temperature column, an empty file body below a valid header, or an XLSX with formulas and no cached values. | fixed: rule `values-present`. ERROR when neither variable has a value, WARNING when one variable has none (deviation 11). Fixture `broken/formula_values/` and CSV tests added |
+| major | `src/sivin/ingest/parsers/cells.py:103-105` | An XLSX integer cell too large for a float crashes `parse` with `OverflowError`. This breaks the acceptance criterion "no file content can crash the parser". | fixed: `OverflowError` makes the cell unparseable. A test patches a 400-digit cell into the sheet XML, and the robustness grids now include huge integers and floats and inf/NaN strings |
+| major | `src/sivin/ingest/validation.py`, `parsers/order.py` | There is no plausibility check on timestamps. After a clock reset, rows are imported at 1999. Rows in 2099 are accepted with no findings. | fixed: rule `timestamps-plausible` with `earliest_timestamp` (2020-01-01) and the run time plus `max_future_s` (1 day); rows outside are dropped, and too many reject the file. `max_backward_step_s` (2 h) drops rows far earlier than rows already read (rule `large-backward-steps`). Documented |
+| minor | `src/sivin/ingest/parsers/order.py:83-89` | An overlap that starts before the fall-back drops the whole repeated hour (6 rows), even though either export alone could be resolved. No `backward-steps` warning is given because the step goes from a DST row to an ordinary row. This has the same root cause as the blocker. | fixed by the blocker fix: the split at 02:33 → 01:33 makes the second export resolvable; covered by a test |
+| minor | `src/sivin/ingest/parsers/cells.py:39-45`, `columns.py:179` | A day/month swap is undetectable. A month-first file (`1/5/2026`) whose days are all ≤ 12 is read silently as day-first, with month-long steps between consecutive samples. | fixed: `DateOrderCheck` (rule `date-order`, ERROR) counts long steps under both date orders and also compares how many cells each order reads (deviation 10). Fixture `broken/month_first/` added |
+| minor | `src/sivin/ingest/validation.py:160-212`, `columns.py:186` | The share thresholds behave badly on short files. One footer or comment row in a file with fewer than 20 rows rejects the file (more than 5 %). A newest-first file of about 10 rows with one irregular step falls below 0.9 and is not reversed, which leads into the blocker. | fixed: `min_error_rows` (3), so an ERROR needs more than 3 affected rows, or all rows. Newest-first needs at least 4 counted steps; a shorter table that steps back is read oldest first with a `row-order` WARNING. The default share was lowered to 0.75 |
+| nit | `src/sivin/ingest/parsers/cells.py:122-124` | The docstring says date-only cells are unparseable. openpyxl returns `datetime(2026, 1, 5, 0, 0)` for a date cell, and it is accepted as local midnight. | fixed: the docstring and the docs now say a date-formatted cell is read as local midnight; covered by a test |
+| nit | `src/sivin/ingest/validation.py:672` | Extra worksheets of a portal XLSX are reported as "without a sensor mapping". The message is meant for the legacy parser. | fixed: the message is now generic (first worksheet of a portal export, mapped worksheets of a legacy workbook) |
+| nit | history (`e03c8bb`, `895294e`) | `tests/fixtures/exports/__pycache__/make_fixtures.cpython-312.pyc` was committed in e03c8bb and removed in 895294e. The branch is unpushed, so squash or rewrite before the merge so the binary is not in the history. | accepted (orchestrator): the file is removed in 895294e; no history rewrite, because the branch contains a merge |
 
 #### Details
 
