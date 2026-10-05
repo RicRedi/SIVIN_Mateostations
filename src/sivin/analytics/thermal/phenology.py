@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
+from collections.abc import Mapping
 from datetime import date
 from itertools import pairwise
+from types import MappingProxyType
 from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,8 +57,13 @@ GSR_BASE_TEMP_C: Final = 0.0
 GSR_START: Final = MonthDay(4, 1)
 """Start of the GSR accumulation, April 1 (day of year 91 in common years; Parker et al., 2020)."""
 
+
 BUDBURST_BASE_TEMP_C: Final = 5.0
-"""Base temperature of the budburst model in °C; project default [to be verified]."""
+"""Base temperature of the budburst model in °C; project default [to be verified].
+
+A 5 °C base with accumulation from January 1 is one of the forcing-only (GDD) variants found in
+the budburst literature, but the source of that variant could not be confirmed
+(docs/literature-verification.md)."""
 
 BUDBURST_START: Final = MonthDay(1, 1)
 """Start of the budburst accumulation; project default, not from literature."""
@@ -85,6 +92,19 @@ class PhenologyStage(BaseModel):
         min_length=1, pattern=r"^[a-z0-9_]+$", description="Stage name (lower-case, no unit)."
     )
     f_star_c_d: float = Field(gt=0.0, description="Critical thermal sum F* in °C·d.")
+
+
+GSR_CULTIVAR_PRESETS: Final[Mapping[str, tuple[PhenologyStage, ...]]] = MappingProxyType(
+    {
+        "sauvignon_blanc": (PhenologyStage(label="sugar_200_g_l", f_star_c_d=2820.0),),
+    }
+)
+"""Optional GSR sugar targets per cultivar (read-only); **not active** unless configured.
+
+F* in °C·d to 200 g/L sugar (base 0 °C, from April 1) of Parker et al. (2020), as quoted by
+Ausseil et al. (2021, Frontiers in Plant Science 12, 618039); the table of the primary paper
+was not read. Only values confirmed in that way are listed (docs/literature-verification.md);
+use ``GsrParams(targets=GSR_CULTIVAR_PRESETS["sauvignon_blanc"])`` to apply one."""
 
 
 class PhenologyParams(ThermalParams):
@@ -264,7 +284,13 @@ class BudburstIndex(ThermalTimePhenologyIndex[BudburstParams]):
 
 
 class GfvParams(PhenologyParams):
-    """Parameters of :class:`GfvIndex` (general model of Parker et al., 2011)."""
+    """Parameters of :class:`GfvIndex` (general model of Parker et al., 2011).
+
+    Base 0 °C and the start on day of year 60 are verified (docs/literature-verification.md).
+    No critical sums are shipped: the species-level F* of Parker et al. (2011) could not be
+    found, and 1282 / 2528 °C·d, once noted as general-model candidates, are the Sauvignon blanc
+    values of Parker et al. (2013) as quoted by Ausseil et al. (2021). See docs/indices/gfv.md.
+    """
 
     base_temp_c: float = Field(
         GFV_BASE_TEMP_C, description="Base temperature in °C (Parker et al., 2011)."

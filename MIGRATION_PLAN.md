@@ -452,7 +452,10 @@ site/data/indices/<season>.json
 
 // series/<id>/daily.json   (den = místní kalendářní den Europe/Prague)
 { "sensor_id": "77678271", "date": ["2026-01-01"], "temp_min": [-2.1], "temp_mean": [0.4],
-  "temp_max": [3.0], "rh_min": [70.0], "rh_mean": [88.1], "rh_max": [99.0], "coverage": [0.98] }
+  "temp_max": [3.0], "rh_min": [70.0], "rh_mean": [88.1], "rh_max": [99.0], "coverage": [0.98],
+  "precip_sum_mm": [0.4], "battery_min_v": [3.5] }
+// precip_sum_mm a battery_min_v od WP-1.9 (volitelná pole; počítají se ze všech přítomných
+// hodnot mimo období mimo-vinici / ruční vyřazení, nezávisle na platnosti teploty a vlhkosti)
 
 // events/<id>.json
 { "sensor_id": "77678271", "events": [ { "type": "deployment", "t": 1764590400,
@@ -527,7 +530,7 @@ v grafu zobrazí jako šedý pás (data se nekreslí jako venkovní).
 ```yaml
 # Periods when a sensor was NOT measuring in the vineyard.
 # Times are local (Europe/Prague) unless an explicit offset or Z is given.
-# 'to: null' means the sensor is still off site.
+# 'to: open' (or 'to: null') means the sensor is still off site; an empty 'to:' is an error.
 entries:
   - sensor: "77799986"          # 8-digit serial (any name variant accepted)
     from: "2025-12-17 12:00"
@@ -818,7 +821,7 @@ zapojení do CLI a konfigurace dělá integrační WP-1.7 (vlna 2).
   `docs/data-format.md`, `docs/storage.md`, `docs/quality-control.md`, `docs/architecture.md`,
   `docs/wp_log/WP-1.9.md`.
 - **Úkoly:** nové sloupce v `MeasurementSeries` (volitelné, `NaN` = chybí; netýká se jich pravidlo
-  platnosti řádku); aliasy sloupců v parserech (reálný export); úložiště zapisuje a čte nové sloupce
+  platnosti řádku); hodnoty mimo hrubé meze se čtou jako chybějící; aliasy sloupců v parserech (reálný export); úložiště zapisuje a čte nové sloupce
   zpětně kompatibilně (starší CSV bez nich); `DailyWeather` přidá `precip_sum_mm`
   a `battery_min_v`; QC: rozsah srážek (≥ 0, horní mez za interval), konzistence intervalových
   srážek s čítačem (reset čítače = událost, ne chyba), `BatteryCheck` (pod prahem → varovná

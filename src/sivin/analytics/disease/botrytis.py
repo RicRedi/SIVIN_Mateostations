@@ -44,22 +44,23 @@ logger = logging.getLogger(__name__)
 class BroomeCoefficients(BaseModel):
     """Coefficients of the logit equation of Broome et al. (1995).
 
-    The defaults are the published values as commonly quoted from Broome et al. (1995); they
-    could not be checked against the paper in this project and are marked
-    **[to be verified]**.
+    The defaults are the values of Broome et al. (1995) as quoted by the UC IPM model page
+    "Botrytis Bunch Rot of Grape" (ipm.ucanr.edu/DISEASE/DATABASE/grapebotrytis.html); the paper
+    itself was not read. Fitted on detached mature berries with 4-20 h of wetness at 12-30 °C
+    (same source).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    intercept: float = Field(-2.647866, description="a (dimensionless) [to be verified].")
+    intercept: float = Field(-2.647866, description="a (dimensionless), Broome et al. (1995).")
     wetness_h: float = Field(
-        -0.374927, description="b, per hour of wetness (1/h) [to be verified]."
+        -0.374927, description="b, per hour of wetness (1/h), Broome et al. (1995)."
     )
     wetness_temp: float = Field(
-        0.061601, description="c, per hour and °C (1/(h·°C)) [to be verified]."
+        0.061601, description="c, per hour and °C (1/(h·°C)), Broome et al. (1995)."
     )
     wetness_temp_sq: float = Field(
-        -0.001511, description="d, per hour and °C squared (1/(h·°C²)) [to be verified]."
+        -0.001511, description="d, per hour and °C squared (1/(h·°C²)), Broome et al. (1995)."
     )
 
     def logit(self, wetness_h: float, temp_c: float) -> float:
@@ -171,7 +172,7 @@ class BotrytisBroomeParams(IndexParams):
     )
     coefficients: BroomeCoefficients = Field(
         default_factory=BroomeCoefficients,
-        description="Logit coefficients of Broome et al. (1995) [to be verified].",
+        description="Logit coefficients of Broome et al. (1995), as quoted by UC IPM.",
     )
     risk_bands: tuple[RiskBand, ...] = Field(
         (),

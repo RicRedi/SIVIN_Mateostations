@@ -81,4 +81,9 @@ wetness; this is used qualitatively only.
 ## References
 
 - Alduchov, O. A., Eskridge, R. E. (1996). Improved Magnus form approximation of saturation
-  vapor pressure. *Journal of Applied Meteorology*, 35, 601–609. `[DOI not verified]`
+  vapor pressure. *Journal of Applied Meteorology*, 35(4), 601–609.
+  https://doi.org/10.1175/1520-0450(1996)035<0601:IMFAOS>2.0.CO;2
+
+The coefficients $a = 17.625$, $b = 243.04$ °C (with $c = 6.1094$ hPa) were verified in WP-L.1
+as the AERK values of the paper (secondary sources; xclim 0.62 stores the same form as
+610.94 Pa, 17.625 and −30.12 K, i.e. $b = 243.03$ °C after conversion).

@@ -1,7 +1,9 @@
 """``budburst``, ``gfv`` and ``gsr``: hand-computed stage dates (synthetic data).
 
-The critical sums used here are test inputs, not verified literature values. The GFV test
-sums 1282 / 2528 °C·d are the unverified candidate values listed in docs/indices/gfv.md.
+The critical sums used here are test inputs. The GFV test sums 1282 / 2528 °C·d are the
+Sauvignon blanc values of Parker et al. (2013) as quoted by secondary sources (see
+docs/literature-verification.md), not general-model values; the GSR preset test uses the shipped
+optional Sauvignon blanc preset.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from pydantic import ValidationError
 
 from sivin.analytics.base import IndexContext
 from sivin.analytics.thermal import (
+    GSR_CULTIVAR_PRESETS,
     BudburstIndex,
     BudburstParams,
     GfvIndex,
@@ -230,3 +233,17 @@ def test_gsr_params_validation() -> None:
         GsrParams(targets=(low, PhenologyStage(label="a", f_star_c_d=200.0)))
     with pytest.raises(ValidationError):
         PhenologyStage(label="Sugar 200 g/L", f_star_c_d=100.0)
+
+
+def test_gsr_cultivar_preset_is_optional_and_predicts(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    assert GsrParams().targets == ()
+    preset = GSR_CULTIVAR_PRESETS["sauvignon_blanc"]
+    assert [(stage.label, stage.f_star_c_d) for stage in preset] == [("sugar_200_g_l", 2820.0)]
+    days = constant_days(date(2026, 4, 1), 214, (10.0, 15.0, 20.0))  # April 1 - October 31
+    result = GsrIndex(GsrParams(targets=preset)).compute(make_context(make_daily(days)))
+    # minmax mean 15 °C, base 0 -> 15 °C·d per day; 2820 / 15 = 188 days exactly:
+    # day 188 from April 1 = October 5 (30 + 31 + 30 + 31 + 31 + 30 = 183 -> Sept 30), DOY 278
+    assert result.details["sugar_200_g_l_date"] == "2026-10-05"
+    assert result.value == 278.0

@@ -80,4 +80,5 @@ demand for water.
 
 - Allen, R. G., Pereira, L. S., Raes, D., Smith, M. (1998). *Crop evapotranspiration —
   Guidelines for computing crop water requirements.* FAO Irrigation and Drainage Paper 56. FAO,
-  Rome.
+  Rome. (No DOI.) Chapter 3, eq. 11, https://www.fao.org/4/x0490e/x0490e07.htm — the constants
+  0.6108 kPa, 17.27 and 237.3 °C were verified in WP-L.1.

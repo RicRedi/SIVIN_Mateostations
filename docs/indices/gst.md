@@ -38,12 +38,12 @@ months equally per month, so it differs from the mean of all days by hundredths 
 |---|---|---|---|
 | `daily_mean` | `minmax` | — | as in Jones (2006) station data |
 | `period` | April 1 – October 31 | local month-day | Jones (2006) |
-| `classes` | table below | °C | Jones (2006) [to be verified] |
+| `classes` | table below | °C | Jones (2006); bounds verified against secondary sources |
 
 ## Interpretation
 
-This index uses the **6-class scheme of Jones (2006)** **[to be verified]** (bounds inclusive
-upper; a value equal to a bound belongs to the lower group):
+This index uses the **6-class scheme of Jones (2006)** (bounds inclusive upper; a value equal
+to a bound belongs to the lower group):
 
 | Label | GST (°C) |
 |---|---|
@@ -54,14 +54,15 @@ upper; a value equal to a bound belongs to the lower group):
 | `hot` | 19 < GST ≤ 24 |
 | `too_hot` | > 24 |
 
-The ranges cool 13–15, intermediate 15–17, warm 17–19 and hot 19–24 °C are as I recall them
-from Jones (2006); below 13 °C and above 24 °C are outside the range considered suitable for
-quality wine grapes. Both the bounds and their inclusive/exclusive handling are
-**[to be verified]** against the source; they are configurable.
+The ranges too cool < 13, cool 13–15, intermediate 15–17, warm 17–19, hot 19–24 and too hot
+> 24 °C were found in WP-L.1 in secondary sources quoting Jones (2006) / Jones et al. (2010)
+(see [literature verification](../literature-verification.md)); the original figure and table
+were not read. Which side of a bound is inclusive is not stated in those sources; the
+upper-inclusive rule is a project convention.
 
-Jones et al. (2010) may use a finer scheme that splits the hot range into hot (19–21 °C) and
-very hot (21–24 °C) [to be verified]. It is not shipped; it can be configured through
-`classes` once verified.
+Secondary sources disagree on whether Jones et al. (2010) or Hall & Jones (2010) split the hot
+range into hot (19–21 °C) and very hot (21–24 °C). The split is not shipped; it can be
+configured through `classes`.
 
 ## Assumptions and limitations
 
@@ -81,7 +82,8 @@ very hot (21–24 °C) [to be verified]. It is not shipped; it can be configured
 
 - Jones, G. V. (2006). Climate and terroir: impacts of climate variability and change on wine.
   In: Macqueen, R. W., Meinert, L. D. (eds.), *Fine Wine and Terroir — The Geoscience
-  Perspective*, Geoscience Canada Reprint Series 9, 203–216. [pages to be verified]
+  Perspective*, Geoscience Canada Reprint Series 9, Geological Association of Canada,
+  St. John's, 203–216. (No DOI.)
 - Jones, G. V., Duff, A. A., Hall, A., Myers, J. W. (2010). Spatial analysis of climate in
   winegrape growing regions in the western United States. *American Journal of Enology and
-  Viticulture*, 61(3), 313–326. [DOI not verified]
+  Viticulture*, 61(3), 313–326. https://doi.org/10.5344/ajev.2010.61.3.313

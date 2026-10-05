@@ -26,8 +26,9 @@ COOL_NIGHT_CLASSES: Final = UpperBoundClasses(
 """Classes of the Cool Night Index in °C (Tonietto and Carbonneau, 2004, CI classes).
 
 CI+2 very cool nights ``CI <= 12``, CI+1 cool nights ``12 < CI <= 14``, CI-1 temperate nights
-``14 < CI <= 18``, CI-2 warm nights ``CI > 18``. Which side of each boundary is inclusive is
-``[to be verified]`` against the original table.
+``14 < CI <= 18``, CI-2 warm nights ``CI > 18``; bounds and their inclusive sides as quoted
+from the classification table of Tonietto and Carbonneau (2004) by secondary sources
+(docs/literature-verification.md).
 """
 
 

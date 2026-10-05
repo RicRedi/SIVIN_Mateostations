@@ -57,8 +57,12 @@ Counts per season; compare years and sensors. No further classes.
 - Extremes come from samples about every 30 min, not from extreme thermometers; true maxima are
   slightly higher and true minima slightly lower, so counts near the thresholds can differ from
   a climatological station.
-- The exact ČHMÚ source document of the definitions is `[to be verified]`; the thresholds are
-  the generally used Czech climatological ones.
+- Thresholds **partly verified** in WP-L.1 (ČHMÚ post + Wikipedia only): ČHMÚ uses "tropický (horký) den" for $T_{max} \ge 30.0$ °C
+  (ČHMÚ public statement, 2024), and the Czech climatological definitions of summer day
+  (≥ 25 °C), frost day ($T_{min} < 0$ °C), ice day ($T_{max} < 0$ °C) and tropical night
+  ($T_{min}$ not below 20 °C) agree with the table above (secondary: Czech Wikipedia
+  "Charakteristický den"). ČHMÚ now also uses "velmi horký den" ($T_{max} \ge 35$ °C), which
+  is not computed here. A normative ČHMÚ document defining all terms was not found.
 
 ## Implementation
 
@@ -70,4 +74,8 @@ Counts per season; compare years and sensors. No further classes.
 ## References
 
 - Czech Hydrometeorological Institute (ČHMÚ): climatological definitions of characteristic days
-  (tropical, summer, frost and ice days, tropical night). `[source document to be verified]`
+  (tropical, summer, frost and ice days, tropical night), as used in ČHMÚ communication, e.g.
+  the statement on tropical (hot) days of 2024 (ČHMÚ on X, @CHMUCHMI, 2024).
+  [normative source document not found]
+- Wikipedia (cs): "Charakteristický den", https://cs.wikipedia.org/wiki/Charakteristick%C3%BD_den
+  (secondary; accessed via search index, October 2026).
