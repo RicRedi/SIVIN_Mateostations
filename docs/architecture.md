@@ -53,7 +53,7 @@ changing one is a plan change approved by the owner.
 | `QcFlag` | `sivin.core.flags` | `IntFlag` bit field per sample: `MISSING=1, OUT_OF_RANGE=2, SPIKE=4, STEP=8, STUCK=16, PRE_DEPLOYMENT=32, NEIGHBOR_OUTLIER=64, TIMESTAMP_SUSPECT=128, MANUAL_EXCLUDE=256`. `QcFlag.DEFAULT_EXCLUDE` (311) is the default exclusion mask for indices. |
 | `MeasurementSeries` | `sivin.core.schema` | Validated, immutable measurements of one sensor: `timestamp_utc` (`datetime64[ns, UTC]`, strictly increasing), `temp_c`, `rh_pct` (`float64`, `NaN` = missing), the auxiliary `precip_mm`, `precip_total_mm`, `battery_v` (`float64`, `NaN` when absent; WP-1.9, schema below), `qc` (`int32`), optional `source`. `to_frame()` adds `sensor_id` (long format). `with_values(column, values)` replaces an auxiliary column only. `valid_mask(mask)` = not excluded by flags; `complete_mask(mask)` = additionally both values present (row validity, below). |
 | `LocalTimeConverter` | `sivin.core.timeutil` | Local wall-clock → UTC with deterministic daylight-saving handling. **Input must be in source order, oldest first** (never sorted by local time); decreasing unambiguous rows raise `ValueError`. Each fall-back transition is resolved on its own; only a single backward jump of the wall clock resolves it, anything else (e.g. no jump, several jumps) is a best guess flagged `unresolved`. Nonexistent spring times are shifted by the gap. Ambiguous and nonexistent rows are `suspect`; a suspect row that would duplicate another UTC instant becomes `NaT` + `unresolved`. Callers drop the `NaT` rows before `MeasurementSeries.from_records`. Also local calendar dates and UTC bounds of a local day (23 h / 25 h days). |
-| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day over the **valid samples** (row validity, below). `n_samples` and `coverage` (share of the real day length covered by valid samples) are row-level; `coverage` is the column of the site contract. The per-variable columns `temp_n_samples`/`temp_coverage`, `rh_n_samples`/`rh_coverage` are kept for API stability and always equal the row-level values. `precip_sum_mm` (sum of `precip_mm`) and `battery_min_v` (minimum of `battery_v`) over the same valid samples, `NaN` without values (WP-1.9). |
+| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day over the **valid samples** (row validity, below). `n_samples` and `coverage` (share of the real day length covered by valid samples) are row-level; `coverage` is the column of the site contract. The per-variable columns `temp_n_samples`/`temp_coverage`, `rh_n_samples`/`rh_coverage` are kept for API stability and always equal the row-level values. `precip_sum_mm` (sum of `precip_mm`, with the count `precip_n_samples`) and `battery_min_v` (minimum of `battery_v`), WP-1.9: **not** over the T/RH-valid samples but over every present value not excluded by a separate `auxiliary_exclude_mask` (default `PRE_DEPLOYMENT \| MANUAL_EXCLUDE`); `NaN` without values. See the schema section below. |
 | `MonthDay`, `Season` | `sivin.core.season` | Periods given by month and day (vegetation season, Huglin period, single months). |
 | `ClimateIndex`, `IndexContext`, `IndexResult`, `IndexRegistry` | `sivin.analytics.base` | Extension point for indices: a new index is a subclass registered with `@index_registry.register`; parameters are frozen pydantic models. |
 | defaults | `sivin.core.defaults` | Shared default values (time zone, nominal sampling interval `DEFAULT_SAMPLING_INTERVAL_S` = 1830 s measured on the first real export, the legacy estimate `LEGACY_SAMPLING_INTERVAL_S` = 1825 s, coverage thresholds) without heavy imports. |
@@ -125,6 +125,25 @@ implausible precipitation value is set aside as `NaN` (`PrecipRangeCheck.set_asi
 flagging the row (see `docs/quality-control.md`). The store writes the columns since WP-1.9 and
 still reads files without them (`docs/storage.md`); the web contract has the optional fields
 `precip_mm`, `battery_v` (raw months) and `precip_sum_mm`, `battery_min_v` (daily).
+
+**Daily aggregation differs from the T/RH rule.** `DailyWeather` aggregates temperature and
+humidity over the valid samples (both present, not excluded by `exclude_mask`). The auxiliary
+daily values do not depend on temperature and humidity at all:
+
+| Daily column | Samples used |
+|---|---|
+| `temp_*`, `rh_*`, `n_samples`, `coverage` | `complete_mask(exclude_mask)`: both T and RH present, no excluding flag |
+| `precip_sum_mm`, `precip_n_samples` | `precip_mm` present and `valid_mask(auxiliary_exclude_mask)` |
+| `battery_min_v` | `battery_v` present and `valid_mask(auxiliary_exclude_mask)` |
+
+`auxiliary_exclude_mask` defaults to `DEFAULT_AUXILIARY_EXCLUDE` = `PRE_DEPLOYMENT |
+MANUAL_EXCLUDE` (288): only "not a vineyard measurement" flags. `MISSING`, `OUT_OF_RANGE`,
+`SPIKE` and `STUCK` describe temperature and humidity, so rain recorded in a sample without
+humidity, or a low battery reading in a sample whose temperature dropped out, still counts.
+Consequently the precipitation sum need not cover the same part of the day as `coverage`;
+`precip_n_samples` shows how many interval values it contains (a full day has about
+86 400 s / 1830 s ≈ 47). The mask is a parameter of `DailyWeather.from_series`; its
+configuration key (proposed `analytics.auxiliary_exclude_mask`) is wired by WP-1.7.
 
 Internally all timestamps are UTC. Local time (`Europe/Prague`) is used only when parsing
 exports and for daily aggregation and display. Units: °C, %, kPa, m, seconds.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseDailyFile, parseRawMonthFile } from '../src/contract';
 import { QcMask } from '../src/domain/QcFlags';
 import { RawSeries } from '../src/domain/RawSeries';
@@ -40,15 +40,41 @@ describe('raw month files with optional precipitation and battery', () => {
     expect(parseRawMonthFile(rawFile({ battery_v: [3.5, 3.4] }), 'raw.json').precip_mm).toBeUndefined();
   });
 
-  it('rejects a present field of the wrong length or type', () => {
-    expect(() => parseRawMonthFile(rawFile({ precip_mm: [0] }), 'raw.json')).toThrow(
-      'raw.json: $.precip_mm must have 2 items like "t", got 1',
+  it('ignores a malformed optional field with a warning and keeps the rest of the file', () => {
+    const warnings: string[] = [];
+    const warn = (message: string): void => {
+      warnings.push(message);
+    };
+    const file = parseRawMonthFile(
+      rawFile({ precip_mm: [0], battery_v: [3.6, '3.5'] }),
+      'raw.json',
+      warn,
     );
-    expect(() => parseRawMonthFile(rawFile({ battery_v: [3.6, '3.5'] }), 'raw.json')).toThrow(
-      '$.battery_v[1] must be a finite number, got "3.5"',
-    );
-    expect(() => parseRawMonthFile(rawFile({ precip_mm: null }), 'raw.json')).toThrow(
-      '$.precip_mm must be an array, got null',
+    expect('precip_mm' in file).toBe(false);
+    expect('battery_v' in file).toBe(false);
+    expect(file.rh_pct).toEqual([90, 91]);
+    expect(warnings).toEqual([
+      'raw.json: $.precip_mm must have 2 items like "t", got 1; optional field ignored',
+      'raw.json: $.battery_v[1] must be a finite number, got "3.5"; optional field ignored',
+    ]);
+    const nulled = parseRawMonthFile(rawFile({ precip_mm: null, battery_v: [3.6, 3.5] }), 'raw.json', warn);
+    expect(nulled.battery_v).toEqual([3.6, 3.5]);
+    expect(warnings[2]).toBe('raw.json: $.precip_mm must be an array, got null; optional field ignored');
+  });
+
+  it('warns on the console by default and still rejects broken required fields', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const file = parseRawMonthFile(rawFile({ battery_v: 'low' }), 'raw.json');
+      expect(file.battery_v).toBeUndefined();
+      expect(spy).toHaveBeenCalledWith(
+        'raw.json: $.battery_v must be an array, got "low"; optional field ignored',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(() => parseRawMonthFile(rawFile({ rh_pct: [90] }), 'raw.json')).toThrow(
+      'raw.json: $.rh_pct must have 2 items like "t", got 1',
     );
   });
 
@@ -75,9 +101,16 @@ describe('daily files with optional precipitation sum and battery minimum', () =
     expect(file.coverage).toEqual([0.98, 1]);
   });
 
-  it('rejects a present field of the wrong length', () => {
-    expect(() => parseDailyFile(dailyFile({ battery_min_v: [3.4] }), 'daily.json')).toThrow(
-      'daily.json: $.battery_min_v must have 2 items like "t", got 1',
-    );
+  it('ignores a malformed optional field with a warning', () => {
+    const warnings: string[] = [];
+    const file = parseDailyFile(dailyFile({ battery_min_v: [3.4], precip_sum_mm: [1.5, 0] }), 'daily.json', (m) => {
+      warnings.push(m);
+    });
+    expect(file.battery_min_v).toBeUndefined();
+    expect(file.precip_sum_mm).toEqual([1.5, 0]);
+    expect(file.temp_mean).toEqual([0.4, 1.0]);
+    expect(warnings).toEqual([
+      'daily.json: $.battery_min_v must have 2 items like "t", got 1; optional field ignored',
+    ]);
   });
 });

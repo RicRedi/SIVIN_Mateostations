@@ -233,10 +233,10 @@ class ColumnAliases(BaseModel):
         ),
     )
     precip_units: tuple[str, ...] = Field(
-        ("mm",),
+        ("mm", "l/m²", "l/m2"),
         description=(
             "Units accepted after a precipitation or cumulative precipitation header, "
-            "e.g. 'Srážky (mm)'."
+            "e.g. 'Srážky (mm)'; 1 l/m² of water equals 1 mm of precipitation."
         ),
     )
     battery_units: tuple[str, ...] = Field(

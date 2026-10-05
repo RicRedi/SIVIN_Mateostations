@@ -32,6 +32,7 @@ from sivin.quality.checks import (
     check_registry,
     runs_of,
 )
+from sivin.quality.checks.battery import low_battery_episodes
 from sivin.quality.events import EventKind, Severity
 from sivin.quality.pipeline import QualityPipeline, QualityPipelineSettings
 
@@ -132,6 +133,9 @@ class TestPrecipRangeCheck:
         assert (second.t_utc, second.end_utc) == (_at(5 * STEP_S), _at(5 * STEP_S))
         assert "1 precipitation value(s)" in second.detail
         assert "lowest 60 mm, highest 60 mm" in second.detail
+        # Neutral wording: no pipeline applies set_aside yet (WP-1.7).
+        assert first.detail.endswith("temperature and humidity are unaffected")
+        assert "set aside" not in first.detail
 
     def test_set_aside_keeps_the_row(self) -> None:
         qc = [0, int(QcFlag.STEP), 0, 0, 0, 0]
@@ -234,6 +238,26 @@ class TestBatteryCheck:
         assert first.detail == "low battery: 2 reading(s) below 3.3 V (lowest 3.1 V)"
         assert (second.t_utc, second.end_utc) == (_at(5 * STEP_S), _at(5 * STEP_S))
         assert second.detail == "low battery: 1 reading(s) below 3.3 V (lowest 3.2 V)"
+
+    def test_hysteresis_merges_dips_until_the_voltage_recovers(self) -> None:
+        # Below 3.3 V: rows 1, 3, 5, 7. Recovery needs >= 3.4 V: only row 6. Rows 2 (3.3 V) and
+        # 4 (3.35 V) keep the first episode open -> episodes (1, 5) with 3 low readings, lowest
+        # 3.1 V, and (7, 7).
+        voltages = [3.6, 3.2, 3.3, 3.2, 3.35, 3.1, 3.4, 3.2]
+        series = _series(_regular(8), battery_v=voltages)
+        first, second = BatteryCheck().check(series).events
+        assert (first.t_utc, first.end_utc) == (_at(STEP_S), _at(5 * STEP_S))
+        assert first.detail == "low battery: 3 reading(s) below 3.3 V (lowest 3.1 V)"
+        assert (second.t_utc, second.end_utc) == (_at(7 * STEP_S), _at(7 * STEP_S))
+        # Without hysteresis every dip is its own event.
+        plain = BatteryCheck(BatterySettings(recovery_margin_v=0.0)).check(series)
+        assert [event.t_utc for event in plain.events] == [_at(i * STEP_S) for i in (1, 3, 5, 7)]
+
+    def test_low_battery_episodes_by_hand(self) -> None:
+        values = np.array([3.0, NAN, 3.25, 3.31, 3.5, 3.29, NAN])
+        assert low_battery_episodes(values, 3.3, 3.4) == ((0, 2), (5, 5))
+        assert low_battery_episodes(np.array([3.5, NAN]), 3.3, 3.4) == ()
+        assert BatterySettings().recovery_margin_v == 0.1
 
     def test_threshold_is_exclusive_and_missing_is_silent(self) -> None:
         series = _series(_regular(3), battery_v=[3.3, NAN, 3.5])

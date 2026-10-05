@@ -157,9 +157,9 @@ In `/home/user/wt/wp-1.9`:
    reason is Q9: validity concerns temperature and humidity only, and rejecting a file because
    of a broken rain gauge would throw away valid temperature and humidity. A column-level
    problem (unaccepted unit, two headers) drops only that column (`optional-columns`).
-3. **Values outside the auxiliary gross bounds are kept**, as for temperature and humidity, and
-   left to QC. For precipitation, `precip_range` catches them. For the battery, nothing removes
-   e.g. a millivolt column; it only gives a `battery-bounds` warning.
+3. **Values outside the auxiliary gross bounds are read as missing** (round 2; temperature and
+   humidity keep theirs for QC). The `*-bounds` WARNING says so ("read as missing"). A unitless
+   `Battery` column in % therefore never becomes e.g. `battery_v = 85`.
 4. **Mechanism for bad precipitation: set aside as `NaN` plus an event, no flag** (documented
    in `docs/quality-control.md`). A new flag bit would change the frozen `QcFlag` contract, and
    every consumer would have to remember to mask it.
@@ -180,7 +180,8 @@ In `/home/user/wt/wp-1.9`:
   and `precip_sum_mm` and `battery_min_v` into `daily.json` (`null` for `NaN`), and decide
   whether the QC events of this WP go into `events/<id>.json`. Their `type` values are not in
   the web contract's `SENSOR_EVENT_TYPES`, so the web validator would reject them today.
-- **`docs/web.md`** (not in scope) should mention the optional contract fields.
+- **`docs/web.md`** (not in scope) should mention the optional contract fields and their
+  tolerant reading; proposed for **WP-3.2**.
 - **MIGRATION_PLAN §2.6**: the `daily.json` example does not show `precip_sum_mm` and
   `battery_min_v`. Proposed plan addition: "optional, since WP-1.9".
 - **Gap filling from the counter** (plan §2.5: the counter "serves to check and fill gaps") is
@@ -194,12 +195,9 @@ In `/home/user/wt/wp-1.9`:
 
 ## Open questions for the owner
 
-1. **Daily precipitation sum over which samples?** Now: over the same valid samples as
-   temperature and humidity (as the brief says). As a result, rain recorded in a sample without
-   temperature or humidity, or in an excluded sample (e.g. `SPIKE` in temperature,
-   `PRE_DEPLOYMENT`), is not counted. Alternative: sum over all samples not excluded by
-   location flags (`PRE_DEPLOYMENT`, `MANUAL_EXCLUDE`), independent of temperature and humidity
-   problems. That needs a separate exclusion mask for auxiliary aggregates.
+1. ~~Daily precipitation sum over which samples?~~ Decided by the orchestrator in round 2
+   (reviewer's proposal): separate `auxiliary_exclude_mask`, default
+   `PRE_DEPLOYMENT | MANUAL_EXCLUDE`; see *Round 2*. The owner may still change the default.
 2. **Defaults to confirm or replace:** `precip_max_mm` = 50 mm per ~30 min interval,
    `low_battery_v` = 3.3 V, `tolerance_mm` = 0.15 mm. Is the device data sheet (rain gauge
    resolution, battery cut-off) available?
@@ -207,6 +205,45 @@ In `/home/user/wt/wp-1.9`:
 4. **`precip_total_mm` on the web**: the plan's contract carries only `precip_mm` and
    `battery_v` in the raw months, so the counter is not part of the web contract. Is that
    intended?
+
+## Round 2 (changes after review round 1)
+
+Merged `origin/wp/1.8-offsite-log` first (merge commit, no conflicts). Then:
+
+- **major, daily auxiliary aggregates** (`core/daily.py`): `DailyWeather.from_series` takes
+  `auxiliary_exclude_mask` (default `DEFAULT_AUXILIARY_EXCLUDE` = `PRE_DEPLOYMENT |
+  MANUAL_EXCLUDE` = 288). `precip_sum_mm` sums every present `precip_mm` of the day not excluded
+  by that mask, `battery_min_v` is the minimum over the same rows, and the new int64 column
+  `precip_n_samples` counts the summed values so partial days are visible
+  (`AUXILIARY_DAILY_COLUMNS` = `precip_sum_mm, precip_n_samples, battery_min_v`, still optional
+  on input; `precip_n_samples` is filled with 0). The difference to the T/RH rule is documented
+  in the `DailyWeather` docstring and `docs/architecture.md` (table "Samples used"). Tests: the
+  reviewer's 6-sample example (6.0 mm, 3.1 V, while `n_samples` = 5), mask defaults,
+  `auxiliary_exclude_mask=0` and `=DEFAULT_EXCLUDE`.
+- **minor, out-of-bounds auxiliary values** (`ingest/validation.py`, `parsers/tabular.py`):
+  read as missing; the WARNING message ends with "; read as missing". `assemble` takes the
+  validator's `ValidationSettings` (new properties `precip_bounds_mm`, `precip_total_bounds_mm`,
+  `battery_bounds_v`; helper `outside_bounds`). Test: unitless `Battery` with 85/3,6/84 →
+  `[NaN, 3.6, NaN]` and one WARNING.
+- **minor, event text** (`checks/precip.py`): the detail now ends "temperature and humidity are
+  unaffected" and no longer claims a set-aside.
+- **minor, battery flapping** (`checks/battery.py`): hysteresis. New setting
+  `recovery_margin_v` = 0.1 V (*[to be tuned]*, 0 disables); `low_battery_episodes()` ends an
+  episode only at a reading ≥ `low_battery_v + recovery_margin_v`. Tested by hand
+  (3.6, 3.2, 3.3, 3.2, 3.35, 3.1, 3.4, 3.2 → two events instead of four).
+- **minor, web** (`contract/validateSeries.ts`): a present but malformed optional field is
+  dropped with a warning (`warn` parameter, default `console.warn`, same pattern as
+  `parseEventsFile`); required columns stay strict. Tests with a collecting callback and with a
+  `console.warn` spy.
+- **minor, plan/docs**: MIGRATION_PLAN §2.6 is updated by the orchestrator; `docs/web.md` is
+  listed for WP-3.2 under *Out of scope*.
+- **nit, units**: `precip_units` = `mm`, `l/m²`, `l/m2` (tested).
+
+Gates after round 2 (in `/home/user/wt/wp-1.9`, including WP-1.8): `make lint` → `All checks
+passed!`, `211 files already formatted`; `make type` → `Success: no issues found in 127 source
+files`; `make test`/`make cov` → `1506 passed`, total 99.91 %, every module changed by this WP
+at 100 %. Web: lint and typecheck clean, `npm test` 15 files / 153 tests passed
+(`validateSeries.ts` 100 %), `npm run build` OK.
 
 ## Review
 
@@ -267,15 +304,15 @@ In `/home/user/wt/wp-1.9`:
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/core/daily.py:185-189` | `precip_sum_mm` and `battery_min_v` are taken over `complete_mask(exclude_mask)`, i.e. only rows with valid T **and** RH. Rain in a row with missing T/RH or with a T/RH-only flag (`SPIKE`, `OUT_OF_RANGE`, `STUCK`, `MISSING`) is lost. A low battery reading in a row whose T/RH dropped out (the typical symptom of a failing battery) is hidden. This contradicts the spirit of Q9 ("the validity rule concerns T and RH only"). | open |
-| minor | `src/sivin/ingest/validation.py:1225`, `:1302` | Aux values outside the gross bounds are kept (deviation 3). A battery column without a unit that holds percent (`Battery` = 85) is stored as `battery_v = 85.0` with only a `battery-bounds` WARNING, and `BatteryCheck` never reports it (85 > 3.3). | open |
-| minor | `src/sivin/quality/checks/precip.py:140` | The `precip_out_of_range` event detail says "set aside, temperature and humidity stay valid". Nothing applies `set_aside` in the pipeline yet (until WP-1.7), so the events file would claim a removal that did not happen, and the value reaches `precip_sum_mm`. | open |
-| minor | `src/sivin/quality/checks/battery.py:68` | No hysteresis and no minimum gap between events. With 0.1 V resolution and diurnal voltage swings, a battery near 3.3 V (3.3 ↔ 3.2) gives one `low_battery` event per dip, possibly daily, which is noise in `events/<id>.json`. | open |
-| minor | `web/src/contract/validateSeries.ts:62` (and the daily counterpart) | An optional field that is present but malformed (wrong length, a non-number, `null` instead of an array) makes the whole raw month or daily file fail, so its T/RH are not shown either. The owner approved "tolerant reading of optional contract fields". | open |
-| minor | `MIGRATION_PLAN.md` §2.6 (line ~453), §4 WP-1.9 | The plan's `daily.json` example and the WP-1.9 task text do not mention `precip_sum_mm`/`battery_min_v`, which this WP adds to the web contract. `docs/web.md` (outside scope) does not mention the optional fields either. The plan text is consistent otherwise (§2.5 table and store header match the code). | open |
-| nit | `src/sivin/storage/merge.py:218` | When only precipitation is filled into an old-layout row, the row's `source` moves to the new export, so the T/RH of that row are attributed to an export that did not change them. This is the existing WP-1.4 rule, but after WP-1.9 it fires for every old row on the first import. | open |
-| nit | `src/sivin/ingest/parsers/columns.py:235` | `precip_units` accepts only `mm`. `l/m²` (equal to mm) would drop the column. Consider adding it if other devices use it (not observed). | open |
-| nit | `web/tests/contract.optional.test.ts` | The test pins the message `$.battery_min_v must have 2 items like "t"` for a daily file, which is keyed by `date`. The message comes from the existing `FieldReader.list`. | open |
+| major | `src/sivin/core/daily.py:185-189` | `precip_sum_mm` and `battery_min_v` are taken over `complete_mask(exclude_mask)`, i.e. only rows with valid T **and** RH. Rain in a row with missing T/RH or with a T/RH-only flag (`SPIKE`, `OUT_OF_RANGE`, `STUCK`, `MISSING`) is lost. A low battery reading in a row whose T/RH dropped out (the typical symptom of a failing battery) is hidden. This contradicts the spirit of Q9 ("the validity rule concerns T and RH only"). | fixed in round 2 (separate auxiliary mask, `precip_n_samples`) |
+| minor | `src/sivin/ingest/validation.py:1225`, `:1302` | Aux values outside the gross bounds are kept (deviation 3). A battery column without a unit that holds percent (`Battery` = 85) is stored as `battery_v = 85.0` with only a `battery-bounds` WARNING, and `BatteryCheck` never reports it (85 > 3.3). | fixed in round 2 (read as missing) |
+| minor | `src/sivin/quality/checks/precip.py:140` | The `precip_out_of_range` event detail says "set aside, temperature and humidity stay valid". Nothing applies `set_aside` in the pipeline yet (until WP-1.7), so the events file would claim a removal that did not happen, and the value reaches `precip_sum_mm`. | fixed in round 2 (neutral text) |
+| minor | `src/sivin/quality/checks/battery.py:68` | No hysteresis and no minimum gap between events. With 0.1 V resolution and diurnal voltage swings, a battery near 3.3 V (3.3 ↔ 3.2) gives one `low_battery` event per dip, possibly daily, which is noise in `events/<id>.json`. | fixed in round 2 (hysteresis, `recovery_margin_v`) |
+| minor | `web/src/contract/validateSeries.ts:62` (and the daily counterpart) | An optional field that is present but malformed (wrong length, a non-number, `null` instead of an array) makes the whole raw month or daily file fail, so its T/RH are not shown either. The owner approved "tolerant reading of optional contract fields". | fixed in round 2 (ignored with a warning) |
+| minor | `MIGRATION_PLAN.md` §2.6 (line ~453), §4 WP-1.9 | The plan's `daily.json` example and the WP-1.9 task text do not mention `precip_sum_mm`/`battery_min_v`, which this WP adds to the web contract. `docs/web.md` (outside scope) does not mention the optional fields either. The plan text is consistent otherwise (§2.5 table and store header match the code). | plan: orchestrator; `docs/web.md`: listed for WP-3.2 under *Out of scope* |
+| nit | `src/sivin/storage/merge.py:218` | When only precipitation is filled into an old-layout row, the row's `source` moves to the new export, so the T/RH of that row are attributed to an export that did not change them. This is the existing WP-1.4 rule, but after WP-1.9 it fires for every old row on the first import. | accepted (orchestrator) |
+| nit | `src/sivin/ingest/parsers/columns.py:235` | `precip_units` accepts only `mm`. `l/m²` (equal to mm) would drop the column. Consider adding it if other devices use it (not observed). | fixed in round 2 (`l/m²`, `l/m2`) |
+| nit | `web/tests/contract.optional.test.ts` | The test pins the message `$.battery_min_v must have 2 items like "t"` for a daily file, which is keyed by `date`. The message comes from the existing `FieldReader.list`. | accepted (orchestrator) |
 
 ### Details and suggested fixes
 

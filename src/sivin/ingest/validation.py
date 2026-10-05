@@ -17,7 +17,7 @@ quality control (WP-1.5).
 The optional auxiliary columns (precipitation, cumulative precipitation, battery voltage;
 WP-1.9) never reject a file: whole-row validity concerns temperature and humidity only (owner
 decision Q9, 2026-10-05), so a problem with an auxiliary column is a WARNING and its affected
-values are read as missing or left to quality control.
+values are read as missing (unparseable cells and values outside the gross bounds alike).
 """
 
 from __future__ import annotations
@@ -250,7 +250,7 @@ class ValidationSettings(BaseModel):
         description=(
             "Lower bound of the precipitation of one sample interval in mm (physical limit: "
             "an amount of precipitation cannot be negative). Values below it are reported "
-            "(WARNING) and left to quality control."
+            "(WARNING) and read as missing."
         ),
     )
     precip_max_mm: float = Field(
@@ -289,6 +289,21 @@ class ValidationSettings(BaseModel):
             "against the device data sheet]."
         ),
     )
+
+    @property
+    def precip_bounds_mm(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the precipitation per interval in mm."""
+        return self.precip_min_mm, self.precip_max_mm
+
+    @property
+    def precip_total_bounds_mm(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the cumulative precipitation counter in mm."""
+        return self.precip_total_min_mm, self.precip_total_max_mm
+
+    @property
+    def battery_bounds_v(self) -> tuple[float, float]:
+        """Inclusive gross bounds of the battery voltage in V."""
+        return self.battery_min_v, self.battery_max_v
 
     @model_validator(mode="after")
     def _ordered_bounds(self) -> Self:
@@ -715,6 +730,26 @@ class InputValidator:
             log = logger.warning if issue.severity is Severity.ERROR else logger.info
             log("%s: %s", inspection.source.name, issue)
         return report
+
+
+def outside_bounds(values: FloatArray, bounds: tuple[float, float]) -> BoolArray:
+    """Tell which values lie outside inclusive bounds.
+
+    Parameters
+    ----------
+    values : numpy.ndarray of float
+        Values in the unit of the bounds; ``NaN`` is never outside.
+    bounds : tuple of float
+        ``(lower, upper)``, inclusive.
+
+    Returns
+    -------
+    numpy.ndarray of bool
+        ``True`` where a value is below ``lower`` or above ``upper``.
+    """
+    lower, upper = bounds
+    with np.errstate(invalid="ignore"):
+        return np.asarray((values < lower) | (values > upper), dtype=np.bool_)
 
 
 def _share(count: int, total: int) -> float:
@@ -1191,7 +1226,10 @@ class GrossBoundsRule(TableRule):
     A share of present values outside ``[lower, upper]`` above ``max_out_of_bounds_share`` is
     an ERROR (wrong unit or swapped columns); a smaller share is a WARNING and the values are
     left to quality control (WP-1.5). A rule with :attr:`can_reject` false (the optional
-    auxiliary columns) reports every finding as a WARNING.
+    auxiliary columns) reports every finding as a WARNING, and the parser reads those values
+    as missing (:func:`outside_bounds`): a value outside gross bounds of an auxiliary column is
+    a unit or column mix-up (e.g. a battery charge in % under a unitless ``Battery`` header),
+    and no quality check would catch it later.
     """
 
     variable: ClassVar[str]
@@ -1213,8 +1251,7 @@ class GrossBoundsRule(TableRule):
         if column is None:
             return
         lower, upper = self._bounds()
-        with np.errstate(invalid="ignore"):
-            outside = (column.parsed < lower) | (column.parsed > upper)
+        outside = outside_bounds(column.parsed, (lower, upper))
         count = int(outside.sum())
         if not count:
             return
@@ -1224,6 +1261,8 @@ class GrossBoundsRule(TableRule):
         if not self.can_reject:
             severity = Severity.WARNING
         hint = " (wrong unit or swapped columns?)" if severity is Severity.ERROR else ""
+        if not self.can_reject:
+            hint = "; read as missing"
         yield self._issue(
             severity,
             f"{count} {self.variable} value(s) outside [{lower:g}, {upper:g}] {self.unit} "
@@ -1267,7 +1306,7 @@ class HumidityBoundsRule(GrossBoundsRule):
 class PrecipitationBoundsRule(GrossBoundsRule):
     """Gross bounds of the precipitation per interval (``precip_min_mm`` to ``precip_max_mm``).
 
-    Never rejects the file; values outside are left to quality control (``precip_range``).
+    Never rejects the file; values outside are read as missing.
     """
 
     rule_id = "precipitation-bounds"
@@ -1279,12 +1318,12 @@ class PrecipitationBoundsRule(GrossBoundsRule):
         return table.precip
 
     def _bounds(self) -> tuple[float, float]:
-        return self.settings.precip_min_mm, self.settings.precip_max_mm
+        return self.settings.precip_bounds_mm
 
 
 @validation_rules.register
 class PrecipitationTotalBoundsRule(GrossBoundsRule):
-    """Gross bounds of the cumulative precipitation counter (never rejects the file)."""
+    """Gross bounds of the cumulative precipitation counter (never rejects; outside = missing)."""
 
     rule_id = "precipitation-total-bounds"
     variable = "cumulative precipitation"
@@ -1295,14 +1334,14 @@ class PrecipitationTotalBoundsRule(GrossBoundsRule):
         return table.precip_total
 
     def _bounds(self) -> tuple[float, float]:
-        return self.settings.precip_total_min_mm, self.settings.precip_total_max_mm
+        return self.settings.precip_total_bounds_mm
 
 
 @validation_rules.register
 class BatteryBoundsRule(GrossBoundsRule):
     """Gross bounds of the battery voltage (``battery_min_v`` to ``battery_max_v``).
 
-    Never rejects the file.
+    Never rejects the file; values outside (e.g. a charge in %) are read as missing.
     """
 
     rule_id = "battery-bounds"
@@ -1314,7 +1353,7 @@ class BatteryBoundsRule(GrossBoundsRule):
         return table.battery
 
     def _bounds(self) -> tuple[float, float]:
-        return self.settings.battery_min_v, self.settings.battery_max_v
+        return self.settings.battery_bounds_v
 
 
 @validation_rules.register

@@ -150,7 +150,7 @@ zero) and report events instead:
 
 | Check | Event kind | Severity | Effect on the data |
 |---|---|---|---|
-| `precip_range` | `precip_out_of_range` | warning | none in the pipeline; `PrecipRangeCheck.set_aside(series)` returns the series with exactly those `precip_mm` values replaced by `NaN` |
+| `precip_range` | `precip_out_of_range` | warning | none in the pipeline yet; `PrecipRangeCheck.set_aside(series)` returns the series with exactly those `precip_mm` values replaced by `NaN` (to be applied from WP-1.7; the event text therefore only says that temperature and humidity are unaffected) |
 | `precip_counter` | `precip_counter_reset` | info | none |
 | `precip_counter` | `precip_counter_mismatch` | warning | none (which of the two columns is wrong cannot be told) |
 | `battery` | `low_battery` | warning | none |
@@ -206,13 +206,18 @@ $\varepsilon$ = 0.05 mm it gives exactly the 0.1 mm difference above (tested).
 
 #### `battery` — low battery
 
-A present `battery_v` below `low_battery_v` is a low reading; each run gives one `low_battery`
-warning with its lowest voltage. A low battery says nothing about the measurement of that
-moment, so nothing is flagged or removed.
+A present `battery_v` below `low_battery_v` is a low reading. With 0.1 V resolution and daily
+temperature swings, a battery near the threshold flaps (3.3 ↔ 3.2 V), so the check uses
+**hysteresis** (`low_battery_episodes`): an episode starts at the first low reading and ends
+only at a reading of at least `low_battery_v + recovery_margin_v` (3.4 V by default); readings
+in between keep it open. Each episode gives one `low_battery` warning from its first to its last
+low reading, with their number and the lowest voltage. A low battery says nothing about the
+measurement of that moment, so nothing is flagged or removed.
 
 | Setting | Default | Unit | Origin |
 |---|---|---|---|
 | `low_battery_v` | 3.3 | V | project default *[to be tuned]*; the real export reads 3.0–3.7 V (3.0 V in its two oldest lines, which gives one event); the voltage at which the device stops measuring is unknown *[to be verified against the device data sheet]* |
+| `recovery_margin_v` | 0.1 | V | one step of the export resolution, so a reading that only returns to the threshold does not end an episode; project default *[to be tuned]*; 0 disables the hysteresis |
 
 #### Wiring (proposed for WP-1.7)
 
@@ -226,7 +231,7 @@ quality:
   check_settings:
     precip_range: { precip_min_mm: 0.0, precip_max_mm: 50.0 }
     precip_counter: { tolerance_mm: 0.15, max_interval_s: 2745.0 }
-    battery: { low_battery_v: 3.3 }
+    battery: { low_battery_v: 3.3, recovery_margin_v: 0.1 }
 ```
 
 and, after `QualityPipeline.run`, `PrecipRangeCheck(settings).set_aside(result.series)` before

@@ -68,6 +68,9 @@ def test_required_and_optional_columns() -> None:
         ("  SRAZKY  (mm) ", CanonicalColumn.PRECIP),
         ("Niederschlag [mm]", CanonicalColumn.PRECIP),
         ("Rainfall", CanonicalColumn.PRECIP),
+        ("Srážky (l/m²)", CanonicalColumn.PRECIP),
+        ("Niederschlag [l/m2]", CanonicalColumn.PRECIP),
+        ("Celkové srážky (L/m²)", CanonicalColumn.PRECIP_TOTAL),
         ("Celkové srážky (mm)", CanonicalColumn.PRECIP_TOTAL),
         ("celkove srazky", CanonicalColumn.PRECIP_TOTAL),
         ("Gesamtniederschlag (mm)", CanonicalColumn.PRECIP_TOTAL),
@@ -187,7 +190,7 @@ def test_unparseable_temperature_still_rejects(write_csv: CsvWriter) -> None:
         (5, "3600", "battery-bounds", "[0, 10] V"),
     ],
 )
-def test_gross_bounds_of_optional_columns_never_reject(
+def test_gross_bounds_of_optional_columns_never_reject_and_read_as_missing(
     write_csv: CsvWriter, position: int, value: str, rule: str, bounds: str
 ) -> None:
     rows = [tuple(value if i == position else cell for i, cell in enumerate(row)) for row in ROWS]
@@ -197,9 +200,24 @@ def test_gross_bounds_of_optional_columns_never_reject(
     assert (issue.rule, issue.severity, issue.row) == (rule, Severity.WARNING, 3)
     assert issue.message.startswith("3 ")
     assert bounds in issue.message
+    assert issue.message.endswith("; read as missing.")
     assert "wrong unit" not in issue.message
-    column = parsed.series[0].frame.iloc[:, position]
-    assert np.all(column.to_numpy() == float(value.replace(",", ".")))
+    frame = parsed.series[0].frame
+    assert frame.iloc[:, position].isna().all()
+    assert frame["temp_c"].tolist() == [5.0, 5.5, 6.0]
+
+
+def test_unitless_battery_column_in_percent_is_not_read_as_volts(write_csv: CsvWriter) -> None:
+    # Review WP-1.9 round 1: a charge in % under a unitless 'Battery' header.
+    header = (*PORTAL_HEADER[:5], "Battery")
+    rows = [(*row[:5], charge) for row, charge in zip(ROWS, ("85", "3,6", "84"), strict=True)]
+    parsed = _parse(write_csv, rows, header)
+    assert parsed.is_accepted
+    (issue,) = parsed.report.issues
+    assert (issue.rule, issue.severity) == ("battery-bounds", Severity.WARNING)
+    assert issue.message.startswith("2 battery voltage value(s) outside [0, 10] V")
+    battery = parsed.series[0].frame["battery_v"].to_numpy()
+    np.testing.assert_array_equal(battery, [np.nan, 3.6, np.nan])
 
 
 def test_duplicates_with_different_precipitation_count_as_conflicting(

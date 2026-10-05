@@ -118,8 +118,8 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
 | `temp_c` | Teplota, Teplota vzduchu, Temperatur, Lufttemperatur, Temperature, Air temperature, Temp | °C, C, degC, deg C, ℃ |
 | `rh_pct` | Vlhkost, Relativní vlhkost, Vlhkost vzduchu, Luftfeuchtigkeit, Relative Luftfeuchtigkeit, Luftfeuchte, Feuchtigkeit, Humidity, Relative humidity, RH | %, % RH, %RH, % rel., pct |
 
-| `precip_mm` (optional) | Srážky, Srážka, Srážky za interval, Niederschlag, Niederschlagsmenge, Regen, Precipitation, Rain, Rainfall | mm |
-| `precip_total_mm` (optional) | Celkové srážky, Srážky celkem, Kumulativní srážky, Niederschlag gesamt, Gesamtniederschlag, Kumulierter Niederschlag, Total precipitation, Cumulative precipitation, Precipitation total, Total rain, Rain total | mm |
+| `precip_mm` (optional) | Srážky, Srážka, Srážky za interval, Niederschlag, Niederschlagsmenge, Regen, Precipitation, Rain, Rainfall | mm, l/m², l/m2 |
+| `precip_total_mm` (optional) | Celkové srážky, Srážky celkem, Kumulativní srážky, Niederschlag gesamt, Gesamtniederschlag, Kumulierter Niederschlag, Total precipitation, Cumulative precipitation, Precipitation total, Total rain, Rain total | mm, l/m², l/m2 |
 | `battery_v` (optional) | Nabití baterie, Napětí baterie, Baterie, Batterie, Batteriespannung, Battery, Battery voltage | V |
 
 - `Teplota (°F)` is rejected (ERROR); it is never read as °C.
@@ -142,7 +142,9 @@ precipitation counter (`precip_total_mm`) and the battery voltage (`battery_v`) 
   concerns temperature and humidity only. An unaccepted unit (`Srážky (in)`) or two headers
   for the same optional column is a WARNING (`optional-columns`) and that column is not read.
   Non-numeric cells are a WARNING (`numbers-parseable`) and read as missing, whatever their
-  share. Values outside the gross bounds are a WARNING and are kept for quality control.
+  share. Values outside the gross bounds are a WARNING and are also read as missing: they
+  are unit or column mix-ups (e.g. a battery charge of 85 % under a unitless `Battery`
+  header must not become 85 V), and no quality check would catch them later.
 - A missing optional value never sets `QcFlag.MISSING`.
 
 ## Values
@@ -269,9 +271,9 @@ configuration section `ingest.validation`. The defaults are project defaults
 | `daylight-saving` | ambiguous or nonexistent local times (flagged `TIMESTAMP_SUSPECT`) and the number of unresolved rows dropped (including incomplete transitions) | WARNING |
 | `temperature-bounds` | share of temperatures outside [`temp_min_c`, `temp_max_c`] = [−60, 70] °C > `max_out_of_bounds_share` (5 %) → ERROR (°F or K export, swapped columns); otherwise WARNING | ERROR / WARNING |
 | `humidity-bounds` | same for relative humidity outside [0, 100] % | ERROR / WARNING |
-| `precipitation-bounds` | precipitation per interval outside [`precip_min_mm`, `precip_max_mm`] = [0, 500] mm; never rejects, the values are kept for QC (`precip_range`) | WARNING |
-| `precipitation-total-bounds` | cumulative counter outside [`precip_total_min_mm`, `precip_total_max_mm`] = [0, 100 000] mm; never rejects | WARNING |
-| `battery-bounds` | battery voltage outside [`battery_min_v`, `battery_max_v`] = [0, 10] V (catches millivolts); never rejects | WARNING |
+| `precipitation-bounds` | precipitation per interval outside [`precip_min_mm`, `precip_max_mm`] = [0, 500] mm; never rejects; the values are read as missing | WARNING |
+| `precipitation-total-bounds` | cumulative counter outside [`precip_total_min_mm`, `precip_total_max_mm`] = [0, 100 000] mm; never rejects; read as missing | WARNING |
+| `battery-bounds` | battery voltage outside [`battery_min_v`, `battery_max_v`] = [0, 10] V (catches millivolts and a charge in %); never rejects; read as missing | WARNING |
 | `humidity-fraction` | share of humidity values ≤ `rh_fraction_max_pct` (1 %) > `max_out_of_bounds_share` → humidity given as a 0–1 fraction | ERROR |
 
 **Short files.** A share threshold gives an ERROR only when more than `min_error_rows` (3)

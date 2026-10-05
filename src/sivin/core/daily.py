@@ -9,6 +9,7 @@ from typing import Final, Self
 import numpy as np
 import pandas as pd
 
+from sivin.core.flags import QcFlag
 from sivin.core.ids import SensorId
 from sivin.core.schema import Column, MeasurementSeries, SchemaError
 from sivin.core.timeutil import LocalTimeConverter
@@ -34,17 +35,28 @@ DAILY_COLUMNS: Final = (
 These columns are required by the constructor. :data:`AUXILIARY_DAILY_COLUMNS` follow them.
 """
 
-AUXILIARY_DAILY_COLUMNS: Final = ("precip_sum_mm", "battery_min_v")
+AUXILIARY_DAILY_COLUMNS: Final = ("precip_sum_mm", "precip_n_samples", "battery_min_v")
 """Daily aggregates of the auxiliary variables (WP-1.9), after :data:`DAILY_COLUMNS`.
 
-Optional on input: a frame without them gets ``NaN`` columns, so frames built before WP-1.9
-(e.g. ``frame[list(DAILY_COLUMNS)]``) still construct a :class:`DailyWeather`.
+Optional on input: a frame without them gets ``NaN`` (``0`` for ``precip_n_samples``), so
+frames built before WP-1.9 (e.g. ``frame[list(DAILY_COLUMNS)]``) still construct a
+:class:`DailyWeather`.
+"""
+
+DEFAULT_AUXILIARY_EXCLUDE: Final = int(QcFlag.PRE_DEPLOYMENT | QcFlag.MANUAL_EXCLUDE)
+"""Default exclusion mask (288) of the auxiliary daily aggregates.
+
+Only flags that say the sample is not a vineyard measurement at all (sensor off site, or
+excluded by the owner). The other flags (``MISSING``, ``OUT_OF_RANGE``, ``SPIKE``, ``STUCK``)
+describe temperature and humidity and do not remove the precipitation or battery reading of
+the row (owner decision Q9: the row validity rule concerns temperature and humidity only).
+Project default, decided in the WP-1.9 review (2026-10-05).
 """
 
 ALL_DAILY_COLUMNS: Final = (*DAILY_COLUMNS, *AUXILIARY_DAILY_COLUMNS)
 """All columns of :attr:`DailyWeather.frame`, in order."""
 
-COUNT_COLUMNS: Final = ("temp_n_samples", "rh_n_samples", "n_samples")
+COUNT_COLUMNS: Final = ("temp_n_samples", "rh_n_samples", "n_samples", "precip_n_samples")
 """Integer columns (``int64``); all other columns are ``float64``."""
 
 COVERAGE_COLUMNS: Final = ("temp_coverage", "rh_coverage", "coverage")
@@ -88,18 +100,24 @@ class DailyWeather:
     ``rh_n_samples``     —      equal to ``n_samples``
     ``temp_coverage``    0-1    equal to ``coverage``
     ``rh_coverage``      0-1    equal to ``coverage``
-    ``precip_sum_mm``    mm     sum of ``precip_mm`` of the valid samples; ``NaN`` if none
-                                of them has a precipitation value
-    ``battery_min_v``    V      minimum of ``battery_v`` of the valid samples; ``NaN`` if
-                                none of them has a battery value
+    ``precip_sum_mm``    mm     sum of the present ``precip_mm`` values of the samples
+                                not excluded by the auxiliary mask; ``NaN`` if none
+    ``precip_n_samples`` —      number of precipitation values in ``precip_sum_mm``
+    ``battery_min_v``    V      minimum of the present ``battery_v`` values of the samples
+                                not excluded by the auxiliary mask; ``NaN`` if none
     ===================  =====  ==========================================================
 
-    The two auxiliary aggregates use the same valid samples as temperature and humidity, so a
-    day's precipitation sum covers the same part of the day as ``coverage``. A missing
-    precipitation or battery value does not make a sample invalid (owner decision Q9); it is
-    only left out of the sum or minimum. Precipitation recorded in a sample without
-    temperature or humidity, or in an excluded sample (e.g. ``PRE_DEPLOYMENT``), is not
-    counted.
+    **The auxiliary aggregates do not follow the whole-row rule.** Temperature and humidity are
+    aggregated over the valid samples (both present, not excluded by ``exclude_mask``).
+    Precipitation and battery voltage are aggregated over every sample whose own value is
+    present and that is not excluded by a separate, narrower ``auxiliary_exclude_mask``
+    (default :data:`DEFAULT_AUXILIARY_EXCLUDE`: ``PRE_DEPLOYMENT | MANUAL_EXCLUDE``). Rain
+    recorded in a sample whose humidity is missing or whose temperature is flagged as a spike
+    is still rain, and a low battery reading in a sample whose temperature dropped out (a
+    typical symptom of a failing battery) must stay visible. The precipitation sum therefore
+    need not cover the same part of the day as ``coverage``; ``precip_n_samples`` tells how
+    many interval values it contains, so a partial day is visible (a full day has about
+    ``86 400 s / expected_interval_s`` values).
 
     The per-variable columns ``temp_*``/``rh_*`` of counts and coverage are kept for API
     stability (they were independent before 2026-10-05); under the whole-row rule they always
@@ -113,8 +131,9 @@ class DailyWeather:
     sensor_id : SensorId
         The sensor the aggregates belong to.
     frame : pandas.DataFrame
-        Aggregates with the columns above, indexed by unique increasing local dates. The two
-        auxiliary columns may be omitted (both or either); they are then filled with ``NaN``.
+        Aggregates with the columns above, indexed by unique increasing local dates. The
+        auxiliary columns may be omitted (any of them, keeping their order); they are then
+        filled with ``NaN`` (``0`` for ``precip_n_samples``).
     timezone : str
         IANA zone that defines the local calendar days.
 
@@ -138,6 +157,7 @@ class DailyWeather:
         timezone: str,
         expected_interval_s: float,
         exclude_mask: int,
+        auxiliary_exclude_mask: int = DEFAULT_AUXILIARY_EXCLUDE,
     ) -> Self:
         """Aggregate a measurement series to local calendar days.
 
@@ -152,7 +172,13 @@ class DailyWeather:
         exclude_mask : int
             :class:`~sivin.core.flags.QcFlag` bits that exclude a sample. A sample without
             temperature or without humidity is excluded regardless of its flags; one without
-            precipitation or battery voltage is not.
+            precipitation or battery voltage is not. Applies to the temperature and humidity
+            aggregates and the counts and coverage.
+        auxiliary_exclude_mask : int, optional
+            :class:`~sivin.core.flags.QcFlag` bits that exclude a sample from the auxiliary
+            aggregates (``precip_sum_mm``, ``precip_n_samples``, ``battery_min_v``);
+            :data:`DEFAULT_AUXILIARY_EXCLUDE` when omitted. Temperature and humidity play no
+            part (proposed configuration key ``analytics.auxiliary_exclude_mask``, WP-1.7).
 
         Returns
         -------
@@ -182,11 +208,12 @@ class DailyWeather:
             grouped = frame.loc[valid, column].groupby(valid_dates)
             for statistic in ("min", "mean", "max"):
                 daily[f"{prefix}_{statistic}"] = grouped.agg(statistic).astype(np.float64)
-        precip = frame.loc[valid, Column.PRECIP].groupby(valid_dates)
+        located = series.valid_mask(auxiliary_exclude_mask)
+        precip = frame.loc[located, Column.PRECIP].groupby(dates.loc[located])
         daily["precip_sum_mm"] = precip.sum(min_count=1).astype(np.float64)
-        daily["battery_min_v"] = (
-            frame.loc[valid, Column.BATTERY].groupby(valid_dates).min().astype(np.float64)
-        )
+        daily["precip_n_samples"] = precip.count().reindex(all_days, fill_value=0).astype(np.int64)
+        battery = frame.loc[located, Column.BATTERY].groupby(dates.loc[located])
+        daily["battery_min_v"] = battery.min().astype(np.float64)
         counts = valid_dates.groupby(valid_dates).size()
         n_samples = counts.reindex(all_days, fill_value=0).astype(np.int64)
         coverage = np.minimum(1.0, n_samples.to_numpy() * expected_interval_s / day_length_s)
@@ -279,7 +306,11 @@ def _validated_daily(frame: pd.DataFrame) -> pd.DataFrame:
         )
     frame = frame.copy()
     for column in AUXILIARY_DAILY_COLUMNS:
-        if column not in given:
+        if column in given:
+            continue
+        if column in COUNT_COLUMNS:
+            frame[column] = np.zeros(len(frame), dtype=np.int64)
+        else:
             frame[column] = np.full(len(frame), np.nan, dtype=np.float64)
     if not all(type(day) is date for day in frame.index):
         raise SchemaError("Daily frame must be indexed by datetime.date values.")

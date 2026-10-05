@@ -137,7 +137,7 @@ class PrecipRangeCheck(QualityCheck[PrecipRangeSettings]):
                         f"{len(run)} precipitation value(s) outside "
                         f"[{self.settings.precip_min_mm:g}, {self.settings.precip_max_mm:g}] mm "
                         f"per interval (lowest {run.min():g} mm, highest {run.max():g} mm); "
-                        "set aside, temperature and humidity stay valid"
+                        "temperature and humidity are unaffected"
                     ),
                     severity=Severity.WARNING,
                     origin=self.check_id,

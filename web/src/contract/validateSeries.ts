@@ -1,5 +1,7 @@
+import { ContractError } from './ContractError';
 import { FieldReader } from './FieldReader';
 import { DAILY_VALUE_COLUMNS, type DailyFile, type DailyValueColumn, type RawMonthFile } from './types';
+import type { ContractWarning } from './validateMeta';
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -11,20 +13,36 @@ const OPTIONAL_DAILY_COLUMNS = ['precip_sum_mm', 'battery_min_v'] as const;
 
 type NullableColumn = readonly (number | null)[];
 
+const warnOnConsole: ContractWarning = (message) => {
+  console.warn(message);
+};
+
 /**
- * Read the optional nullable number columns that are present: an absent field (or one that is
- * `undefined`) is left out of the result, a present one must have `length` items.
+ * Read the optional nullable number columns that are present. An absent field (or one that is
+ * `undefined`) is left out of the result. A present but malformed field (not an array, a wrong
+ * length, a non-number item) is also left out and reported to `warn`: tolerant reading of
+ * optional contract fields (plan §0.5), so a broken optional column never hides the
+ * temperature and humidity of the file.
  */
 function readOptionalColumns<K extends string>(
   reader: FieldReader,
   root: Readonly<Record<string, unknown>>,
   names: readonly K[],
   length: number,
+  warn: ContractWarning,
 ): Partial<Record<K, NullableColumn>> {
   const columns: Partial<Record<K, NullableColumn>> = {};
   for (const name of names) {
-    if (root[name] !== undefined) {
+    if (root[name] === undefined) {
+      continue;
+    }
+    try {
       columns[name] = reader.list(root[name], `$.${name}`, reader.nullableNumberItem, length);
+    } catch (error) {
+      if (!(error instanceof ContractError)) {
+        throw error;
+      }
+      warn(`${error.message}; optional field ignored`);
     }
   }
   return columns;
@@ -46,11 +64,12 @@ function readStrictlyIncreasingTimes(reader: FieldReader, value: unknown): reado
  *
  * @param value - Parsed JSON.
  * @param file - File name used in error messages.
+ * @param warn - Receives warnings about ignored malformed optional fields; default `console.warn`.
  * @returns The typed file; `t` is strictly increasing and all columns have its length. The
- *   optional `precip_mm` and `battery_v` are present only if the file has them.
- * @throws ContractError if the file does not match the contract.
+ *   optional `precip_mm` and `battery_v` are present only if the file has them well-formed.
+ * @throws ContractError if a required part of the file does not match the contract.
  */
-export function parseRawMonthFile(value: unknown, file: string): RawMonthFile {
+export function parseRawMonthFile(value: unknown, file: string, warn: ContractWarning = warnOnConsole): RawMonthFile {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   const t = readStrictlyIncreasingTimes(reader, root.t);
@@ -59,7 +78,7 @@ export function parseRawMonthFile(value: unknown, file: string): RawMonthFile {
     t,
     temp_c: reader.list(root.temp_c, '$.temp_c', reader.nullableNumberItem, t.length),
     rh_pct: reader.list(root.rh_pct, '$.rh_pct', reader.nullableNumberItem, t.length),
-    ...readOptionalColumns(reader, root, OPTIONAL_RAW_COLUMNS, t.length),
+    ...readOptionalColumns(reader, root, OPTIONAL_RAW_COLUMNS, t.length, warn),
     qc: reader.list(root.qc, '$.qc', reader.integerItem, t.length),
   };
 }
@@ -69,11 +88,12 @@ export function parseRawMonthFile(value: unknown, file: string): RawMonthFile {
  *
  * @param value - Parsed JSON.
  * @param file - File name used in error messages.
+ * @param warn - Receives warnings about ignored malformed optional fields; default `console.warn`.
  * @returns The typed file; all columns have the length of `date`. The optional
- *   `precip_sum_mm` and `battery_min_v` are present only if the file has them.
- * @throws ContractError if the file does not match the contract.
+ *   `precip_sum_mm` and `battery_min_v` are present only if the file has them well-formed.
+ * @throws ContractError if a required part of the file does not match the contract.
  */
-export function parseDailyFile(value: unknown, file: string): DailyFile {
+export function parseDailyFile(value: unknown, file: string, warn: ContractWarning = warnOnConsole): DailyFile {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   const date = reader.list(root.date, '$.date', (item, path) => {
@@ -91,7 +111,7 @@ export function parseDailyFile(value: unknown, file: string): DailyFile {
     sensor_id: reader.string(root.sensor_id, '$.sensor_id'),
     date,
     ...columns,
-    ...readOptionalColumns(reader, root, OPTIONAL_DAILY_COLUMNS, date.length),
+    ...readOptionalColumns(reader, root, OPTIONAL_DAILY_COLUMNS, date.length, warn),
     coverage: reader.list(root.coverage, '$.coverage', reader.numberItem, date.length),
   };
 }
