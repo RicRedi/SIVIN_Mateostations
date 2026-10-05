@@ -67,9 +67,11 @@ therefore flags the whole row, temperature included; see [Limitations](#limitati
 ## Pipeline order
 
 `QualityPipeline.from_settings(settings, off_site_log=log)` builds the pipeline;
-`run(series, known_deployments=())` runs four stages:
+`run(series, known_deployments=())` runs four stages and a final set-aside:
 
-1. **Screening checks on the whole series** — default `missing`, `sampling`, `range`. These are
+1. **Screening checks on the whole series** — default `missing`, `sampling`, `range`,
+   `precip_range`, `precip_counter`, `battery` (the last three since WP-1.7, report events
+   only, see [Precipitation and battery](#precipitation-and-battery-wp-19-events-never-row-flags)). These are
    wrong wherever the sensor is. Their `MISSING` and `OUT_OF_RANGE` flags are passed on, so the
    detector ignores a gross error (e.g. a −999 sentinel) instead of seeing a regime change.
 2. **Off-site log** (if the pipeline has one) — `PRE_DEPLOYMENT` on every sample inside a logged
@@ -82,6 +84,11 @@ therefore flags the whole row, temperature included; see [Limitations](#limitati
    `step`, `persistence`. Off-site data are not judged by outdoor expectations (a stable office
    temperature is not "stuck"), and the jump at a logged period's boundary is never reported as
    a spike or a step, because no stretch spans it.
+
+5. **Set-aside** (WP-1.7) — every enabled check that implements `set_aside` (protocol
+   `ValueSetAside`; today `precip_range`) replaces the values it rejects by `NaN` in
+   `QualityResult.series`; `QualityResult.values_set_aside` counts them. Rows and flags are
+   unchanged, so daily sums and the site export never see an implausible precipitation value.
 
 Without a log entry and with the advisory detector, an office stay counts as vineyard data: its
 boundaries are typically reported as `step` (informative, not excluded) next to the
@@ -150,7 +157,7 @@ zero) and report events instead:
 
 | Check | Event kind | Severity | Effect on the data |
 |---|---|---|---|
-| `precip_range` | `precip_out_of_range` | warning | none in the pipeline yet; `PrecipRangeCheck.set_aside(series)` returns the series with exactly those `precip_mm` values replaced by `NaN` (to be applied from WP-1.7; the event text therefore only says that temperature and humidity are unaffected) |
+| `precip_range` | `precip_out_of_range` | warning | `QualityPipeline` applies `PrecipRangeCheck.set_aside` (WP-1.7): exactly those `precip_mm` values become `NaN` in `QualityResult.series`; the event text only says that temperature and humidity are unaffected |
 | `precip_counter` | `precip_counter_reset` | info | none |
 | `precip_counter` | `precip_counter_mismatch` | warning | none (which of the two columns is wrong cannot be told) |
 | `battery` | `low_battery` | warning | none |
@@ -162,9 +169,9 @@ Replacing only the implausible precipitation value by `NaN`
 (`MeasurementSeries.with_values`, allowed for auxiliary columns only) keeps the row and its
 flags untouched, needs no contract change and makes every later consumer (daily sum, web)
 correct without knowing about the check; the event records what was removed. Temperature and
-humidity are never replaced, only flagged. `QualityPipeline` (WP-1.5, not in this
-workpackage's scope) only ORs flags and collects events; applying `set_aside` to
-`QualityResult.series` after the pipeline is the integration step proposed for WP-1.7.
+humidity are never replaced, only flagged. Since WP-1.7 `QualityPipeline` applies `set_aside`
+of every enabled check that has one, after all flags are set (stage 5 of
+[Pipeline order](#pipeline-order)).
 
 Runs: consecutive affected samples form one event from the first to the last of them
 (`end_utc`); samples without a value in that column neither end nor extend a run
@@ -219,24 +226,13 @@ measurement of that moment, so nothing is flagged or removed.
 | `low_battery_v` | 3.3 | V | project default *[to be tuned]*; the real export reads 3.0–3.7 V (3.0 V in its two oldest lines, which gives one event); the voltage at which the device stops measuring is unknown *[to be verified against the device data sheet]* |
 | `recovery_margin_v` | 0.1 | V | one step of the export resolution, so a reading that only returns to the threshold does not end an episode; project default *[to be tuned]*; 0 disables the hysteresis |
 
-#### Wiring (proposed for WP-1.7)
+#### Wiring (WP-1.7)
 
-The checks are registered (`check_registry`) but not enabled by default, because the default
-check lists live in `QualityPipelineSettings` (outside this workpackage). Proposed
-configuration:
-
-```yaml
-quality:
-  screening_checks: [missing, sampling, range, precip_range, precip_counter, battery]
-  check_settings:
-    precip_range: { precip_min_mm: 0.0, precip_max_mm: 50.0 }
-    precip_counter: { tolerance_mm: 0.15, max_interval_s: 2745.0 }
-    battery: { low_battery_v: 3.3, recovery_margin_v: 0.1 }
-```
-
-and, after `QualityPipeline.run`, `PrecipRangeCheck(settings).set_aside(result.series)` before
-daily aggregation and the site export. Enabling them changes no flag of any row (tested in
-`tests/quality/test_precip_battery.py`).
+The three checks are in the default `quality.screening_checks` since WP-1.7, and the pipeline
+applies the set-aside of `precip_range` (see [Pipeline order](#pipeline-order)). Their
+settings are `quality.check_settings.precip_range`, `.precip_counter` and `.battery` in
+`config/sivin.yaml` (see [configuration.md](configuration.md)). Enabling them changes no flag of
+any row (tested in `tests/quality/test_precip_battery.py`).
 
 Implementation: `sivin/quality/checks/precip.py` (`PrecipRangeCheck`, `PrecipCounterCheck`,
 `CounterSteps`), `sivin/quality/checks/battery.py` (`BatteryCheck`), `runs_of` in
@@ -577,12 +573,14 @@ take the state of their timestamp. In `advisory` mode these intervals only feed 
 
 ## Configuration
 
-The settings are pydantic models inside `sivin.quality` and are not yet part of
-`config/sivin.yaml`. Proposed section (wired in by the integration workpackage):
+Since WP-1.7 the settings are the `quality` section of `config/sivin.yaml`
+(`QualityPipelineSettings`) and the log location is the `offsite_log` section
+(`OffSiteLogSettings`); every key is listed in [configuration.md](configuration.md), and
+`sivin config show` prints the resolved values of every enabled check. Example:
 
 ```yaml
 quality:
-  screening_checks: [missing, sampling, range]
+  screening_checks: [missing, sampling, range, precip_range, precip_counter, battery]
   deployed_checks: [spike, step, persistence]
   check_settings:
     range: { temp_climate_min_c: -30.0, temp_climate_max_c: 42.0 }
@@ -590,7 +588,6 @@ quality:
   deployment:
     mode: advisory            # advisory | enforce
     log_tolerance_s: 21600
-    display_timezone: Europe/Prague
     known_tolerance_s: 21600
     change_points: { min_segment_s: 86400, window_s: 2592000, stride_s: 1296000 }
     regime: { room_min_c: 5.0, room_max_c: 35.0, indoor_max_rh_spread_pct: 8.0 }
@@ -602,8 +599,11 @@ offsite_log:                  # OffSiteLogSettings (sivin.registry.offsite)
   timezone: Europe/Prague
 ```
 
-The log itself is loaded with `OffSiteLogStore().load(file, registry, timezone)` and passed to
-`QualityPipeline.from_settings(..., off_site_log=log)`; wiring it into the CLI run is WP-1.7.
+`check_settings.sampling.expected_interval_s` and `deployment.display_timezone` are set from
+`time.expected_interval_s` and `time.display_timezone`; giving them here with another value is
+a configuration error. `sivin qc` loads the registry and the log
+(`OffSiteLogStore().load(file, registry, timezone)`; an invalid log stops the run) and passes
+it to `QualityPipeline.from_settings(..., off_site_log=log)` (see [cli.md](cli.md)).
 
 ## Limitations
 
@@ -671,6 +671,7 @@ The log itself is loaded with `OffSiteLogStore().load(file, registry, timezone)`
 |---|---|---|
 | `QualityCheck`, `CheckOutcome`, `check_registry` | `sivin/quality/checks/base.py` | `tests/quality/test_base_and_events.py` |
 | checks `missing`, `range`, `spike`, `step`, `persistence`, `sampling` | `sivin/quality/checks/*.py` | `tests/quality/test_checks.py` |
+| checks `precip_range`, `precip_counter`, `battery` | `sivin/quality/checks/{precip,battery}.py` | `tests/quality/test_precip_battery.py` |
 | `GaussianSegmentCost`, `BinarySegmentation` | `sivin/quality/changepoint.py` | `tests/quality/test_changepoint_regime.py` |
 | `WindowedChangePoints` (local search) | `sivin/quality/windows.py` | `tests/quality/test_changepoint_regime.py` |
 | `RegimeClassifier` (absolute rules) | `sivin/quality/regime.py` | `tests/quality/test_changepoint_regime.py` |
@@ -682,7 +683,7 @@ The log itself is loaded with `OffSiteLogStore().load(file, registry, timezone)`
 | `OffSiteCheck` | `sivin/quality/checks/offsite.py` | `tests/quality/test_offsite.py` |
 | `OffSitePeriod`, `OffSiteLog` / `LocalTimeReader` / `StrictLogLoader` / `OffSiteLogStore` | `sivin/registry/offsite/{model,local_time,strict_yaml,store}.py` (re-exported by `sivin.registry.offsite`) | `tests/registry/test_offsite.py` |
 | `QualityEvent`, `DeploymentEvent` | `sivin/quality/events.py` | `tests/quality/test_base_and_events.py` |
-| `QualityPipeline`, `QualityResult` | `sivin/quality/pipeline.py` | `tests/quality/test_pipeline.py` |
+| `QualityPipeline`, `QualityResult`, `ValueSetAside` | `sivin/quality/pipeline.py` | `tests/quality/test_pipeline.py`, `tests/quality/test_precip_battery.py` |
 | synthetic generator | `tests/quality/synthetic.py` | `tests/quality/test_pipeline.py` |
 
 ## References
