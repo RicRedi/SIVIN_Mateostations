@@ -112,6 +112,9 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | 2026-10-05 | Q8: portál pojmenovává soubory **s mezerami a závorkou** (`MeteoData_8615620 77799986 (VUT)_….csv`); podtržítka vznikla až při nahrání. Podpora podtržítek z WP-0.2 zůstává jako tolerance. |
 | 2026-10-05 | Q9: **srážky, kumulativní srážky a napětí baterie se převezmou do dat** (rozšíření §2.5/§2.6, WP-1.9); modely chorob se srážkami ve WP-2.5. Pravidlo platnosti řádku se týká jen teploty a vlhkosti. |
 | 2026-10-05 | Q10: čidlo 77799986 bylo v celém exportu (30. 7. 2025 – 1. 3. 2026) mimo vinici → první záznam `service` v logu mimo-vinici (WP-1.8). |
+| 2026-10-05 | Vyřazení čidla = `status: retired` v registru; data se nemažou (návrh orchestrátora, owner nerozporoval). |
+| 2026-10-05 | Interní poznámky (`notes` čidla, `note` umístění) se **nepublikují** na webu; `sensors.geojson` na webu je veřejná projekce registru. |
+| 2026-10-05 | Výběr čidel na webu škálovatelný: rozbalovací seznam s vyhledáváním, **dvě úrovně členění obec → viniční trať** (WP-3.5). Registr dostává pole `municipality` a `track` místo `site`. |
 
 ### 0.6 Otevřené otázky na ownera
 
@@ -363,7 +366,8 @@ by k tomu potřeboval GitHub token a čekal by minuty). Místo toho:
     "id": "77678271",
     "portal_name": "8615620 77678271",
     "label": "77678271 (VUT)",
-    "site": null,
+    "municipality": null,
+    "track": null,
     "variety": null,
     "status": "active",
     "placements": [
@@ -828,6 +832,13 @@ zapojení do CLI a konfigurace dělá integrační WP-1.7 (vlna 2).
   událost „slabá baterie", bez vyřazení dat); web kontrakt toleruje nová pole (zobrazení až WP-3.4).
 - **Akceptace:** reálný export načte všech 6 sloupců; staré soubory úložiště se čtou beze změny;
   test resetu čítače; web gates zelené.
+
+**WP-3.5 — Výběr čidel pro větší sítě (`wp/3.5-sensor-picker`, paralelně s WP-4.1):**
+registr: pole `municipality` (obec) a `track` (viniční trať) místo `site` (model, schéma,
+GeoJSON, migrace souboru, dokumentace); SiteBuilder publikuje veřejnou projekci registru bez
+interních poznámek; web: rozbalovací vícenásobný výběr s vyhledáváním, skupinami obec → trať
+(vybrat vše ve skupině), štítky vybraných čidel v barvě čáry, limit 8 srovnávaných, vyřazená čidla
+na konci a šedě, shlukování markerů v mapě při oddálení, ovládání klávesnicí a mobil.
 
 **Vlna 3 doplněna o:**
 - **WP-2.5 — Modely chorob se srážkami:** pravidlo 3-10 pro plíseň révovou (orientační),
