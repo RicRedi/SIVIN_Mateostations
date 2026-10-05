@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -102,7 +102,7 @@ class TestQualityService:
     ) -> None:
         ingest(factory, project.real_export())
         service = factory.quality_service(dry_run=True)
-        report = service.run([REAL, OUTDOOR], start_utc="2026-02-01T00:00:00Z")
+        report = service.run([REAL, OUTDOOR], start=datetime(2026, 2, 1, tzinfo=UTC))
         assert report.dry_run
         assert report.sensors[REAL].events_file is None
         assert report.sensors[REAL].result is not None
@@ -211,7 +211,10 @@ class TestIndices:
             "class",
             "estimated",
             "details",
+            "status",
+            "computed_at",
         }
+        assert (gst["status"], gst["computed_at"]) == ("ok", "2026-10-05T04:00:00Z")
         assert gst["unit"] == "°C"
         # Three synthetic June days cover 3 of 214 days of the growing season.
         assert gst["complete"] is False
@@ -247,8 +250,7 @@ class TestIndices:
         assert report.failures[1].startswith("indices 77680921: ")
         assert report.results[OUTDOOR] == {}
 
-    def test_report_document_and_outcome(self) -> None:
+    def test_report_outcome(self) -> None:
         report = IndicesReport(SeasonWindow.of(2026))
-        document: dict[str, Any] = report.document()
-        assert document["sensors"] == {}
         assert report.outcome is Outcome.OK
+        assert not report.changes

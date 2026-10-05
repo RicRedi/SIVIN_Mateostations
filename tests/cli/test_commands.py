@@ -93,10 +93,10 @@ class TestFetch:
         assert "FAILED fetch 8615621 77678272" in result.output
         assert len(list((tmp_path / "dl").glob("*.csv"))) == 2
 
-    def test_missing_credentials_exit_with_3(self, project: Project) -> None:
+    def test_missing_credentials_exit_with_4(self, project: Project) -> None:
         overrides = CliOverrides(drivers=drivers(), credentials=no_credentials)  # type: ignore[arg-type]
         result = invoke("fetch", overrides=overrides)
-        assert result.exit_code == 3
+        assert result.exit_code == 4
         assert "SIVIN_USER" in result.output
 
     def test_invalid_sensor_name_is_a_usage_error(self, project: Project) -> None:
@@ -209,9 +209,9 @@ class TestQcIndicesRun:
         assert invoke("ingest").exit_code == 0
         overrides = CliOverrides(credentials=no_credentials, clock=lambda: RUN_TIME)  # type: ignore[arg-type]
         result = invoke("run", "--season", "2026", overrides=overrides)
-        assert result.exit_code == 1
+        assert result.exit_code == 4
         assert "FAILED fetch: Portal credentials missing" in result.output
-        assert "Run finished: PARTIAL_FAILURE." in result.output
+        assert "Run finished: DATA_SOURCE_UNAVAILABLE." in result.output
 
     def test_run_skip_fetch_dry_run(self, project: Project) -> None:
         write_synthetic_export(project.downloads, days=1)
@@ -219,3 +219,53 @@ class TestQcIndicesRun:
         assert result.exit_code == 0, result.output
         assert "VALID " in result.output
         assert not (project.root / "data" / "runs").exists()
+
+
+def tree_digest(root: Path) -> dict[str, str]:
+    """SHA-256 of every file below ``root`` (relative path → digest)."""
+    import hashlib
+
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+class TestRobustness:
+    def test_run_dry_run_never_touches_the_portal_or_the_tree(self, project: Project) -> None:
+        write_synthetic_export(project.downloads, days=1)
+        assert invoke("ingest").exit_code == 0
+        write_synthetic_export(project.downloads, days=2, stamp="20260606_060000")
+        calls: list[object] = []
+
+        def forbidden(settings: object) -> object:
+            calls.append(settings)
+            raise AssertionError("the browser must not start in a dry run")
+
+        overrides = CliOverrides(drivers=forbidden, credentials=credentials, clock=lambda: RUN_TIME)  # type: ignore[arg-type]
+        before = tree_digest(project.root)
+        result = invoke("run", "--dry-run", overrides=overrides)
+        assert result.exit_code == 0, result.output
+        assert "Note: fetch skipped in dry-run." in result.output
+        assert calls == []
+        assert tree_digest(project.root) == before
+
+    def test_empty_store(self, project: Project) -> None:
+        result = invoke("qc")
+        assert result.exit_code == 0, result.output
+        assert "No stored data." in result.output
+        result = invoke("indices", "--season", "2026")
+        assert result.exit_code == 0, result.output
+        assert "No stored data for this season; nothing written." in result.output
+        assert not (project.root / "data").exists()
+
+    def test_failed_login_exits_with_4(self, project: Project) -> None:
+        from sivin.ingest.portal.credentials import PortalCredentials, Secret
+
+        overrides = CliOverrides(
+            drivers=drivers(), credentials=lambda: PortalCredentials("synthetic-user", Secret("x"))
+        )
+        result = invoke("fetch", overrides=overrides)
+        assert result.exit_code == 4
+        assert "Portal session failed" in result.output

@@ -49,6 +49,39 @@ class SharedValue:
     origin: str
 
 
+INTERVAL_ORIGIN = "time.expected_interval_s"
+"""Key path of the nominal sampling interval, the base of the derived defaults."""
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedValue:
+    """A default that is a multiple of ``time.expected_interval_s`` unless set explicitly.
+
+    Attributes
+    ----------
+    model : type[pydantic.BaseModel]
+        The settings model that holds the field.
+    field_name : str
+        The field, e.g. ``max_sample_duration_s``.
+    factor : float
+        Multiple of the interval (dimensionless), e.g. 2.5.
+    """
+
+    model: type[BaseModel]
+    field_name: str
+    factor: float
+
+    def describe(self) -> str:
+        """Return ``"<factor> x time.expected_interval_s"``.
+
+        Returns
+        -------
+        str
+            The rule, for messages and the reference.
+        """
+        return f"{self.factor:g} x {INTERVAL_ORIGIN}"
+
+
 @dataclass(frozen=True, slots=True)
 class SharedValues:
     """Write the ``time`` values into the raw data of settings models.
@@ -57,10 +90,19 @@ class SharedValues:
     ----------
     values : tuple of SharedValue
         The values and the field names they go to; a field name may appear only once.
+    interval_s : float
+        The nominal sampling interval in s, the base of :attr:`derived`.
+    derived : tuple of DerivedValue
+        Defaults computed from ``interval_s`` when a field is not given explicitly.
     """
 
     values: tuple[SharedValue, ...]
+    interval_s: float = 0.0
+    derived: tuple[DerivedValue, ...] = ()
     _by_name: Mapping[str, SharedValue] = field(init=False, repr=False, compare=False)
+    _derived: Mapping[tuple[type[BaseModel], str], DerivedValue] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         by_name: dict[str, SharedValue] = {}
@@ -70,15 +112,19 @@ class SharedValues:
                     raise ValueError(f"Field name {name!r} is shared twice.")
                 by_name[name] = shared
         object.__setattr__(self, "_by_name", types.MappingProxyType(by_name))
+        derived = {(item.model, item.field_name): item for item in self.derived}
+        object.__setattr__(self, "_derived", types.MappingProxyType(derived))
 
     @classmethod
-    def from_time(cls, time: TimeConfig) -> Self:
+    def from_time(cls, time: TimeConfig, derived: Sequence[DerivedValue] = ()) -> Self:
         """Return the shared values of a ``time`` section.
 
         Parameters
         ----------
         time : TimeConfig
             The validated ``time`` section.
+        derived : sequence of DerivedValue, optional
+            Defaults that follow ``time.expected_interval_s``.
 
         Returns
         -------
@@ -91,7 +137,7 @@ class SharedValues:
                 SharedValue(
                     frozenset({"expected_interval_s", "nominal_interval_s"}),
                     time.expected_interval_s,
-                    "time.expected_interval_s",
+                    INTERVAL_ORIGIN,
                 ),
                 SharedValue(
                     frozenset({"source_timezone"}), time.source_timezone, "time.source_timezone"
@@ -101,8 +147,67 @@ class SharedValues:
                     time.display_timezone,
                     "time.display_timezone",
                 ),
-            )
+            ),
+            time.expected_interval_s,
+            tuple(derived),
         )
+
+    def origin_of(self, model: type[BaseModel], name: str) -> str | None:
+        """Return where the value of a field comes from, if not from the field's own default.
+
+        Parameters
+        ----------
+        model : type[pydantic.BaseModel]
+            The settings model.
+        name : str
+            The field name.
+
+        Returns
+        -------
+        str or None
+            ``"time.<key>"`` for a shared field, ``"<f> x time.expected_interval_s"`` for a
+            derived default, ``None`` otherwise.
+        """
+        shared = self._by_name.get(name)
+        if shared is not None:
+            return shared.origin
+        derived = self._derived.get((model, name))
+        return None if derived is None else derived.describe()
+
+    def hint(self, message: str) -> str:
+        """Add an explanation to a validation message that names an interval field.
+
+        Parameters
+        ----------
+        message : str
+            A message of a settings model, e.g. "max_sample_duration_s must not be shorter
+            than nominal_interval_s".
+
+        Returns
+        -------
+        str
+            The message, followed by how the named fields relate to
+            ``time.expected_interval_s`` if it names one.
+        """
+        names = sorted(
+            {
+                name
+                for name in self._by_name
+                if name in message and self._by_name[name].origin == INTERVAL_ORIGIN
+            }
+            | {item.field_name for item in self.derived if item.field_name in message}
+        )
+        if not names:
+            return message
+        parts = []
+        for name in names:
+            derived = next((d for d in self.derived if d.field_name == name), None)
+            parts.append(
+                f"{name} = {derived.describe()} by default"
+                if derived is not None
+                else f"{name} is set from {INTERVAL_ORIGIN}"
+            )
+        return f"{message} ({INTERVAL_ORIGIN} = {self.interval_s:g} s; {'; '.join(parts)})"
 
     def apply(
         self,
@@ -148,6 +253,10 @@ class SharedValues:
                     problems.append(_conflict((*location, key), out[key], shared))
                 out[key] = shared.value
                 continue
+            derived = self._derived.get((model, name))
+            if derived is not None:
+                out.setdefault(key, derived.factor * self.interval_s)
+                continue
             nested = settings_model_of(info.annotation)
             if nested is None or not self.reaches(nested):
                 continue
@@ -174,7 +283,7 @@ class SharedValues:
             ``True`` if :meth:`apply` would write into it.
         """
         for name, info in model.model_fields.items():
-            if name in self._by_name:
+            if name in self._by_name or (model, name) in self._derived:
                 return True
             nested = settings_model_of(info.annotation)
             if nested is not None and nested is not model and self.reaches(nested):

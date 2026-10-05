@@ -255,7 +255,7 @@ than $\Delta t_{max}$ away cannot confirm a spike. A row gets `SPIKE` if either 
 |---|---|---|---|
 | `temp_max_rate_c_per_h` | 8 (≈ 4.07 °C per 1830 s) | °C/h | project default *[to be tuned]*; method Zahumenský (2004) |
 | `rh_max_rate_pct_per_h` | 40 (≈ 20.3 % per 1830 s) | %/h | project default *[to be tuned]* |
-| `min_interval_s` | 1830 | s | nominal interval (measured median step, not linked to `time.expected_interval_s`) |
+| `min_interval_s` | 1830 | s | nominal interval; follows `time.expected_interval_s` unless set (WP-1.7) |
 | `max_interval_s` | 5490 | s | project default, 3 × nominal interval |
 
 ### `step` — sudden persistent level shift → `STEP` + `step` event

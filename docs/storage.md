@@ -86,9 +86,10 @@ threshold never requires rewriting the raw data, and the raw files hold only wha
 measured. `MANUAL_EXCLUDE` cannot be recomputed from raw values: it is an owner decision. It
 will come from a human-edited exclusions file that the QC pipeline applies at build time (a
 later workpackage); it is never stored in the raw files. If a series passed to `append`
-carries any QC bits, the store logs a **warning** with the number of rows per flag, so a
-caller that set flags (in particular `MANUAL_EXCLUDE`) by mistake notices that they are not
-kept.
+carries any QC bits, the store logs the number of rows per flag: at DEBUG when only the flags
+every parser sets are present (`MISSING`, `TIMESTAMP_SUSPECT`; routine, QC recomputes them),
+at INFO when any other flag is set, so a caller that set flags (in particular
+`MANUAL_EXCLUDE`) by mistake notices that they are not kept (WP-1.7 review).
 
 ### Format change in WP-1.9 (precipitation and battery)
 
@@ -268,15 +269,19 @@ not its file name. The full file name of every processed export is recorded in t
 
 ## Derived data (WP-1.7)
 
-Written atomically and **byte-stable** (two-space indented UTF-8 JSON, a final line break, no
-run time inside), so an unchanged result does not change the file on the `data` branch.
-Times are ISO 8601 UTC with `Z`; `NaN` is written as `null`.
+Written atomically (two-space indented UTF-8 JSON, a final line break). Times are ISO 8601
+UTC with `Z`; `NaN` is written as `null`. **They are updated in place, never lost** (WP-1.7
+review): a restricted run (`--sensor`, `--index`) replaces only what it computed, a failed
+computation keeps the previous result and marks it, and a run without any data writes
+nothing. Every entry carries `status` (`"ok"` / `"failed"`), `computed_at` (time of the last
+**successful** computation; `null` if there never was one) and, when failed, `error`. Because
+`computed_at` is the run time, a successful run rewrites the files it computed.
 
 `derived/events/<sensor_id>.json` — result of the QC pipeline over the stored record
 (`EventsWriter`):
 
 ```jsonc
-{ "sensor_id": "77799986",
+{ "sensor_id": "77799986", "status": "ok", "computed_at": "2026-10-05T04:00:12Z",
   "first_t": "2025-07-30T08:22:29Z", "last_t": "2026-03-01T21:27:05Z", "n_samples": 300,
   "flag_counts": { "PRE_DEPLOYMENT": 300 },      // rows per single QcFlag, zero counts omitted
   "values_set_aside": 0,                          // precipitation values replaced by NaN
@@ -289,25 +294,32 @@ Times are ISO 8601 UTC with `Z`; `NaN` is written as `null`.
 `precip_out_of_range`, …), `t_end` the end of an interval event (`null` for a point event and
 for an off-site period that is still open), `source` `detected` / `registry` / `log`,
 `severity` `info` / `warning`, `origin` the check that reported it. The site export (WP-3.2)
-maps these to the site contract (§2.6); the run summary of warnings is part of WP-4.1.
+maps these to the site contract (§2.6); the run summary of warnings is part of WP-4.1. The
+file always describes the sensor's whole stored record (`sivin qc --from/--to` only restrict
+the printed summary). A failed QC keeps the previous content and adds `"status": "failed"`
+and `"error"`.
 
-`derived/indices/<season>.json` — results of every index for every sensor with data in the
-season window (`IndicesReport.document`):
+`derived/indices/<season>.json` — results per sensor and index for the sensors with data in
+the season window, merged into the existing file by `IndicesWriter.update`:
 
 ```jsonc
 { "season": 2026, "data_from": "2025-01-01", "data_to": "2026-12-31",   // local days loaded
   "sensors": { "77678271": {
       "huglin": { "value": null, "unit": "°C·d", "coverage": 0.016, "complete": false,
-                  "class": null, "estimated": false, "details": { … } } } } }
+                  "class": null, "estimated": false, "details": { … },
+                  "status": "ok", "computed_at": "2026-10-05T04:00:12Z" },
+      "gst": { …previous values…, "status": "failed", "error": "…",
+               "computed_at": "2026-10-04T04:00:09Z" } } } }
 ```
 
 The values in these examples are illustrative, not measurements. The daily curves
 (`IndexResult.daily`) are not written; WP-3.2 decides how the site shows them.
 
-`quarantine/<file>` and `quarantine/<file>.report.json` — a rejected export (copied by
-default, moved with `ingest.quarantine_mode: move`) and `{"file", "source_path", "accepted":
-false, "issues": [{"rule", "severity", "message", "row", "table"}]}`. A quarantined file of the
-same name is replaced.
+`quarantine/<file>` and `quarantine/<file>.report.json` — a rejected export (moved by
+default, copied with `ingest.quarantine_mode: copy`) and `{"file", "source_path", "accepted":
+false, "issues": [{"rule", "severity", "message", "row", "table"}]}`. If the name is already
+taken, the new file is stored as `<stem>_<YYYYMMDDTHHMMSSZ><suffix>` (UTC time of
+quarantining, then `_2`, `_3`, …); nothing is overwritten.
 
 ## Migration path to Parquet
 

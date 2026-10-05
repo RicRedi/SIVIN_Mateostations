@@ -24,7 +24,7 @@ class TestOutcome:
             Outcome.SETUP_ERROR
         )
         assert Outcome.worst([]) is Outcome.OK
-        assert [int(o) for o in Outcome] == [0, 1, 2, 3]
+        assert [int(o) for o in Outcome] == [0, 1, 2, 3, 4]
 
 
 class TestWorkspace:
@@ -147,3 +147,12 @@ def test_factory_exposes_its_workspace_and_clock(factory: ServiceFactory) -> Non
 
     assert factory.clock() == RUN_TIME
     assert factory.workspace.paths.root.name == "project"
+
+
+def test_read_document_rejects_non_objects(tmp_path: Path) -> None:
+    from sivin.app.json_files import read_document
+
+    path = tmp_path / "list.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    assert read_document(path) is None
+    assert read_document(tmp_path / "missing.json") is None

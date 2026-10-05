@@ -118,7 +118,8 @@ class TestRun:
         )
         factory.ingest_service().ingest([write_synthetic_export(project.downloads, days=1)])
         report = factory.run_service().run(2026)
-        assert report.outcome is Outcome.PARTIAL_FAILURE
+        assert report.outcome is Outcome.DATA_SOURCE_UNAVAILABLE
+        assert report.source_unavailable
         assert report.fetch_failures[0].startswith("fetch: Set SIVIN_USER")
         assert report.record.failures[0] == report.fetch_failures[0]
         assert report.quality.sensors[OUTDOOR].result is not None

@@ -68,6 +68,7 @@ def validated_dump(
     raw: Mapping[str, Any],
     location: Location,
     problems: list[InitErrorDetails],
+    shared: SharedValues | None = None,
 ) -> dict[str, Any] | None:
     """Validate ``raw`` with ``model`` and return the complete settings as JSON-like data.
 
@@ -81,6 +82,8 @@ def validated_dump(
         Key path of ``raw`` in the configuration.
     problems : list of InitErrorDetails
         Receives the validation errors, with their key paths prefixed by ``location``.
+    shared : SharedValues, optional
+        Explains messages that name a field related to ``time.expected_interval_s``.
 
     Returns
     -------
@@ -91,7 +94,11 @@ def validated_dump(
         return model.model_validate(raw).model_dump(mode="json", by_alias=True)
     except ValidationError as error:
         problems.extend(
-            report(location + tuple(issue["loc"]), issue["msg"], issue.get("input"))
+            report(
+                location + tuple(issue["loc"]),
+                issue["msg"] if shared is None else shared.hint(issue["msg"]),
+                issue.get("input"),
+            )
             for issue in error.errors(include_url=False)
         )
         return None
@@ -192,18 +199,30 @@ class CheckSettingsResolution(RegisteredSettings):
         if screening is None or deployed is None or not isinstance(given, Mapping):
             return
         enabled = [name for name in (*screening, *deployed) if name in check_registry]
-        resolved: dict[str, Any] = {
-            name: value for name, value in given.items() if name not in enabled
-        }
+        if any(name not in check_registry for name in (*screening, *deployed)):
+            return
+        resolved: dict[str, Any] = {}
+        for name, value in given.items():
+            if name in enabled:
+                continue
+            location: Location = ("quality", "check_settings", name)
+            if name in check_registry:
+                message = (
+                    "settings given for a check that is not enabled; add it to "
+                    "quality.screening_checks or quality.deployed_checks, or remove them"
+                )
+            else:
+                message = f"unknown check; registered: {', '.join(check_registry.ids())}"
+            problems.append(report(location, message, value))
         for name in enabled:
             raw = given.get(name, {})
-            location: Location = ("quality", "check_settings", name)
+            location = ("quality", "check_settings", name)
             if not isinstance(raw, Mapping):
                 problems.append(report(location, "must be a mapping of settings", raw))
                 continue
             model = check_registry.get(name).settings_model
             settings = shared.apply(model, raw, location, problems)
-            dumped = validated_dump(model, settings, location, problems)
+            dumped = validated_dump(model, settings, location, problems, shared)
             if dumped is not None:
                 resolved[name] = dumped
         section["check_settings"] = resolved
@@ -241,7 +260,7 @@ class StrategyParamsResolution(RegisteredSettings):
             return
         model = strategy_registry.get(strategy).params_model
         dumped = validated_dump(
-            model, shared.apply(model, raw, location, problems), location, problems
+            model, shared.apply(model, raw, location, problems), location, problems, shared
         )
         if dumped is not None:
             section["params"] = dumped
@@ -375,7 +394,7 @@ class IndexParamsResolution(RegisteredSettings):
                 raw = preset.expand(raw, location, problems)
             model = index_registry.get(index_id).params_model
             dumped = validated_dump(
-                model, shared.apply(model, raw, location, problems), location, problems
+                model, shared.apply(model, raw, location, problems), location, problems, shared
             )
             if dumped is not None:
                 resolved[index_id] = dumped

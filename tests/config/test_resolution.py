@@ -122,7 +122,13 @@ class TestQualityCheckSettings:
         (problem,) = problems_of(
             {"quality": {"deployed_checks": [], "check_settings": {"spike": {}}}}
         )
-        assert "check_settings given for checks that are not enabled: ['spike']" in problem
+        assert problem.startswith(
+            "  quality.check_settings.spike: settings given for a check that is not enabled"
+        )
+
+    def test_unknown_check_is_reported_at_its_key_path(self) -> None:
+        (problem,) = problems_of({"quality": {"check_settings": {"nonexist": {}}}})
+        assert problem.startswith("  quality.check_settings.nonexist: unknown check; registered:")
 
     def test_invalid_check_lists_are_left_to_the_section(self) -> None:
         (problem,) = problems_of({"quality": {"screening_checks": ["nope"]}})
@@ -330,3 +336,58 @@ def test_committed_yaml_lists_valid_keys_only(tmp_path: Path) -> None:
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match=r"(?m)^  analytics\.indices\.huglin\.k_overide: "):
         load_config(path)
+
+
+class TestIntervalDerivedDefaults:
+    def test_derived_defaults_follow_the_interval(self) -> None:
+        config = SivinConfig.model_validate({"time": {"expected_interval_s": 600}})
+        checks = config.quality.check_settings
+        assert checks["spike"]["min_interval_s"] == 600.0
+        assert checks["spike"]["max_interval_s"] == 1800.0  # 3 x
+        assert checks["step"]["max_interval_s"] == 1800.0  # 3 x
+        assert checks["precip_counter"]["max_interval_s"] == 900.0  # 1.5 x
+        assert config.analytics.indices["vpd"]["sampling"]["max_sample_duration_s"] == 1500.0
+        assert config.analytics.indices["botrytis_broome"]["sampling"]["max_sample_duration_s"] == (
+            1500.0
+        )
+        linear = SivinConfig.model_validate(
+            {
+                "time": {"expected_interval_s": 600},
+                "alignment": {"strategy": "linear_interpolation"},
+            }
+        )
+        assert linear.alignment.params["max_gap_s"] == 900.0  # 1.5 x
+
+    def test_defaults_at_1830_s_are_unchanged(self) -> None:
+        config = SivinConfig()
+        assert config.quality.check_settings["spike"]["max_interval_s"] == 5490.0
+        assert config.analytics.indices["frost"]["sampling"]["max_sample_duration_s"] == 4575.0
+
+    def test_an_explicit_value_stays(self) -> None:
+        config = SivinConfig.model_validate(
+            {
+                "time": {"expected_interval_s": 600},
+                "quality": {"check_settings": {"spike": {"max_interval_s": 4000}}},
+            }
+        )
+        assert config.quality.check_settings["spike"]["max_interval_s"] == 4000.0
+
+    def test_errors_explain_the_relation_to_the_interval(self) -> None:
+        problems = problems_of(
+            {
+                "time": {"expected_interval_s": 5000},
+                "analytics": {"indices": {"vpd": {"sampling": {"max_sample_duration_s": 4575}}}},
+            }
+        )
+        (problem,) = problems
+        assert problem.startswith("  analytics.indices.vpd.sampling: ")
+        assert "time.expected_interval_s = 5000 s" in problem
+        assert "max_sample_duration_s = 2.5 x time.expected_interval_s by default" in problem
+        assert "nominal_interval_s is set from time.expected_interval_s" in problem
+
+    def test_reference_marks_derived_defaults(self) -> None:
+        from sivin.config.schema import ConfigReference
+
+        rows = {row.path: row for row in ConfigReference().rows()}
+        spike = rows["quality.check_settings.spike.max_interval_s"]
+        assert spike.default == "= `3 x time.expected_interval_s`"

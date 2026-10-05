@@ -16,6 +16,7 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel
 from pydantic.json_schema import models_json_schema
 
+from sivin.config.derived import interval_derived_defaults
 from sivin.config.model import SivinConfig
 from sivin.config.registered import RegisteredSettings, default_resolutions
 from sivin.config.sections import TimeConfig
@@ -146,7 +147,7 @@ class ConfigReference:
 
     def __init__(self, resolutions: Sequence[RegisteredSettings] | None = None) -> None:
         self._resolutions = tuple(resolutions if resolutions is not None else default_resolutions())
-        self._shared = SharedValues.from_time(TimeConfig())
+        self._shared = SharedValues.from_time(TimeConfig(), interval_derived_defaults())
         self._defaults = SivinConfig().model_dump(mode="json", by_alias=True)
 
     def rows(self) -> list[ReferenceRow]:
@@ -214,7 +215,7 @@ class ConfigReference:
                 rows.append(
                     ReferenceRow(
                         ".".join(location),
-                        self._default_text(name, location, value),
+                        self._default_text(model, name, location, value),
                         info.description or "",
                     )
                 )
@@ -246,17 +247,12 @@ class ConfigReference:
                 return resolution
         return None
 
-    def _default_text(self, name: str, location: tuple[str, ...], value: object) -> str:
-        shared = next(
-            (
-                item
-                for item in self._shared.values
-                if name in item.field_names and location[0] != "time"
-            ),
-            None,
-        )
-        if shared is not None:
-            return f"= `{shared.origin}`"
+    def _default_text(
+        self, model: type[BaseModel], name: str, location: tuple[str, ...], value: object
+    ) -> str:
+        origin = None if location[0] == "time" else self._shared.origin_of(model, name)
+        if origin is not None:
+            return f"= `{origin}`"
         return f"`{json.dumps(value, ensure_ascii=False)}`"
 
 

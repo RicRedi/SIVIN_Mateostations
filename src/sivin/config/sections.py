@@ -134,9 +134,10 @@ class IngestConfig(Section):
         description="Thresholds of the input validation (gross bounds, shares, row counts).",
     )
     quarantine_mode: QuarantineMode = Field(
-        QuarantineMode.COPY,
+        QuarantineMode.MOVE,
         description=(
-            "'copy' (default: the original file stays untouched) or 'move' a rejected export "
+            "'move' (default: a rejected export leaves the download directory, so it is not "
+            "rejected again on every run) or 'copy' (the original stays) a rejected export "
             "into paths.quarantine_dir (no unit)."
         ),
     )

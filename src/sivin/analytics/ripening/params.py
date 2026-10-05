@@ -24,7 +24,10 @@ Shorter than the shortest local day (23 h), so a sample interval crosses at most
 midnight; a sample that is followed by a longer gap is not meant to stand for it anyway.
 """
 
-DEFAULT_MAX_SAMPLE_DURATION_S: Final = 2.5 * DEFAULT_SAMPLING_INTERVAL_S
+MAX_SAMPLE_DURATION_FACTOR: Final = 2.5
+"""Default ``max_sample_duration_s`` in nominal sampling intervals (see below)."""
+
+DEFAULT_MAX_SAMPLE_DURATION_S: Final = MAX_SAMPLE_DURATION_FACTOR * DEFAULT_SAMPLING_INTERVAL_S
 """Default longest step to the next sample that still counts in full, in seconds (4575 s).
 
 Project default ``[to be tuned]``: 2.5 times the nominal interval of 1830 s, so one missed

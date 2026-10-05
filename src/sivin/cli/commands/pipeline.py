@@ -141,6 +141,8 @@ def run(
         zone = ZoneInfo(services.workspace.config.time.display_timezone)
         year = season if season is not None else services.clock().astimezone(zone).year
         report = services.run_service(dry_run, skip_fetch, headed).run(year, wanted)
+    if report.fetch_note is not None:
+        typer.echo(f"Note: {report.fetch_note}.")
     echo_failures(report.fetch_failures)
     echo_ingest(report.ingest)
     echo_quality(report.quality)

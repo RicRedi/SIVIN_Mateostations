@@ -29,7 +29,7 @@ apply.
 | `ingest.portal` | `PortalSettings` (`sivin.ingest.portal`) | portal URL, names, selectors, timeouts, browser, download directory ([ingest.md](ingest.md)) |
 | `ingest.parsers` | `ParserSettings` (`sivin.ingest.parsers.columns`) | column aliases and units, order detection, plausible times ([data-format.md](data-format.md)) |
 | `ingest.validation` | `ValidationSettings` (`sivin.ingest.validation`) | thresholds of the input validation |
-| `ingest.quarantine_mode`, `ingest.file_patterns` | `IngestConfig` (`sivin.config.sections`) | copy or move rejected files; files of `sivin ingest --from-dir` |
+| `ingest.quarantine_mode`, `ingest.file_patterns` | `IngestConfig` (`sivin.config.sections`) | move (default) or copy rejected files; files of `sivin ingest --from-dir` |
 | `storage` | `StorageConfig` (`sivin.storage`) | conflict policy, partitioning, recorded conflicts ([storage.md](storage.md)) |
 | `quality` | `QualityPipelineSettings` (`sivin.quality`) | enabled checks, `check_settings` per check, deployment detector ([quality-control.md](quality-control.md)) |
 | `alignment` | `AlignmentConfig` (`sivin.alignment`) | strategy, its `params`, grid step, span ([alignment.md](alignment.md)) |
@@ -61,11 +61,20 @@ Writing one of these fields elsewhere **with a different value** is an error:
 `  quality.check_settings.sampling.expected_interval_s: is set by time.expected_interval_s (1830.0); remove it here or change time.expected_interval_s`.
 The same value is accepted. The reference below shows such fields as `= time.<key>`.
 
-Defaults that are *derived* from the interval but are separate parameters (e.g.
-`quality.check_settings.spike.max_interval_s` = 3 × 1830 s, the duration caps
-`max_sample_duration_s` = 2.5 × 1830 s, `alignment.params.max_gap_s` = 1.5 × 1830 s) are
-computed from the measured 1830 s and do **not** follow a changed `time.expected_interval_s`;
-set them explicitly if the interval changes.
+Defaults that are **multiples of the interval** follow it too (owner decision, WP-1.7
+round 2; `sivin.config.derived`) unless they are set explicitly:
+
+| Key | Default |
+|---|---|
+| `quality.check_settings.spike.min_interval_s` | 1 × `time.expected_interval_s` |
+| `quality.check_settings.spike.max_interval_s`, `quality.check_settings.step.max_interval_s` | 3 × |
+| `quality.check_settings.precip_counter.max_interval_s` | 1.5 × |
+| `alignment.params.max_gap_s` (linear interpolation) | 1.5 × |
+| `analytics.indices.<id>.sampling.max_sample_duration_s` | 2.5 × |
+
+The reference below shows them as `= <factor> x time.expected_interval_s`. A validation error
+that names one of these fields (e.g. an explicit duration cap below the nominal interval) adds
+the value of `time.expected_interval_s` and the rule, so the message explains the relation.
 
 `offsite_log.timezone` is not shared: it is the zone of the times the owner writes into the
 log.
@@ -78,7 +87,7 @@ and completed with every default (`sivin.config.registered`):
 
 | Mapping | Keys | Model |
 |---|---|---|
-| `quality.check_settings` | every enabled check (`screening_checks`, `deployed_checks`) | the check's `settings_model`; settings of a check that is not enabled are an error |
+| `quality.check_settings` | every enabled check (`screening_checks`, `deployed_checks`) | the check's `settings_model`; settings of an unknown check or of a check that is not enabled are an error at `quality.check_settings.<name>` |
 | `alignment.params` | — | `params_model` of `alignment.strategy` |
 | `analytics.indices` | every registered index (an unknown id is an error) | the index's `params_model` |
 
@@ -229,7 +238,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `ingest.validation.precip_total_max_mm` | `100000.0` | Gross upper bound of the cumulative precipitation counter in mm; only catches garbage and unit mix-ups (the first real export reads 323.0-326.4 mm). Project default, deliberately generous [to be verified]. |
 | `ingest.validation.battery_min_v` | `0.0` | Gross lower bound of the battery voltage in V (a voltage reading below 0 V). |
 | `ingest.validation.battery_max_v` | `10.0` | Gross upper bound of the battery voltage in V; catches millivolts and column mix-ups (the first real export reads 3.0-3.7 V). Project default [to be verified against the device data sheet]. |
-| `ingest.quarantine_mode` | `"copy"` | 'copy' (default: the original file stays untouched) or 'move' a rejected export into paths.quarantine_dir (no unit). |
+| `ingest.quarantine_mode` | `"move"` | 'move' (default: a rejected export leaves the download directory, so it is not rejected again on every run) or 'copy' (the original stays) a rejected export into paths.quarantine_dir (no unit). |
 | `ingest.file_patterns` | `["*.csv", "*.xlsx"]` | Glob patterns (no unit) of the export files sivin ingest --from-dir picks up; browser leftovers (*.crdownload) never match. |
 
 #### `storage`
@@ -257,7 +266,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `quality.check_settings.persistence.rh_saturation_pct` | `97.0` | Relative humidity (%) at or above which the air counts as saturated. A run (temperature or humidity) in which at least saturation_share of the samples are saturated is not flagged: in fog or an inversion both readings legitimately stay constant for many hours. Null disables the exemption. Project default [to be tuned on real data]. |
 | `quality.check_settings.persistence.saturation_share` | `0.5` | Share (0-1, dimensionless) of saturated samples that exempts a run. Project default. |
 | `quality.check_settings.precip_counter.tolerance_mm` | `0.15` | Largest difference in mm between the interval precipitation of a sample and the increase of the counter since the previous sample that still counts as agreement; also the largest counter decrease that is not a reset. Both columns are exported with 0.1 mm resolution and the first real export shows differences of 0.1 mm (MIGRATION_PLAN §0.6.1). Project default [to be tuned]. |
-| `quality.check_settings.precip_counter.max_interval_s` | `2745.0` | Longest time between two consecutive samples in s for which the interval precipitation is compared with the counter increase (1.5 x the nominal interval of 1830 s). After a longer gap the counter also contains the precipitation of samples that are missing. Project default [to be tuned]. |
+| `quality.check_settings.precip_counter.max_interval_s` | = `1.5 x time.expected_interval_s` | Longest time between two consecutive samples in s for which the interval precipitation is compared with the counter increase (1.5 x the nominal interval of 1830 s). After a longer gap the counter also contains the precipitation of samples that are missing. Project default [to be tuned]. |
 | `quality.check_settings.precip_range.precip_min_mm` | `0.0` | Lowest plausible precipitation of one sample interval in mm (physical limit: an amount of precipitation cannot be negative). |
 | `quality.check_settings.precip_range.precip_max_mm` | `50.0` | Highest plausible precipitation of one sample interval (nominal 1830 s, about 30 min) in mm. Project default [to be tuned]: far above the largest value of the first real export (0.9 mm) and meant to catch device or transfer errors, not heavy rain; not taken from literature. |
 | `quality.check_settings.range.temp_physical_min_c` | `-50.0` | Lowest physically plausible air temperature in °C. Project default [to be verified against the sensor data sheet]. |
@@ -271,15 +280,15 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `quality.check_settings.sampling.tolerance_fraction` | `0.25` | Allowed deviation ε of an interval from a whole multiple of Δt0, as a fraction of Δt0 (dimensionless). Project default chosen to tolerate clock drift [to be tuned]. |
 | `quality.check_settings.spike.temp_max_rate_c_per_h` | `8.0` | Largest plausible temperature change rate in °C/h towards and away from a sample; about 4 °C per 30 min interval. Project default for 30-min data [to be tuned on real data]; methodology Zahumenský (2004). |
 | `quality.check_settings.spike.rh_max_rate_pct_per_h` | `40.0` | Largest plausible relative-humidity change rate in %/h; about 20 % per 30 min interval. Project default [to be tuned on real data]; methodology Zahumenský (2004). |
-| `quality.check_settings.spike.min_interval_s` | `1830.0` | Intervals shorter than this (s) are scaled as if they were this long, so that closely spaced samples do not get tiny thresholds. Default: nominal interval 1830 s. |
-| `quality.check_settings.spike.max_interval_s` | `5490.0` | A neighbour farther away than this (s) cannot confirm a spike (the series may have changed during the gap). Project default: three nominal intervals. |
+| `quality.check_settings.spike.min_interval_s` | = `1 x time.expected_interval_s` | Intervals shorter than this (s) are scaled as if they were this long, so that closely spaced samples do not get tiny thresholds. Default: nominal interval 1830 s. |
+| `quality.check_settings.spike.max_interval_s` | = `3 x time.expected_interval_s` | A neighbour farther away than this (s) cannot confirm a spike (the series may have changed during the gap). Project default: three nominal intervals. |
 | `quality.check_settings.step.temp_min_jump_c` | `5.0` | Smallest temperature change between two consecutive samples (°C) that is examined as a step. Project default for 30-min data [to be tuned on real data]. |
 | `quality.check_settings.step.rh_min_jump_pct` | `25.0` | Smallest relative-humidity change between two consecutive samples (%) that is examined as a step. Project default [to be tuned on real data]. |
 | `quality.check_settings.step.window_s` | `10800.0` | Length (s) of the windows before and after a jump. Project default 3 h. |
 | `quality.check_settings.step.min_window_samples` | `3` | Fewest valid samples (count) each window needs. Project default. |
 | `quality.check_settings.step.persistence_fraction` | `0.5` | Share (0-1, dimensionless) of the jump that the median level after it must keep relative to the median level before it. Project default. |
 | `quality.check_settings.step.max_adjacent_fraction` | `0.4` | Largest change (as a share 0-1 of the jump, dimensionless) allowed in each of the two neighbouring intervals: a sensor step happens within one interval, a weather front (e.g. -10 °C within 1 h) spreads over several. Project default. |
-| `quality.check_settings.step.max_interval_s` | `5490.0` | Jumps across a longer interval (s) are not examined (the level may have changed during the gap). Project default: three nominal intervals. |
+| `quality.check_settings.step.max_interval_s` | = `3 x time.expected_interval_s` | Jumps across a longer interval (s) are not examined (the level may have changed during the gap). Project default: three nominal intervals. |
 | `quality.detect_deployment` | `true` | Run deployment detection (advisory by default, see deployment.mode); if false, only the off-site log decides which samples are off site. |
 | `quality.deployment.mode` | `"advisory"` | 'advisory' (default, owner decision 2026-10-05): only warnings, no flags; the off-site log is the source of truth for PRE_DEPLOYMENT. 'enforce': detected indoor samples get PRE_DEPLOYMENT (behaviour of WP-1.5). No unit. |
 | `quality.deployment.log_tolerance_s` | `21600.0` | Advisory mode: a detected indoor period counts as covered by the off-site log if a logged period (touching periods merged) contains it after widening by this many seconds on both sides. Project default 6 h, the same as known_tolerance_s [to be tuned on real data]. |
@@ -320,7 +329,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | Key | Default | Description |
 |---|---|---|
 | `alignment.strategy` | `"nearest_within_tolerance"` | Registered alignment strategy (identifier, no unit): 'nearest_within_tolerance' or 'linear_interpolation'. |
-| `alignment.params (linear_interpolation).max_gap_s` | `2745.0` | Largest distance in seconds (inclusive) between the two usable samples that enclose a grid point for it to be interpolated. Default 1.5 x 1830 s = 2745 s (neighbouring samples only); project choice, to be verified on real data. |
+| `alignment.params (linear_interpolation).max_gap_s` | = `1.5 x time.expected_interval_s` | Largest distance in seconds (inclusive) between the two usable samples that enclose a grid point for it to be interpolated. Default 1.5 x 1830 s = 2745 s (neighbouring samples only); project choice, to be verified on real data. |
 | `alignment.params (nearest_within_tolerance).tolerance_s` | `null` | Explicit override of the largest distance in seconds (inclusive) between a grid point and the sample assigned to it. Default (null): expected_interval_s / 2 + margin_s. |
 | `alignment.params (nearest_within_tolerance).expected_interval_s` | = `time.expected_interval_s` | Nominal sampling interval of the sensors in seconds. Set from time.expected_interval_s by the configuration (WP-1.7); default 1830 s, the median step of the first real export. |
 | `alignment.params (nearest_within_tolerance).margin_s` | `20.0` | Margin in seconds added to half the sampling interval for clock jitter; default 20 s, project choice [to be tuned on real data]. |
@@ -358,7 +367,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.botrytis_broome.season.end_month` | `10` | Month of the last day (1-12). |
 | `analytics.indices.botrytis_broome.season.end_day` | `31` | Day of month of the last day (1-31). |
 | `analytics.indices.botrytis_broome.sampling.nominal_interval_s` | = `time.expected_interval_s` | Nominal sampling interval in seconds (s). Duration of the last sample of a series and of a sample followed by a data gap. Set from time.expected_interval_s by the configuration (WP-1.7); default 1830 s, the median step of the first real export (sivin.core.defaults.DEFAULT_SAMPLING_INTERVAL_S). |
-| `analytics.indices.botrytis_broome.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample in seconds (s) that still counts as continuous data; a longer step is a data gap. Default 2.5 x 1830 s = 4575 s (project default: bridges one missing sample), to be tuned on real data. |
+| `analytics.indices.botrytis_broome.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample in seconds (s) that still counts as continuous data; a longer step is a data gap. Default 2.5 x 1830 s = 4575 s (project default: bridges one missing sample), to be tuned on real data. |
 | `analytics.indices.budburst.daily_mean` | `"minmax"` | Definition of the daily mean temperature (°C): 'minmax' = (T_max + T_min) / 2, the Winkler convention (Amerine and Winkler, 1944), or 'sample_mean' = mean of all valid samples of the local day. |
 | `analytics.indices.budburst.base_temp_c` | `5.0` | Base temperature in °C; project default [to be verified] (models compared by García de Cortázar-Atauri et al., 2009, use various bases). |
 | `analytics.indices.budburst.period` | `{"start": {"month": 1, "day": 1}, "end": {"month": 6, "day": 30}}` | Prediction period (local dates); January 1 - June 30 is a project default. |
@@ -370,7 +379,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.dew_point.period_end` | `"10-31"` | Last day of the period (MM-DD); October 31, growing season (Amerine & Winkler 1944). Project choice [to be tuned]. |
 | `analytics.indices.dew_point.magnus_a` | `17.625` | Magnus coefficient a (dimensionless); 17.625 (Alduchov & Eskridge 1996). |
 | `analytics.indices.dew_point.magnus_b_c` | `243.04` | Magnus coefficient b in °C; 243.04 (Alduchov & Eskridge 1996). |
-| `analytics.indices.dew_point.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
+| `analytics.indices.dew_point.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
 | `analytics.indices.dew_point.sampling.nominal_interval_s` | = `time.expected_interval_s` | Time (s) represented by a sample followed by a gap and by the last sample of a series. Set from time.expected_interval_s by the configuration (WP-1.7); default the nominal sampling interval of 1830 s (median step of the first real export). |
 | `analytics.indices.dtr_ripening.period_start` | `"08-01"` | First day of the ripening window (MM-DD) when no start_date is given. Project default August 1 [to be tuned]. |
 | `analytics.indices.dtr_ripening.period_end` | `"09-30"` | Last day of the ripening window (MM-DD). Project default September 30 [to be tuned]. |
@@ -380,7 +389,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.frost.frost_c` | `0.0` | Frost threshold in °C (T at or below it). Plan §3.2 default. |
 | `analytics.indices.frost.hard_frost_c` | `-2.0` | Hard-frost threshold in °C (T at or below it). Project default (plan §3.2), not a literature value; stage-dependent critical temperatures: Poling (2008). |
 | `analytics.indices.frost.after_date` | `null` | First day (date) from which frost is critical, e.g. the modelled budburst; must lie in the computed season year; None = no critical-frost figures. |
-| `analytics.indices.frost.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
+| `analytics.indices.frost.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
 | `analytics.indices.frost.sampling.nominal_interval_s` | = `time.expected_interval_s` | Time (s) represented by a sample followed by a gap and by the last sample of a series. Set from time.expected_interval_s by the configuration (WP-1.7); default the nominal sampling interval of 1830 s (median step of the first real export). |
 | `analytics.indices.gdd_winkler.daily_mean` | `"minmax"` | Definition of the daily mean temperature (°C): 'minmax' = (T_max + T_min) / 2, the Winkler convention (Amerine and Winkler, 1944), or 'sample_mean' = mean of all valid samples of the local day. |
 | `analytics.indices.gdd_winkler.max_missing_days` | `0` | Maximum number of incomplete days (d) in the period for which the sum is still classified; incomplete days contribute nothing, so the sum is biased low. Project default 0, to be tuned on real data. |
@@ -409,7 +418,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.heat_hours.optimum_max_c` | `30.0` | Upper bound of the optimum band in °C (inclusive). Project default (plan §3.2), not a literature value. |
 | `analytics.indices.heat_hours.heat_stress_c` | `30.0` | Heat-stress threshold in °C (T above it). Project default (plan §3.2); light-saturated leaf photosynthesis of Semillon was optimal at 30 °C (Greer & Weedon 2012, abstract). |
 | `analytics.indices.heat_hours.extreme_heat_c` | `35.0` | Extreme-heat threshold in °C (T above it). Project default (plan §3.2); a 35 °C daily maximum halved berry anthocyanins vs 25 °C (Mori et al. 2007, abstract). |
-| `analytics.indices.heat_hours.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
+| `analytics.indices.heat_hours.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
 | `analytics.indices.heat_hours.sampling.nominal_interval_s` | = `time.expected_interval_s` | Time (s) represented by a sample followed by a gap and by the last sample of a series. Set from time.expected_interval_s by the configuration (WP-1.7); default the nominal sampling interval of 1830 s (median step of the first real export). |
 | `analytics.indices.huglin.daily_mean` | `"minmax"` | Definition of the daily mean temperature (°C): 'minmax' = (T_max + T_min) / 2, the Winkler convention (Amerine and Winkler, 1944), or 'sample_mean' = mean of all valid samples of the local day. |
 | `analytics.indices.huglin.max_missing_days` | `0` | Maximum number of incomplete days (d) in the period for which the sum is still classified; incomplete days contribute nothing, so the sum is biased low. Project default 0, to be tuned on real data. |
@@ -439,7 +448,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.powdery_mildew_gt.season.end_month` | `10` | Month of the last day (1-12). |
 | `analytics.indices.powdery_mildew_gt.season.end_day` | `31` | Day of month of the last day (1-31). |
 | `analytics.indices.powdery_mildew_gt.sampling.nominal_interval_s` | = `time.expected_interval_s` | Nominal sampling interval in seconds (s). Duration of the last sample of a series and of a sample followed by a data gap. Set from time.expected_interval_s by the configuration (WP-1.7); default 1830 s, the median step of the first real export (sivin.core.defaults.DEFAULT_SAMPLING_INTERVAL_S). |
-| `analytics.indices.powdery_mildew_gt.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample in seconds (s) that still counts as continuous data; a longer step is a data gap. Default 2.5 x 1830 s = 4575 s (project default: bridges one missing sample), to be tuned on real data. |
+| `analytics.indices.powdery_mildew_gt.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample in seconds (s) that still counts as continuous data; a longer step is a data gap. Default 2.5 x 1830 s = 4575 s (project default: bridges one missing sample), to be tuned on real data. |
 | `analytics.indices.tropical_days_nights.period_start` | `"01-01"` | First day of the counting period (MM-DD); January 1 (calendar year). |
 | `analytics.indices.tropical_days_nights.period_end` | `"12-31"` | Last day of the counting period (MM-DD); December 31 (calendar year). |
 | `analytics.indices.tropical_days_nights.tropical_day_tmax_c` | `30.0` | Tropical day: daily T_max >= this value, °C (ČHMÚ). |
@@ -452,7 +461,7 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.vpd.threshold_kpa` | `2.0` | VPD threshold in kPa for the hours above it. Project default [to be tuned]; not taken from literature. |
 | `analytics.indices.vpd.daytime_start_hour` | `null` | First local clock hour (h, 0-23) of the daytime mean; None = no daytime mean. |
 | `analytics.indices.vpd.daytime_end_hour` | `null` | Local clock hour (h, 1-24) at which the daytime window ends (exclusive). |
-| `analytics.indices.vpd.sampling.max_sample_duration_s` | `4575.0` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
+| `analytics.indices.vpd.sampling.max_sample_duration_s` | = `2.5 x time.expected_interval_s` | Longest step to the next sample (s) that the sample represents in full; a longer step is a gap and the sample counts only nominal_interval_s. Project default 4575 s = 2.5 x 1830 s [to be tuned]. |
 | `analytics.indices.vpd.sampling.nominal_interval_s` | = `time.expected_interval_s` | Time (s) represented by a sample followed by a gap and by the last sample of a series. Set from time.expected_interval_s by the configuration (WP-1.7); default the nominal sampling interval of 1830 s (median step of the first real export). |
 | `analytics.indices.winter_freeze.dormant_start` | `"11-01"` | First day of the dormant season in the previous year (MM-DD); November 1, project default [to be tuned]. |
 | `analytics.indices.winter_freeze.dormant_end` | `"03-31"` | Last day of the dormant season in the season year (MM-DD); March 31, project default [to be tuned]. |

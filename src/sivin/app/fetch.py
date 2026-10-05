@@ -13,7 +13,7 @@ from pathlib import Path
 
 from selenium.common.exceptions import WebDriverException
 
-from sivin.app.outcome import Outcome, SetupError
+from sivin.app.outcome import Outcome, SourceUnavailableError
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.client import PortalClient
 from sivin.ingest.portal.credentials import PortalCredentials
@@ -107,20 +107,22 @@ class FetchService:
 
         Raises
         ------
-        SetupError
+        SourceUnavailableError
             If the credentials are missing, the browser cannot start, the login fails or the
             device list cannot be read. The message never contains the credentials.
         """
         try:
             credentials = self._credentials()
         except MissingCredentialsError as error:
-            raise SetupError(str(error)) from error
+            raise SourceUnavailableError(str(error)) from error
         self._settings.download_dir.mkdir(parents=True, exist_ok=True)
         client = PortalClient(self._settings, credentials, self._drivers(self._settings))
         try:
             result = PortalSession(client).run(sensors)
         except (PortalError, WebDriverException, OSError) as error:
-            raise SetupError(f"Portal session failed: {type(error).__name__}: {error}") from error
+            raise SourceUnavailableError(
+                f"Portal session failed: {type(error).__name__}: {error}"
+            ) from error
         logger.info(
             "Fetched %d export(s) into %s; %d device(s) failed.",
             len(result.downloads),

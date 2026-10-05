@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from sivin.storage.atomic import AtomicFileWriter
+
+logger = logging.getLogger(__name__)
 
 
 class JsonFileWriter:
@@ -70,3 +73,30 @@ def finite(value: object) -> object:
     if isinstance(value, Sequence) and not isinstance(value, str):
         return [finite(item) for item in value]
     return value
+
+
+def read_document(path: Path) -> dict[str, Any] | None:
+    """Read a JSON object written earlier, for an update in place.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The file.
+
+    Returns
+    -------
+    dict or None
+        The object; ``None`` if the file does not exist, or (with a warning) if it cannot be
+        read or is not a JSON object, so that a broken file is replaced, never merged.
+    """
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        logger.warning("%s cannot be read (%s); it is replaced.", path, error)
+        return None
+    if not isinstance(document, dict):
+        logger.warning("%s is not a JSON object; it is replaced.", path)
+        return None
+    return document

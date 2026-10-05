@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import typer
 
 from sivin.cli.common import echo_failures
+
+NO_STORED_DATA: Final = "No stored data."
+"""Printed when there is nothing to check or compute (e.g. the data branch is not checked out)."""
 
 if TYPE_CHECKING:
     from sivin.app.indices import IndicesReport
@@ -52,6 +55,8 @@ def echo_quality(report: QualityReport) -> None:
     report : QualityReport
         Result of the QC step.
     """
+    if not report.sensors:
+        typer.echo(NO_STORED_DATA)
     for sensor, item in report.sensors.items():
         if item.result is None:
             if item.failure is None:
@@ -80,6 +85,8 @@ def echo_indices(report: IndicesReport) -> None:
         Result of the indices step.
     """
     typer.echo(f"Season {report.window.season} (data {report.window.first}..{report.window.last})")
+    if not report.changes:
+        typer.echo(f"{NO_STORED_DATA[:-1]} for this season; nothing written.")
     for sensor, results in report.results.items():
         for index_id, result in results.items():
             value = "-" if result.value is None else f"{result.value:.6g} {result.unit}"

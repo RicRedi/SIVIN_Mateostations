@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final
@@ -13,9 +13,9 @@ from typing import Any, Final
 import pandas as pd
 
 from sivin.analytics.base import ClimateIndex, IndexContext, IndexRegistry, IndexResult
-from sivin.app.json_files import JsonFileWriter
+from sivin.app.json_files import JsonFileWriter, read_document
 from sivin.app.outcome import Outcome, UnknownIndexError
-from sivin.app.quality import SENSOR_ERRORS, QualityService
+from sivin.app.quality import SENSOR_ERRORS, STATUS_FAILED, STATUS_OK, QualityService, iso_utc
 from sivin.config.sections import AnalyticsConfig, TimeConfig
 from sivin.core.daily import DailyWeather
 from sivin.core.ids import SensorId
@@ -230,19 +230,21 @@ class IndexSelection:
         }
 
 
-def result_dict(result: IndexResult) -> dict[str, object]:
+def result_dict(result: IndexResult, computed_at: datetime) -> dict[str, object]:
     """Return one index result as JSON data (format in ``docs/storage.md``).
 
     Parameters
     ----------
     result : IndexResult
         The result.
+    computed_at : datetime.datetime
+        Time of the computation (aware).
 
     Returns
     -------
     dict
         ``value``, ``unit``, ``coverage``, ``complete``, ``class``, ``estimated``,
-        ``details`` (the daily curve is not written).
+        ``details``, ``status`` (``"ok"``) and ``computed_at`` (the daily curve is not written).
     """
     return {
         "value": result.value,
@@ -252,6 +254,8 @@ def result_dict(result: IndexResult) -> dict[str, object]:
         "class": result.classification,
         "estimated": result.estimated,
         "details": dict(result.details),
+        "status": STATUS_OK,
+        "computed_at": iso_utc(pd.Timestamp(computed_at)),
     }
 
 
@@ -265,47 +269,121 @@ class IndicesReport:
         The season and the local days loaded.
     results : Mapping of SensorId to Mapping of str to IndexResult
         Results per sensor and index id; sensors without data in the window are absent.
+    errors : Mapping of SensorId to Mapping of str to str
+        Index id → why it failed, per sensor (a failed sensor lists every selected index).
     failures : tuple of str
         One message per sensor or index that failed.
     file : pathlib.Path or None
-        The results file (``None`` in a dry run).
+        The results file, if it was written (not in a dry run, not without any result).
     """
 
     window: SeasonWindow
     results: Mapping[SensorId, Mapping[str, IndexResult]] = field(default_factory=dict)
+    errors: Mapping[SensorId, Mapping[str, str]] = field(default_factory=dict)
     failures: tuple[str, ...] = ()
     file: Path | None = None
 
     def __post_init__(self) -> None:
         frozen = {sensor: MappingProxyType(dict(r)) for sensor, r in self.results.items()}
         object.__setattr__(self, "results", MappingProxyType(frozen))
+        errors = {sensor: MappingProxyType(dict(e)) for sensor, e in self.errors.items()}
+        object.__setattr__(self, "errors", MappingProxyType(errors))
 
     @property
     def outcome(self) -> Outcome:
         """:attr:`Outcome.PARTIAL_FAILURE` if any sensor or index failed."""
         return Outcome.of(self.failures)
 
-    def document(self) -> dict[str, object]:
-        """Return the content of ``indices/<season>.json``.
+    @property
+    def changes(self) -> bool:
+        """``True`` if there is a result or an error to record."""
+        return bool(self.results) or bool(self.errors)
+
+
+class IndicesWriter:
+    """Update ``<derived>/indices/<season>.json`` in place.
+
+    Only the computed (sensor, index) entries are replaced; every other entry of an existing
+    file stays as it is, so a run restricted with ``--sensor``/``--index`` never removes the
+    results of the others. A failed entry keeps its previous values and gets
+    ``status: "failed"`` and ``error``; its ``computed_at`` stays the time of the last
+    successful computation (``null`` if there was none). A run without any result or error
+    writes nothing.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        The indices directory.
+    writer : JsonFileWriter, optional
+        Writes the JSON atomically.
+    """
+
+    __slots__ = ("_directory", "_writer")
+
+    def __init__(self, directory: Path, writer: JsonFileWriter | None = None) -> None:
+        self._directory = directory
+        self._writer = writer if writer is not None else JsonFileWriter()
+
+    def path_for(self, season: int) -> Path:
+        """Return the file of a season, ``<directory>/<season>.json``.
+
+        Parameters
+        ----------
+        season : int
+            The season year.
 
         Returns
         -------
-        dict
-            ``season``, the loaded local days and ``sensors`` → index id → result.
+        pathlib.Path
+            The file.
         """
-        return {
-            "season": self.window.season,
-            "data_from": self.window.first.isoformat(),
-            "data_to": self.window.last.isoformat(),
-            "sensors": {
-                str(sensor): {index_id: result_dict(r) for index_id, r in results.items()}
-                for sensor, results in self.results.items()
-            },
+        return self._directory / f"{season}{INDICES_SUFFIX}"
+
+    def update(self, report: IndicesReport, computed_at: datetime) -> Path | None:
+        """Merge a report into the season's file.
+
+        Parameters
+        ----------
+        report : IndicesReport
+            Results and errors of the run.
+        computed_at : datetime.datetime
+            Time of the computation (aware).
+
+        Returns
+        -------
+        pathlib.Path or None
+            The file, or ``None`` if the report has nothing to record.
+        """
+        if not report.changes:
+            return None
+        path = self.path_for(report.window.season)
+        document = read_document(path) or {}
+        sensors_doc = document.get("sensors")
+        sensors: dict[str, Any] = dict(sensors_doc) if isinstance(sensors_doc, dict) else {}
+        for sensor, results in report.results.items():
+            entries = dict(sensors.get(str(sensor), {}))
+            for index_id, result in results.items():
+                entries[index_id] = result_dict(result, computed_at)
+            sensors[str(sensor)] = entries
+        for sensor, errors in report.errors.items():
+            entries = dict(sensors.get(str(sensor), {}))
+            for index_id, error in errors.items():
+                previous = entries.get(index_id)
+                entry = dict(previous) if isinstance(previous, dict) else {"computed_at": None}
+                entry.update(status=STATUS_FAILED, error=error)
+                entries[index_id] = entry
+            sensors[str(sensor)] = entries
+        updated = {
+            "season": report.window.season,
+            "data_from": report.window.first.isoformat(),
+            "data_to": report.window.last.isoformat(),
+            "sensors": dict(sorted(sensors.items())),
         }
+        return self._writer.write(path, updated)
 
 
 class IndicesService:
-    """Compute the climate indices of a season for every sensor and write them.
+    """Compute the climate indices of a season for every sensor and update its file.
 
     The measurements are quality-controlled over the sensor's whole record first (the same
     flags as ``sivin qc``), then cut to the season window.
@@ -318,30 +396,30 @@ class IndicesService:
         Builds the index context.
     selection : IndexSelection
         The configured indices.
-    directory : pathlib.Path
-        Where ``<season>.json`` is written.
-    writer : JsonFileWriter, optional
-        Writes the JSON atomically.
+    writer : IndicesWriter
+        Updates ``<season>.json``.
+    clock : callable
+        Current time (aware).
     dry_run : bool, optional
         Compute, but write no file.
     """
 
-    __slots__ = ("_contexts", "_directory", "_dry_run", "_quality", "_selection", "_writer")
+    __slots__ = ("_clock", "_contexts", "_dry_run", "_quality", "_selection", "_writer")
 
     def __init__(
         self,
         quality: QualityService,
         contexts: IndexContextFactory,
         selection: IndexSelection,
-        directory: Path,
-        writer: JsonFileWriter | None = None,
+        writer: IndicesWriter,
+        clock: Callable[[], datetime],
         dry_run: bool = False,
     ) -> None:
         self._quality = quality
         self._contexts = contexts
         self._selection = selection
-        self._directory = directory
-        self._writer = writer if writer is not None else JsonFileWriter()
+        self._writer = writer
+        self._clock = clock
         self._dry_run = dry_run
 
     def run(
@@ -351,7 +429,7 @@ class IndicesService:
         index_ids: Sequence[str] | None = None,
         checked: Mapping[SensorId, QualityResult] | None = None,
     ) -> IndicesReport:
-        """Compute and write the indices of one season.
+        """Compute the indices of one season and update its file.
 
         Parameters
         ----------
@@ -368,7 +446,7 @@ class IndicesService:
         Returns
         -------
         IndicesReport
-            Results, failures and the file written.
+            Results, errors and the file written.
 
         Raises
         ------
@@ -379,6 +457,7 @@ class IndicesService:
         window = SeasonWindow.of(season)
         start, end = window.bounds_utc(self._contexts.timezone)
         results: dict[SensorId, dict[str, IndexResult]] = {}
+        errors: dict[SensorId, dict[str, str]] = {}
         failures: list[str] = []
         for sensor_id in self._quality.sensors(sensors):
             try:
@@ -392,24 +471,29 @@ class IndicesService:
             except SENSOR_ERRORS as error:
                 logger.error("Indices of sensor %s: %s", sensor_id, error)
                 failures.append(f"indices {sensor_id}: {error}")
+                errors[sensor_id] = dict.fromkeys(indices, str(error))
                 continue
-            results[sensor_id] = self._compute(context, indices, failures)
-        report = IndicesReport(window, results, tuple(failures))
+            computed, failed = self._compute(context, indices, failures)
+            results[sensor_id] = computed
+            if failed:
+                errors[sensor_id] = failed
+        report = IndicesReport(window, results, errors, tuple(failures))
         if self._dry_run:
             return report
-        path = self._directory / f"{season}{INDICES_SUFFIX}"
-        self._writer.write(path, report.document())
-        return IndicesReport(window, report.results, report.failures, path)
+        path = self._writer.update(report, self._clock())
+        return IndicesReport(window, report.results, report.errors, report.failures, path)
 
     @staticmethod
     def _compute(
         context: IndexContext, indices: Mapping[str, ClimateIndex[Any]], failures: list[str]
-    ) -> dict[str, IndexResult]:
+    ) -> tuple[dict[str, IndexResult], dict[str, str]]:
         computed: dict[str, IndexResult] = {}
+        failed: dict[str, str] = {}
         for index_id, index in indices.items():
             try:
                 computed[index_id] = index.compute(context)
             except SENSOR_ERRORS as error:
                 logger.error("Index %s of sensor %s: %s", index_id, context.sensor_id, error)
                 failures.append(f"indices {context.sensor_id} {index_id}: {error}")
-        return computed
+                failed[index_id] = str(error)
+        return computed, failed

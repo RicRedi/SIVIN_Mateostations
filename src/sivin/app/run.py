@@ -11,7 +11,7 @@ from typing import Protocol
 
 from sivin.app.indices import IndicesReport, IndicesService
 from sivin.app.ingest import IngestReport, IngestService
-from sivin.app.outcome import Outcome, SetupError
+from sivin.app.outcome import Outcome, SourceUnavailableError
 from sivin.app.quality import QualityReport, QualityService
 from sivin.core.ids import SensorId
 from sivin.storage.runlog import RunLog, RunRecord
@@ -42,8 +42,8 @@ class ExportSource(Protocol):
 
         Raises
         ------
-        SetupError
-            If nothing can be fetched at all (credentials, login).
+        SourceUnavailableError
+            If nothing can be fetched at all (credentials, login, portal unreachable).
         """
         ...
 
@@ -130,6 +130,10 @@ class RunReport:
         The run-log record (written unless ``dry_run``).
     dry_run : bool
         Nothing was written.
+    source_unavailable : bool
+        The portal could not be used at all (credentials, login, unreachable).
+    fetch_note : str or None
+        Why the portal was not used, e.g. ``"fetch skipped in dry-run"``.
     """
 
     fetch_failures: tuple[str, ...]
@@ -138,17 +142,23 @@ class RunReport:
     indices: IndicesReport
     record: RunRecord
     dry_run: bool = False
+    source_unavailable: bool = False
+    fetch_note: str | None = None
 
     @property
     def outcome(self) -> Outcome:
-        """The most severe outcome of the steps."""
+        """The most severe outcome of the steps.
+
+        :attr:`Outcome.DATA_SOURCE_UNAVAILABLE` (4) when the portal could not be used,
+        otherwise :attr:`Outcome.PARTIAL_FAILURE` (1) if any step failed.
+        """
+        fetch = (
+            Outcome.DATA_SOURCE_UNAVAILABLE
+            if self.source_unavailable
+            else Outcome.of(self.fetch_failures)
+        )
         return Outcome.worst(
-            (
-                Outcome.of(self.fetch_failures),
-                self.ingest.outcome,
-                self.quality.outcome,
-                self.indices.outcome,
-            )
+            (fetch, self.ingest.outcome, self.quality.outcome, self.indices.outcome)
         )
 
 
@@ -171,9 +181,20 @@ class RunService:
         Current time (aware).
     dry_run : bool, optional
         Write nothing (the services must be built with the same flag).
+    fetch_note : str, optional
+        Set when ``source`` is not the portal (dry run, ``--skip-fetch``); reported and logged.
     """
 
-    __slots__ = ("_clock", "_dry_run", "_indices", "_ingest", "_quality", "_recorder", "_source")
+    __slots__ = (
+        "_clock",
+        "_dry_run",
+        "_fetch_note",
+        "_indices",
+        "_ingest",
+        "_quality",
+        "_recorder",
+        "_source",
+    )
 
     def __init__(
         self,
@@ -184,7 +205,9 @@ class RunService:
         recorder: RunRecorder,
         clock: Clock,
         dry_run: bool = False,
+        fetch_note: str | None = None,
     ) -> None:
+        self._fetch_note = fetch_note
         self._source = source
         self._ingest = ingest
         self._quality = quality
@@ -197,7 +220,8 @@ class RunService:
         """Run the pipeline.
 
         A portal failure (missing credentials, failed login) is recorded and the run goes on
-        with the data already stored, so a broken portal never removes data (plan WP-4.1).
+        with the data already stored, so a broken portal never removes data (plan WP-4.1);
+        the run then ends with :attr:`Outcome.DATA_SOURCE_UNAVAILABLE`.
 
         Parameters
         ----------
@@ -212,17 +236,18 @@ class RunService:
             The report of every step and the run-log record.
         """
         started_at = self._clock()
+        unavailable = False
+        if self._fetch_note is not None:
+            logger.info("%s.", self._fetch_note.capitalize())
         try:
             files, fetch_failures = self._source.exports(sensors)
-        except SetupError as error:
+        except SourceUnavailableError as error:
             logger.error("Fetching failed, continuing with the stored data: %s", error)
-            files, fetch_failures = (), (f"fetch: {error}",)
+            files, fetch_failures, unavailable = (), (f"fetch: {error}",), True
         ingest = self._ingest.ingest(files)
         quality = self._quality.run(sensors)
         checked = {
-            sensor: item.result
-            for sensor, item in quality.sensors.items()
-            if item.result is not None
+            sensor: item.whole for sensor, item in quality.sensors.items() if item.whole is not None
         }
         indices = self._indices.run(season, sensors, checked=checked)
         record = RunRecorder.record(
@@ -234,4 +259,13 @@ class RunService:
         if not self._dry_run:
             path = self._recorder.write(record)
             logger.info("Run recorded in %s.", path)
-        return RunReport(tuple(fetch_failures), ingest, quality, indices, record, self._dry_run)
+        return RunReport(
+            tuple(fetch_failures),
+            ingest,
+            quality,
+            indices,
+            record,
+            self._dry_run,
+            unavailable,
+            self._fetch_note,
+        )

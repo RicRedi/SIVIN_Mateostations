@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from typing import Final
 
 import numpy as np
 import numpy.typing as npt
@@ -23,7 +24,10 @@ from sivin.quality.samples import S_PER_H, FloatArray, SampleArrays, Variable
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_NEIGHBOUR_INTERVAL_S = 3 * DEFAULT_SAMPLING_INTERVAL_S
+MAX_NEIGHBOUR_INTERVAL_FACTOR: Final = 3.0
+"""``max_interval_s`` in nominal sampling intervals (project default: three intervals)."""
+
+DEFAULT_MAX_NEIGHBOUR_INTERVAL_S = MAX_NEIGHBOUR_INTERVAL_FACTOR * DEFAULT_SAMPLING_INTERVAL_S
 """Neighbours farther apart than three nominal intervals are not used (project default)."""
 
 

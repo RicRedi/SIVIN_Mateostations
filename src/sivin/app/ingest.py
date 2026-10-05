@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 import shutil
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -43,6 +44,12 @@ UNREGISTERED_SENSOR_RULE: Final = "sensor-registered"
 
 UNSUPPORTED_FORMAT_RULE: Final = "export-format"
 """Rule id given to a file that no registered parser accepts."""
+
+UNREADABLE_FILE_RULE: Final = "file-readable"
+"""Rule id given to a file that cannot be read at all (e.g. permission denied)."""
+
+COLLISION_TIME_FORMAT: Final = "%Y%m%dT%H%M%SZ"
+"""UTC time suffix of a quarantined file whose name is taken."""
 
 
 class ExportReader:
@@ -91,26 +98,36 @@ class ExportReader:
 class Quarantine:
     """Keeps rejected export files together with their validation report.
 
-    ``<directory>/<file name>`` is the file (copied or moved) and
-    ``<directory>/<file name>.report.json`` its report: file, reason and every finding.
+    ``<directory>/<file name>`` is the file (moved by default, or copied) and
+    ``<directory>/<file name>.report.json`` its report: file, reason and every finding. When a
+    file of that name is already in quarantine, the new one gets the suffix
+    ``_<YYYYMMDDTHHMMSSZ>`` (UTC time of quarantining) before its extension, plus ``_<n>`` if
+    that name is taken too; nothing is overwritten.
 
     Parameters
     ----------
     directory : pathlib.Path
         Quarantine directory (``paths.quarantine_dir``).
     mode : QuarantineMode
-        Copy (default) or move the file.
+        Move (default: a rejected download is not rejected again on the next run) or copy.
+    clock : callable
+        Current time (aware), for the collision suffix.
     writer : JsonFileWriter, optional
         Writes the report.
     """
 
-    __slots__ = ("_directory", "_mode", "_writer")
+    __slots__ = ("_clock", "_directory", "_mode", "_writer")
 
     def __init__(
-        self, directory: Path, mode: QuarantineMode, writer: JsonFileWriter | None = None
+        self,
+        directory: Path,
+        mode: QuarantineMode,
+        clock: Callable[[], datetime],
+        writer: JsonFileWriter | None = None,
     ) -> None:
         self._directory = directory
         self._mode = mode
+        self._clock = clock
         self._writer = writer if writer is not None else JsonFileWriter()
 
     def put(self, path: Path, report: ValidationReport) -> Path:
@@ -126,11 +143,16 @@ class Quarantine:
         Returns
         -------
         pathlib.Path
-            The quarantined copy (or moved file).
+            The quarantined file.
+
+        Raises
+        ------
+        OSError
+            If the file cannot be copied or moved, or the report cannot be written.
         """
         self._directory.mkdir(parents=True, exist_ok=True)
-        target = self._directory / path.name
-        if path.resolve() != target.resolve():
+        target = self._target(path)
+        if target != path:
             if self._mode is QuarantineMode.MOVE:
                 shutil.move(path, target)
             else:
@@ -144,8 +166,21 @@ class Quarantine:
                 "issues": [_issue_dict(issue) for issue in report.issues],
             },
         )
-        logger.warning("Quarantined %s (%s) in %s.", path.name, self._mode, self._directory)
+        logger.warning("Quarantined %s (%s) as %s.", path.name, self._mode, target)
         return target
+
+    def _target(self, path: Path) -> Path:
+        """Return a free name in the quarantine (the file itself if it is already there)."""
+        target = self._directory / path.name
+        if path.resolve() == target.resolve() or not target.exists():
+            return target
+        stamp = self._clock().astimezone(UTC).strftime(COLLISION_TIME_FORMAT)
+        candidate = target.with_name(f"{target.stem}_{stamp}{target.suffix}")
+        number = 1
+        while candidate.exists():
+            number += 1
+            candidate = target.with_name(f"{target.stem}_{stamp}_{number}{target.suffix}")
+        return candidate
 
 
 def _issue_dict(issue: ValidationIssue) -> dict[str, object]:
@@ -297,18 +332,32 @@ class IngestService:
         return IngestReport(tuple(self._one(path) for path in paths), self._dry_run)
 
     def _one(self, path: Path) -> FileOutcome:
-        parsed = self._reader.read(path)
+        try:
+            parsed = self._reader.read(path)
+        except OSError as error:
+            issue = ValidationIssue(UNREADABLE_FILE_RULE, Severity.ERROR, f"cannot read: {error}")
+            parsed = ParsedExport((), path, ValidationReport((issue,)))
         report = self._with_registry_check(parsed)
         if not report.is_acceptable:
-            reason = "; ".join(issue.message for issue in report.errors)
-            quarantined = None if self._dry_run else self._quarantine.put(path, report)
-            logger.warning("Rejected %s: %s", path.name, reason)
-            return FileOutcome(path, report, quarantined=quarantined, failure=f"rejected: {reason}")
+            return self._reject(path, report)
         rows = {series.sensor_id: len(series) for series in parsed.series}
         if self._dry_run:
             logger.info("Dry run: %s is valid (%s).", path.name, _rows_text(rows))
             return FileOutcome(path, report, rows)
         return self._append(path, parsed, report, rows)
+
+    def _reject(self, path: Path, report: ValidationReport) -> FileOutcome:
+        """Quarantine a rejected file; a quarantine failure is recorded, never raised."""
+        failure = "rejected: " + "; ".join(issue.message for issue in report.errors)
+        logger.warning("Rejected %s: %s", path.name, failure)
+        if self._dry_run:
+            return FileOutcome(path, report, failure=failure)
+        try:
+            quarantined = self._quarantine.put(path, report)
+        except OSError as error:
+            logger.error("Quarantining %s failed: %s", path.name, error)
+            return FileOutcome(path, report, failure=f"{failure}; quarantine failed: {error}")
+        return FileOutcome(path, report, quarantined=quarantined, failure=failure)
 
     def _append(
         self,

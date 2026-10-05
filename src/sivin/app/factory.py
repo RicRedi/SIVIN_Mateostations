@@ -6,11 +6,16 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from sivin.analytics.base import index_registry
 from sivin.app.catalog import SensorCatalog, SensorCatalogLoader, SensorsCheck
-from sivin.app.indices import IndexContextFactory, IndexSelection, IndicesService
+from sivin.app.indices import (
+    IndexContextFactory,
+    IndexSelection,
+    IndicesService,
+    IndicesWriter,
+)
 from sivin.app.ingest import (
     DirectoryExports,
     ExportReader,
@@ -36,6 +41,13 @@ if TYPE_CHECKING:
     from sivin.ingest.portal.settings import PortalSettings
 
 logger = logging.getLogger(__name__)
+
+
+FETCH_SKIPPED_DRY_RUN: Final = "fetch skipped in dry-run"
+"""Note of ``sivin run --dry-run``: no login, no download."""
+
+FETCH_SKIPPED: Final = "fetch skipped (--skip-fetch)"
+"""Note of ``sivin run --skip-fetch``."""
 
 
 def utc_now() -> datetime:
@@ -159,7 +171,7 @@ class ServiceFactory:
         reader = ExportReader(
             parser_base.parser_registry, ingest.parsers, InputValidator(ingest.validation)
         )
-        quarantine = Quarantine(self._workspace.quarantine_dir, ingest.quarantine_mode)
+        quarantine = Quarantine(self._workspace.quarantine_dir, ingest.quarantine_mode, self._clock)
         return IngestService(reader, self.store(), self.catalog().registry, quarantine, dry_run)
 
     def export_paths(self, files: Sequence[Path], from_dir: Path | None = None) -> list[Path]:
@@ -206,6 +218,7 @@ class ServiceFactory:
             pipeline,
             self.catalog().registry,
             EventsWriter(self._workspace.events_dir),
+            self._clock,
             dry_run,
         )
 
@@ -227,7 +240,8 @@ class ServiceFactory:
             self.quality_service(dry_run=True),
             IndexContextFactory(config.time, config.analytics, self.catalog().registry),
             IndexSelection(index_registry, config.analytics.indices),
-            self._workspace.indices_dir,
+            IndicesWriter(self._workspace.indices_dir),
+            self._clock,
             dry_run=dry_run,
         )
 
@@ -288,7 +302,8 @@ class ServiceFactory:
         Parameters
         ----------
         dry_run : bool, optional
-            Write nothing.
+            Write nothing. Implies ``skip_fetch``: a dry run never logs in or downloads
+            (WP-1.7 review); the files already in the download directory are validated.
         skip_fetch : bool, optional
             Do not use the portal; ingest the files already in the download directory.
         headed : bool, optional
@@ -300,7 +315,9 @@ class ServiceFactory:
             Fetch (or directory) → ingest → QC → indices → run log.
         """
         source: ExportSource
-        if skip_fetch:
+        note = None
+        if dry_run or skip_fetch:
+            note = FETCH_SKIPPED_DRY_RUN if dry_run else FETCH_SKIPPED
             source = DirectoryExports(
                 self._workspace.download_dir, self._workspace.config.ingest.file_patterns
             )
@@ -316,6 +333,7 @@ class ServiceFactory:
             self.run_recorder(),
             self._clock,
             dry_run,
+            note,
         )
 
     def run_recorder(self) -> RunRecorder:

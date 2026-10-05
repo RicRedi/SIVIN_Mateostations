@@ -42,7 +42,7 @@ ingest:
     headless: true
     browser: chrome
     download_dir: data/downloads    # exports are saved here by `sivin fetch`
-  quarantine_mode: copy             # copy | move a rejected export to paths.quarantine_dir
+  quarantine_mode: move             # move | copy a rejected export to paths.quarantine_dir
   file_patterns: ["*.csv", "*.xlsx"]  # files picked up by `sivin ingest --from-dir`
 
 storage:

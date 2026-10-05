@@ -7,7 +7,8 @@ configuration (the YAML file, ``SivinConfig()``, ``model_validate``) gives the s
 1. the ``time`` section is validated on its own; if it is invalid, nothing else is resolved
    and the section validation reports it;
 2. its values are written into every subsystem field of the same name
-   (:class:`~sivin.config.shared.SharedValues`);
+   (:class:`~sivin.config.shared.SharedValues`), and the defaults that are multiples of the
+   interval (:mod:`sivin.config.derived`) follow ``time.expected_interval_s`` unless set;
 3. the registry-backed mappings are validated and completed
    (:mod:`sivin.config.registered`).
 
@@ -24,6 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 from pydantic_core import InitErrorDetails
 
+from sivin.config.derived import interval_derived_defaults
 from sivin.config.registered import RegisteredSettings, default_resolutions
 from sivin.config.sections import TimeConfig
 from sivin.config.shared import SharedValues, plain
@@ -76,7 +78,7 @@ class ConfigResolver:
             time = TimeConfig.model_validate(raw.get(TIME_SECTION, {}))
         except ValidationError:
             return raw
-        shared = SharedValues.from_time(time)
+        shared = SharedValues.from_time(time, interval_derived_defaults())
         problems: list[InitErrorDetails] = []
         resolved = shared.apply(model, raw, (), problems, skip=(TIME_SECTION,))
         for resolution in self._resolutions:

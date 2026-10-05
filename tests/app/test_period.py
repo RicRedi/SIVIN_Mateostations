@@ -38,3 +38,12 @@ def test_unbounded_and_invalid() -> None:
         TimeBounds.parse("2026-06-02", "2026-06-01", PRAGUE)
     with pytest.raises(ValueError, match="Invalid isoformat"):
         TimeBounds.parse("June", None, PRAGUE)
+
+
+@pytest.mark.parametrize("text", ["2026-10-25T02:30", "2026-03-29T02:30"])
+def test_local_times_in_a_daylight_saving_change_need_an_offset(text: str) -> None:
+    # 2026-10-25 02:30 occurs twice (fold), 2026-03-29 02:30 does not exist (gap) in Prague.
+    with pytest.raises(ValueError, match="give an explicit offset"):
+        TimeBounds.parse(text, None, PRAGUE)
+    explicit = TimeBounds.parse(f"{text}+01:00", None, PRAGUE)
+    assert explicit.start is not None

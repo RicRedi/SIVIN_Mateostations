@@ -58,7 +58,8 @@ class TimeBounds:
         Raises
         ------
         ValueError
-            If a text is not ISO 8601 or the end is before the start.
+            If a text is not ISO 8601, is a local time in a daylight-saving gap or fold
+            (ambiguous or nonexistent), or the end is before the start.
         """
         zone = ZoneInfo(timezone)
         return cls(_instant(start, zone, end_of_day=False), _instant(end, zone, end_of_day=True))
@@ -71,7 +72,19 @@ def _instant(text: str | None, zone: ZoneInfo, *, end_of_day: bool) -> datetime 
         day = date.fromisoformat(text)
     except ValueError:
         moment = datetime.fromisoformat(text)
-        return moment if moment.tzinfo is not None else moment.replace(tzinfo=zone)
+        return moment if moment.tzinfo is not None else _local(moment, zone, text)
     if end_of_day:
-        return datetime.combine(day + timedelta(days=1), datetime.min.time(), zone) - _LAST_INSTANT
-    return datetime.combine(day, datetime.min.time(), zone)
+        midnight = datetime.combine(day + timedelta(days=1), datetime.min.time())
+        return _local(midnight, zone, text) - _LAST_INSTANT
+    return _local(datetime.combine(day, datetime.min.time()), zone, text)
+
+
+def _local(naive: datetime, zone: ZoneInfo, text: str) -> datetime:
+    """Attach ``zone``; a wall-clock time in a daylight-saving gap or fold is rejected."""
+    earlier, later = naive.replace(tzinfo=zone), naive.replace(tzinfo=zone, fold=1)
+    if earlier.utcoffset() != later.utcoffset():
+        raise ValueError(
+            f"{text!r} is ambiguous or does not exist in {zone.key} (daylight-saving change); "
+            "give an explicit offset, e.g. '2026-10-25T02:30+01:00' or '...Z'"
+        )
+    return earlier

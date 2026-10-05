@@ -36,7 +36,7 @@ def test_defaults() -> None:
     assert config.paths.quarantine_dir == Path("data/quarantine")
     assert config.offsite_log.file == Path("sensors/offsite_log.yaml")
     assert config.ingest.portal.download_dir == Path("data/downloads")
-    assert config.ingest.quarantine_mode == "copy"
+    assert config.ingest.quarantine_mode == "move"
     assert config.storage.conflict_policy == "prefer_newest"
     assert config.quality.deployment.mode == "advisory"
     assert "battery" in config.quality.screening_checks

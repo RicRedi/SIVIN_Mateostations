@@ -18,8 +18,12 @@ class Outcome(IntEnum):
     USAGE_ERROR = 2
     """Invalid command-line usage (unknown option, bad value); set by the CLI framework."""
     SETUP_ERROR = 3
-    """The command could not start: invalid configuration, registry or off-site log, missing
-    credentials, failed portal login, not inside the project."""
+    """The command could not start: invalid configuration, registry or off-site log, not
+    inside the project."""
+    DATA_SOURCE_UNAVAILABLE = 4
+    """The data provider's portal could not be used: missing credentials, failed login, portal
+    or browser unreachable. ``sivin run`` still processes the stored data and ends with this
+    code, so a scheduled job can tell a broken portal from a routine partial failure."""
 
     @classmethod
     def of(cls, failures: Sequence[str]) -> Self:
@@ -55,9 +59,16 @@ class Outcome(IntEnum):
 
 
 class SetupError(RuntimeError):
-    """A command cannot start (configuration, registry, off-site log, credentials, login).
+    """A command cannot start (configuration, registry, off-site log, project).
 
     The message is meant for the user and names what to fix; it never contains a secret.
+    """
+
+
+class SourceUnavailableError(SetupError):
+    """The portal cannot be used: missing credentials, failed login, unreachable portal.
+
+    Exit code :attr:`Outcome.DATA_SOURCE_UNAVAILABLE` (4); the message never contains a secret.
     """
 
 

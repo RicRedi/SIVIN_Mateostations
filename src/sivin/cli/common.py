@@ -8,7 +8,7 @@ from typing import NoReturn
 
 import typer
 
-from sivin.app.outcome import Outcome, SetupError, UnknownIndexError
+from sivin.app.outcome import Outcome, SetupError, SourceUnavailableError, UnknownIndexError
 from sivin.cli.state import CliState
 from sivin.core.ids import SensorId
 
@@ -36,8 +36,9 @@ def state_of(ctx: typer.Context) -> CliState:
 def handled() -> Iterator[None]:
     """Turn the errors of the application layer into exit codes and readable messages.
 
-    A :class:`~sivin.app.outcome.SetupError` ends the command with exit code 3 and its
-    message on standard error; an unknown index id is a usage error (exit code 2).
+    A :class:`~sivin.app.outcome.SourceUnavailableError` ends the command with exit code 4, any
+    other :class:`~sivin.app.outcome.SetupError` with 3, each with its message on standard
+    error; an unknown index id is a usage error (exit code 2).
 
     Yields
     ------
@@ -46,6 +47,9 @@ def handled() -> Iterator[None]:
     """
     try:
         yield
+    except SourceUnavailableError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=int(Outcome.DATA_SOURCE_UNAVAILABLE)) from error
     except SetupError as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=int(Outcome.SETUP_ERROR)) from error

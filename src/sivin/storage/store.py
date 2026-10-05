@@ -145,7 +145,7 @@ class MeasurementStore:
         """
         if series.is_empty:
             return AppendResult(series.sensor_id)
-        _warn_dropped_flags(series)
+        _log_dropped_flags(series)
         series = self._source_ids.shorten(series)
         counts = AppendCounts()
         conflicts: list[ConflictDecision] = []
@@ -341,13 +341,24 @@ class MeasurementStore:
         return self._source_ids.shorten(series)
 
 
-def _warn_dropped_flags(series: MeasurementSeries) -> None:
-    """Log a warning with a count per flag when the series carries QC flags (not stored)."""
+PARSER_FLAGS: Final = int(QcFlag.MISSING | QcFlag.TIMESTAMP_SUSPECT)
+"""Flags every parser sets on normal exports; dropping them is routine (logged at DEBUG)."""
+
+
+def _log_dropped_flags(series: MeasurementSeries) -> None:
+    """Log the QC flags of an appended series, which are not stored, with a count per flag.
+
+    Dropping the parser flags (``MISSING``, ``TIMESTAMP_SUSPECT``) is routine: QC recomputes
+    them, so the message is DEBUG. Any other flag (e.g. ``MANUAL_EXCLUDE`` set by mistake) makes
+    it INFO.
+    """
     flags = series.frame[Column.QC].to_numpy()
     if not flags.any():
         return
     per_flag = {str(flag.name): int(((flags & flag.value) != 0).sum()) for flag in QcFlag}
-    logger.warning(
+    level = logging.INFO if (flags & ~PARSER_FLAGS).any() else logging.DEBUG
+    logger.log(
+        level,
         "Sensor %s: QC flags are not stored in raw files and were dropped: %s.",
         series.sensor_id,
         ", ".join(f"{name} on {count} row(s)" for name, count in per_flag.items() if count),

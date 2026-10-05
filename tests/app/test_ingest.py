@@ -55,12 +55,13 @@ def test_two_files_sum_their_counts(project: Project, factory: ServiceFactory) -
     assert report.failures == ()
 
 
-def test_rejected_file_is_copied_to_quarantine_with_its_report(
+def test_rejected_file_is_moved_to_quarantine_with_its_report(
     project: Project, factory: ServiceFactory
 ) -> None:
     path = project.downloads / "MeteoData_8615620 77678271 (VUT)_20260301_223857.csv"
     project.downloads.mkdir(parents=True)
     path.write_text(BROKEN_CSV, encoding="utf-8")
+    original = path.read_bytes()
     report = factory.ingest_service().ingest([path])
     (item,) = report.files
     assert not item.accepted
@@ -70,8 +71,8 @@ def test_rejected_file_is_copied_to_quarantine_with_its_report(
     assert report.failures[0].startswith(f"{path.name}: rejected: ")
     quarantined = project.root / "data" / "quarantine" / path.name
     assert item.quarantined == quarantined
-    assert quarantined.read_bytes() == path.read_bytes()
-    assert path.exists()  # copy mode keeps the original
+    assert quarantined.read_bytes() == original
+    assert not path.exists()  # the default mode moves the file out of the downloads
     document = json.loads(quarantined.with_name(path.name + ".report.json").read_text("utf-8"))
     assert document["file"] == path.name
     assert document["accepted"] is False
@@ -80,11 +81,11 @@ def test_rejected_file_is_copied_to_quarantine_with_its_report(
     assert factory.store().sensors() == []
 
 
-def test_move_mode_moves_the_rejected_file(tmp_path: Path) -> None:
+def test_copy_mode_keeps_the_rejected_file(tmp_path: Path) -> None:
     project = make_project(
         tmp_path / "p",
         config=(
-            "ingest:\n  quarantine_mode: move\n"
+            "ingest:\n  quarantine_mode: copy\n"
             '  parsers:\n    latest_timestamp: "2030-01-01T00:00:00"\n'
         ),
     )
@@ -92,8 +93,59 @@ def test_move_mode_moves_the_rejected_file(tmp_path: Path) -> None:
     project.downloads.mkdir(parents=True)
     path.write_text(BROKEN_CSV, encoding="utf-8")
     report = make_factory(project).ingest_service().ingest([path])
-    assert not path.exists()
+    assert path.exists()
     assert report.files[0].quarantined == project.root / "data" / "quarantine" / path.name
+
+
+def test_quarantine_name_collision_gets_a_time_suffix(
+    project: Project, factory: ServiceFactory
+) -> None:
+    project.downloads.mkdir(parents=True)
+    quarantine = project.root / "data" / "quarantine"
+    names = []
+    for _ in range(3):
+        path = project.downloads / "broken.csv"
+        path.write_text(BROKEN_CSV, encoding="utf-8")
+        (item,) = factory.ingest_service().ingest([path]).files
+        assert item.quarantined is not None
+        names.append(item.quarantined.name)
+    # RUN_TIME 2026-10-05T04:00Z; nothing is overwritten.
+    assert names == ["broken.csv", "broken_20261005T040000Z.csv", "broken_20261005T040000Z_2.csv"]
+    assert (quarantine / "broken_20261005T040000Z_2.csv.report.json").exists()
+
+
+def test_quarantine_failure_is_recorded_not_raised(
+    project: Project, factory: ServiceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project.downloads.mkdir(parents=True)
+    bad = project.downloads / "broken.csv"
+    bad.write_text(BROKEN_CSV, encoding="utf-8")
+    good = write_synthetic_export(project.downloads, days=1)
+
+    def denied(source: object, target: object) -> None:
+        raise PermissionError("synthetic: permission denied")
+
+    monkeypatch.setattr("sivin.app.ingest.shutil.move", denied)
+    report = factory.ingest_service().ingest([bad, good])
+    assert report.files[0].quarantined is None
+    assert report.files[0].failure is not None
+    assert "quarantine failed: synthetic: permission denied" in report.files[0].failure
+    assert report.files[1].accepted
+    assert report.outcome is Outcome.PARTIAL_FAILURE
+
+
+def test_unreadable_file_is_rejected(
+    project: Project, factory: ServiceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_synthetic_export(project.downloads, days=1)
+
+    def unreadable(self: object, path: Path) -> object:
+        raise PermissionError("synthetic: cannot open")
+
+    monkeypatch.setattr("sivin.app.ingest.ExportReader.read", unreadable)
+    (item,) = factory.ingest_service(dry_run=True).ingest([path]).files
+    assert item.report.rules() == {"file-readable"}
+    assert item.failure == "rejected: cannot read: synthetic: cannot open"
 
 
 def test_unknown_format_and_unregistered_sensor_are_rejected(

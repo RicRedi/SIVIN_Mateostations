@@ -401,18 +401,32 @@ def test_backfill_of_an_older_export_needs_prefer_existing(
     assert backfill.read(sensor_id).frame[Column.TEMP].tolist() == [4.2]
 
 
-def test_dropped_qc_flags_are_warned_with_counts_per_flag(
+def test_dropped_qc_flags_are_logged_with_counts_per_flag(
     store: MeasurementStore,
     make_utc_series: UtcSeriesFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     times = ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", "2026-01-01T01:00:00Z"]
-    with caplog.at_level(logging.WARNING, logger="sivin.storage.store"):
+    with caplog.at_level(logging.INFO, logger="sivin.storage.store"):
         store.append(make_utc_series(times, [1, 2, 3], [4, 5, 6], qc=[256, 256 | 4, 0]))
-    assert caplog.messages == [
+    (record,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == (
         "Sensor 77678271: QC flags are not stored in raw files and were dropped: "
         "SPIKE on 1 row(s), MANUAL_EXCLUDE on 2 row(s)."
-    ]
+    )
+
+
+def test_dropped_parser_flags_are_debug_only(
+    store: MeasurementStore,
+    make_utc_series: UtcSeriesFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    times = ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z"]
+    with caplog.at_level(logging.DEBUG, logger="sivin.storage.store"):
+        store.append(make_utc_series(times, [1, float("nan")], [4, 5], qc=[128, 1]))
+    (record,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    assert record.levelno == logging.DEBUG
 
 
 def test_no_qc_warning_without_flags(

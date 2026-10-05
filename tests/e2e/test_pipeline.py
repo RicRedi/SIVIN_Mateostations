@@ -109,7 +109,17 @@ def test_fetch_ingest_qc_indices(project: Project) -> None:
     assert document["season"] == 2026
     assert set(document["sensors"]) == {OUTDOOR_SENSOR, REAL_SENSOR}
     huglin = document["sensors"][OUTDOOR_SENSOR]["huglin"]
-    assert set(huglin) == {"value", "unit", "coverage", "complete", "class", "estimated", "details"}
+    assert set(huglin) == {
+        "value",
+        "unit",
+        "coverage",
+        "complete",
+        "class",
+        "estimated",
+        "details",
+        "status",
+        "computed_at",
+    }
     assert huglin["unit"] == "°C·d"
     assert huglin["complete"] is False  # 3 June days of a 183-day period
     assert 0.0 < huglin["coverage"] < 0.05

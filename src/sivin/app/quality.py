@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
-from sivin.app.json_files import JsonFileWriter
+from sivin.app.json_files import JsonFileWriter, read_document
 from sivin.app.outcome import Outcome
+from sivin.core.flags import QcFlag
 from sivin.core.ids import SensorId
-from sivin.core.schema import MeasurementSeries, TimestampLike
+from sivin.core.schema import Column, MeasurementSeries, TimestampLike
 from sivin.quality.events import QualityEvent
 from sivin.quality.pipeline import QualityPipeline, QualityResult
 from sivin.registry.registry import SensorRegistry
@@ -74,10 +77,20 @@ def event_dict(event: QualityEvent) -> dict[str, object]:
     }
 
 
+STATUS_OK: Final = "ok"
+"""``status`` of a derived entry computed successfully in the last run that processed it."""
+
+STATUS_FAILED: Final = "failed"
+"""``status`` of a derived entry whose last computation failed (the previous result is kept)."""
+
+
 class EventsWriter:
     """Write ``<derived>/events/<sensor_id>.json``: the QC events and flag counts of a sensor.
 
-    The file holds no run time, so an unchanged result gives the same bytes.
+    The file is replaced only by a complete result over the sensor's whole stored record. A
+    failed computation keeps the previous content and adds ``status: "failed"`` and ``error``;
+    ``computed_at`` stays the time of the last successful computation (MIGRATION_PLAN WP-1.7
+    review: an unattended run must never lose a derived result).
 
     Parameters
     ----------
@@ -108,13 +121,15 @@ class EventsWriter:
         """
         return self._directory / f"{sensor_id}{EVENTS_SUFFIX}"
 
-    def write(self, result: QualityResult) -> Path:
-        """Write the events of one QC result.
+    def write(self, result: QualityResult, computed_at: datetime) -> Path:
+        """Write the events of one QC result over the whole record.
 
         Parameters
         ----------
         result : QualityResult
             Result of the pipeline for one sensor.
+        computed_at : datetime.datetime
+            Time of the computation (aware).
 
         Returns
         -------
@@ -125,16 +140,97 @@ class EventsWriter:
         times = series.timestamps
         document = {
             "sensor_id": str(series.sensor_id),
+            "status": STATUS_OK,
+            "computed_at": iso_utc(pd.Timestamp(computed_at)),
             "first_t": iso_utc(times.iloc[0]) if len(times) else None,
             "last_t": iso_utc(times.iloc[-1]) if len(times) else None,
             "n_samples": len(series),
-            "flag_counts": {
-                str(flag.name): count for flag, count in result.flag_counts.items() if count
-            },
+            "flag_counts": flag_counts(result.series),
             "values_set_aside": result.values_set_aside,
             "events": [event_dict(event) for event in result.events],
         }
         return self._writer.write(self.path_for(series.sensor_id), document)
+
+    def mark_failed(self, sensor_id: SensorId, error: str) -> Path:
+        """Record a failed computation, keeping the previous result.
+
+        Parameters
+        ----------
+        sensor_id : SensorId
+            The sensor.
+        error : str
+            Why it failed.
+
+        Returns
+        -------
+        pathlib.Path
+            The file written.
+        """
+        path = self.path_for(sensor_id)
+        previous = read_document(path)
+        document: dict[str, object] = (
+            previous
+            if previous is not None
+            else {"sensor_id": str(sensor_id), "computed_at": None, "events": []}
+        )
+        document["status"] = STATUS_FAILED
+        document["error"] = error
+        return self._writer.write(path, document)
+
+
+def flag_counts(series: MeasurementSeries) -> dict[str, int]:
+    """Count the rows carrying each single QC flag (zero counts left out).
+
+    Parameters
+    ----------
+    series : MeasurementSeries
+        Flagged measurements.
+
+    Returns
+    -------
+    dict of str to int
+        Flag name → number of rows (count).
+    """
+    qc = series.frame[Column.QC].to_numpy()
+    single = [flag for flag in QcFlag if flag and not flag & (flag - 1)]
+    counts = {str(flag.name): int(np.count_nonzero(qc & int(flag))) for flag in single}
+    return {name: count for name, count in counts.items() if count}
+
+
+def restricted(
+    result: QualityResult, start: datetime | None, end: datetime | None
+) -> QualityResult:
+    """Return the part of a whole-record QC result inside ``[start, end]``.
+
+    Parameters
+    ----------
+    result : QualityResult
+        Result over the whole record.
+    start, end : datetime.datetime or None
+        Inclusive aware bounds; unbounded when ``None``.
+
+    Returns
+    -------
+    QualityResult
+        Rows inside the bounds, the events that overlap them and their flag counts;
+        ``values_set_aside`` stays the count of the whole record.
+    """
+    if start is None and end is None:
+        return result
+    lower = pd.Timestamp(start) if start is not None else pd.Timestamp.min.tz_localize("UTC")
+    upper = pd.Timestamp(end) if end is not None else pd.Timestamp.max.tz_localize("UTC")
+    series = result.series.between(lower, upper) if not result.series.is_empty else result.series
+    events = tuple(
+        event
+        for event in result.events
+        if event.t_utc <= upper
+        and (event.end_utc if event.end_utc is not None else event.t_utc) >= lower
+    )
+    counts = {flag: count for flag, count in result.flag_counts.items()}
+    qc = series.frame[Column.QC].to_numpy()
+    for flag in counts:
+        counts[flag] = int(np.count_nonzero(qc & int(flag)))
+    return QualityResult(series, events, counts, result.deployment, result.values_set_aside)
 
 
 @dataclass(frozen=True)
@@ -151,12 +247,15 @@ class SensorQuality:
         The events file written (``None`` in a dry run, without data or on failure).
     failure : str or None
         Why the sensor failed; ``None`` on success.
+    whole : QualityResult or None
+        The result over the whole record (``result`` may be restricted to the report bounds).
     """
 
     sensor_id: SensorId
     result: QualityResult | None = None
     events_file: Path | None = None
     failure: str | None = None
+    whole: QualityResult | None = None
 
 
 @dataclass(frozen=True)
@@ -213,7 +312,7 @@ class QualityService:
         Compute, but write no file.
     """
 
-    __slots__ = ("_dry_run", "_events", "_pipeline", "_registry", "_store")
+    __slots__ = ("_clock", "_dry_run", "_events", "_pipeline", "_registry", "_store")
 
     def __init__(
         self,
@@ -221,12 +320,14 @@ class QualityService:
         pipeline: QualityPipeline,
         registry: SensorRegistry,
         events: EventsWriter,
+        clock: Callable[[], datetime],
         dry_run: bool = False,
     ) -> None:
         self._store = store
         self._pipeline = pipeline
         self._registry = registry
         self._events = events
+        self._clock = clock
         self._dry_run = dry_run
 
     def sensors(self, wanted: Sequence[SensorId] | None = None) -> list[SensorId]:
@@ -270,17 +371,22 @@ class QualityService:
     def run(
         self,
         sensors: Sequence[SensorId] | None = None,
-        start_utc: TimestampLike | None = None,
-        end_utc: TimestampLike | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> QualityReport:
         """Run quality control for every requested sensor and write its events.
+
+        QC always runs over the sensor's **whole** stored record (the detector and the
+        deployed checks need the context, and the events file must stay complete); ``start``
+        and ``end`` only restrict what the report shows. Only the requested sensors' files are
+        written; a failed sensor keeps its previous file with ``status: "failed"``.
 
         Parameters
         ----------
         sensors : sequence of SensorId, optional
             Sensors to check; every stored sensor when omitted.
-        start_utc, end_utc : timestamp, optional
-            Timezone-aware inclusive bounds.
+        start, end : datetime.datetime, optional
+            Timezone-aware inclusive bounds of the report.
 
         Returns
         -------
@@ -288,24 +394,24 @@ class QualityService:
             One entry per sensor; a sensor without data has no result and no failure.
         """
         outcomes = {
-            sensor_id: self._one(sensor_id, start_utc, end_utc)
-            for sensor_id in self.sensors(sensors)
+            sensor_id: self._one(sensor_id, start, end) for sensor_id in self.sensors(sensors)
         }
         return QualityReport(outcomes, self._dry_run)
 
     def _one(
-        self, sensor_id: SensorId, start_utc: TimestampLike | None, end_utc: TimestampLike | None
+        self, sensor_id: SensorId, start: datetime | None, end: datetime | None
     ) -> SensorQuality:
         try:
-            result = self.checked(sensor_id, start_utc, end_utc)
+            result = self.checked(sensor_id)
         except SENSOR_ERRORS as error:
             logger.error("Quality control of sensor %s failed: %s", sensor_id, error)
-            return SensorQuality(sensor_id, failure=str(error))
+            written = None if self._dry_run else self._events.mark_failed(sensor_id, str(error))
+            return SensorQuality(sensor_id, events_file=written, failure=str(error))
         if result.series.is_empty:
-            logger.info("Sensor %s: no stored data in the requested range.", sensor_id)
+            logger.info("Sensor %s: no stored data.", sensor_id)
             return SensorQuality(sensor_id)
-        written = None if self._dry_run else self._events.write(result)
-        return SensorQuality(sensor_id, result, written)
+        written = None if self._dry_run else self._events.write(result, self._clock())
+        return SensorQuality(sensor_id, restricted(result, start, end), written, whole=result)
 
     def _known_deployments(self, series: MeasurementSeries) -> list[pd.Timestamp]:
         if series.sensor_id not in self._registry:

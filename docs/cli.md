@@ -36,12 +36,19 @@ are `SIVIN_USER` and `SIVIN_PASSWORD`; they are never printed or logged.
 | Code | Name (`sivin.app.outcome.Outcome`) | When |
 |---|---|---|
 | 0 | `OK` | Everything succeeded. |
-| 1 | `PARTIAL_FAILURE` | The command ran but something failed: a file was rejected, a device was not downloaded, a sensor or an index failed, the portal login failed during `sivin run`; `sivin sensors check` found invalid files. |
-| 2 | `USAGE_ERROR` | Invalid usage: unknown option, invalid `--sensor` name, unknown `--index`, invalid `--from`/`--to`, invalid `--log-level`. |
-| 3 | `SETUP_ERROR` | Nothing could be done: not inside a project, invalid configuration, invalid sensor registry or off-site log (MIGRATION_PLAN §2.8: an invalid log stops the run), missing credentials or failed login in `sivin fetch`. |
+| 1 | `PARTIAL_FAILURE` | The command ran but something failed: a file was rejected (or could not be quarantined), a device was not downloaded, a sensor or an index failed; `sivin sensors check` found invalid files. |
+| 2 | `USAGE_ERROR` | Invalid usage: unknown option, invalid `--sensor` name, unknown `--index`, invalid `--from`/`--to` (also a local time in a daylight-saving gap or fold), invalid `--log-level`. |
+| 3 | `SETUP_ERROR` | Nothing could be done: not inside a project, invalid configuration, invalid sensor registry or off-site log (MIGRATION_PLAN §2.8: an invalid log stops the run). |
+| 4 | `DATA_SOURCE_UNAVAILABLE` | The portal could not be used: missing credentials, failed login, portal or browser unreachable, device list unreadable. `sivin fetch` stops; `sivin run` goes on with the stored data (QC, indices, run record) and still ends with 4. |
 
-`sivin run` exits with the most severe code of its steps; a failed portal step is code 1
-because the run continues with the stored data.
+`sivin run` exits with the most severe code of its steps (4 > 3 > 1 > 0); the scheduled
+workflow (WP-4.1) can therefore tell a broken portal or missing secrets (4) from a routine
+partial failure (1).
+
+**Logging and secrets.** `--log-level DEBUG` never reaches the loggers of Selenium, urllib3
+and webdriver-manager: they are pinned to WARNING (Selenium logs WebDriver command bodies,
+i.e. the typed password, at DEBUG). In addition every log record passes a filter that
+replaces the current values of `SIVIN_PASSWORD` and `SIVIN_USER` by `***`.
 
 ## `sivin config show`
 
@@ -97,10 +104,15 @@ Parses and validates each export file (`ingest.parsers`, `ingest.validation`, se
 [data-format.md](data-format.md)), then:
 
 - **rejected** (a validation error, an unknown format, or a sensor that is not in the
-  registry, rule `sensor-registered`): copied (`ingest.quarantine_mode: copy`, default) or
-  moved (`move`) to `paths.quarantine_dir` (`data/quarantine/`), with
-  `<file name>.report.json` next to it (file, every finding with rule, severity, message, row,
-  table). Nothing of the file reaches the store; the next file is processed.
+  registry, rule `sensor-registered`; a file that cannot be read at all, rule
+  `file-readable`): moved (`ingest.quarantine_mode: move`, default, so a bad download is not
+  rejected again on every run) or copied (`copy`) to `paths.quarantine_dir`
+  (`data/quarantine/`), with `<file name>.report.json` next to it (file, every finding with
+  rule, severity, message, row, table). A name already in quarantine gets the suffix
+  `_<YYYYMMDDTHHMMSSZ>` (and `_2`, … if needed); nothing is overwritten. If the file cannot be
+  moved or copied (permissions, disk full), the error is logged, recorded as a failure
+  (`quarantine failed: …`) and the next file is processed. Nothing of a rejected file reaches
+  the store.
 - **accepted**: every series is appended to the store (`data/raw/<id>/<YYYY>.csv`); the store
   keeps the short export identifier as `source` ([storage.md](storage.md#source-identifiers-wp-17)).
 
@@ -129,17 +141,24 @@ $ sivin ingest --from-dir ~/exports --dry-run
 Reads each sensor from the store (default: every stored sensor) and runs the quality pipeline
 (`quality`, [quality-control.md](quality-control.md)) with the off-site log and the registry
 placements as known deployments. Stored data carry no flags, so QC always runs on them before
-anything else uses them. Writes `data/derived/events/<sensor_id>.json`
-([storage.md](storage.md#derived-data-wp-17)) unless `--dry-run`.
+anything else uses them. QC always covers the sensor's **whole** stored record; it writes
+`data/derived/events/<sensor_id>.json` ([storage.md](storage.md#derived-data-wp-17)) for
+the selected sensors only, unless `--dry-run`.
 
 | Option | Meaning |
 |---|---|
-| `--from WHEN`, `--to WHEN` | ISO 8601. A date or a time without offset is local time of `time.display_timezone`; a date as `--to` includes the whole day; `2026-06-01T10:00Z` is an explicit instant. Default: the whole record. |
+| `--from WHEN`, `--to WHEN` | Restrict the **printed summary** to this range; the events file stays complete. ISO 8601. A date or a time without offset is local time of `time.display_timezone`; a date as `--to` includes the whole day; `2026-06-01T10:00Z` is an explicit instant. A local time in the repeated or skipped hour of a daylight-saving change is rejected (exit 2): give it with an offset. Default: the whole record. |
 
-Prints one line per sensor: samples, flag counts, events (warnings), values set aside, and the
-events file; `<id>: no stored data` for a sensor without data in the range. Exit code 1 if a
-sensor failed (e.g. a malformed store file), 3 if the registry, the off-site log or the
-configuration is invalid.
+Prints one line per sensor: samples, flag counts, events (warnings), values set aside (whole
+record), and the events file; `<id>: no stored data` for a requested sensor without data, and
+`No stored data.` when the store is empty (exit 0, nothing written). A sensor that fails
+(e.g. a malformed store file) keeps its previous events file with `status: "failed"` and
+`error`; exit code 1. Exit code 3 if the registry, the off-site log or the configuration is
+invalid.
+
+**Restricted runs never lose results.** `--sensor` writes only the files of the selected
+sensors; `--from/--to` only restrict the output. The same holds for `sivin indices` and
+`sivin run` below.
 
 ## `sivin indices --season YEAR [--index ID ...] [--sensor ID ...] [--dry-run]`
 
@@ -155,9 +174,15 @@ force at the last sample. Index parameters come from `analytics.indices`.
 | `--season YEAR` | Required, e.g. `2026`. |
 | `--index`, `-i ID` | Only this index; repeat for several. Default: every registered index ([indices](indices/)). Unknown id: exit code 2. |
 
-Writes `data/derived/indices/<season>.json` ([storage.md](storage.md#derived-data-wp-17))
-unless `--dry-run`, and prints one line per sensor and index (value, unit, coverage,
-complete). Exit code 1 if a sensor or an index failed.
+Updates `data/derived/indices/<season>.json` ([storage.md](storage.md#derived-data-wp-17))
+**in place** unless `--dry-run`: only the computed (sensor, index) entries are replaced, every
+other entry of the file stays, so `--sensor` and `--index` never remove other results. A
+sensor or index that fails keeps its previous entry with `status: "failed"`, `error` and the
+`computed_at` of its last success; a sensor without data in the season window is left as it
+was. When no sensor has data for the season (e.g. an empty store) the command prints `No
+stored data for this season; nothing written.`, writes nothing and exits 0. Prints one line
+per sensor and index (value, unit, coverage, complete). Exit code 1 if a sensor or an index
+failed.
 
 ## `sivin run [--season YEAR] [--sensor ID ...] [--skip-fetch] [--headed] [--dry-run]`
 
@@ -165,10 +190,16 @@ The whole pipeline, as the scheduled workflow (WP-4.1) runs it: `fetch` → `ing
 downloaded files → `qc` of every stored sensor (events written) → `indices` of the season from
 those QC results → one run record. It goes on past a failed device, file, sensor or index,
 and past a failed login or missing credentials (recorded as `fetch: ...`; the stored data are
-kept and still checked). `--season` defaults to the current year in `time.display_timezone`.
-`--skip-fetch` does not use the portal and ingests the files already in the download
-directory. `--sensor` restricts fetch, QC and indices (not the ingest of `--skip-fetch`).
-Exit code 0 or 1 (see above); 3 only if the configuration, registry or off-site log is invalid.
+kept and still checked; exit code 4). `--season` defaults to the current year in
+`time.display_timezone`. `--skip-fetch` does not use the portal and ingests the files already
+in the download directory. `--sensor` restricts fetch, QC and indices (not the ingest of
+`--skip-fetch`); the derived files are updated in place as described above.
+
+`--dry-run` **never logs in and never downloads**: it implies `--skip-fetch`, prints `Note:
+fetch skipped in dry-run.`, validates the files already in the download directory and
+computes QC and indices without writing anything (no store, no quarantine, no derived files,
+no run record). Exit codes 0, 1 or 4 (see above); 3 only if the configuration, registry or
+off-site log is invalid.
 
 ```console
 $ sivin run                       # daily job
