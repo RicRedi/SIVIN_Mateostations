@@ -142,6 +142,7 @@ between sensors is meaningful only if both have complete data.
   values)
 - Sturman, A., Zawar-Reza, P., Soltanzadeh, I., Katurji, M., Bonnardot, V., Parker, A. K.,
   Trought, M. C. T. The application of high-resolution atmospheric modelling to weather and
-  climate variability in vineyard regions. *OENO One* (article 1538 on oeno-one.eu).
-  [year and volume not verified] [DOI not verified] (secondary source of the Sauvignon blanc
+  climate variability in vineyard regions. *OENO One* (2017), 51(2), 99–105 (article 1538 on
+  oeno-one.eu). https://doi.org/10.20870/oeno-one.2016.0.0.1538 [DOI not verified]
+  (bibliographic details from a single search extract; not confirmed) (secondary source of the Sauvignon blanc
   values)

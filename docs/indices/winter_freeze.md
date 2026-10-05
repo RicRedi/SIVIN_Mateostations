@@ -69,4 +69,4 @@ WP-L.1.
 
 - Zabadal, T. J., Dami, I. E., Goffinet, M. C., Martinson, T. E., Chien, M. L. (2007). *Winter
   injury to grapevines and methods of protection.* Michigan State University Extension
-  Bulletin E2930, 105 pp. (Authors verified in WP-L.1; no DOI.)
+  Bulletin E2930. (Authors verified in WP-L.1; no DOI.)

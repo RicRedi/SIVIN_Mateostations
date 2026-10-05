@@ -57,7 +57,7 @@ Counts per season; compare years and sensors. No further classes.
 - Extremes come from samples about every 30 min, not from extreme thermometers; true maxima are
   slightly higher and true minima slightly lower, so counts near the thresholds can differ from
   a climatological station.
-- Thresholds verified in WP-L.1: ČHMÚ uses "tropický (horký) den" for $T_{max} \ge 30.0$ °C
+- Thresholds **partly verified** in WP-L.1 (ČHMÚ post + Wikipedia only): ČHMÚ uses "tropický (horký) den" for $T_{max} \ge 30.0$ °C
   (ČHMÚ public statement, 2024), and the Czech climatological definitions of summer day
   (≥ 25 °C), frost day ($T_{min} < 0$ °C), ice day ($T_{max} < 0$ °C) and tropical night
   ($T_{min}$ not below 20 °C) agree with the table above (secondary: Czech Wikipedia

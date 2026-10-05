@@ -26,6 +26,8 @@ before and after, and a status.
   - `verified` — bibliographic data or value confirmed as above;
   - `verified (secondary)` — value confirmed in a named secondary source; the primary table or
     text was **not read**;
+  - `partly verified` — only part of the claim, or only weak sources (e.g. a social-media post
+    and Wikipedia), support it;
   - `corrected` — the previous text or value was wrong; old → new is given;
   - `unverifiable` — no reliable source found; the `[to be verified]` marker stays;
   - `project default` — not a literature claim; the text now says so instead of carrying a
@@ -35,6 +37,41 @@ before and after, and a status.
   values were rejected. A reader with library access should confirm the rows marked
   `verified (secondary)` against the primary tables, in particular the GFV and GSR cultivar
   values, the GST bounds and the BEDD constants.
+
+## To confirm with library access
+
+The rows marked `verified (secondary)` or `unverifiable` rest on search extracts and xclim, not
+on the primary texts. Checklist for someone with library access (tick when done; record page or
+table in the verification tables below):
+
+- [ ] **Parker et al. (2011)**, AJGWR 17(2) — the species-level (general) F* for flowering and
+  véraison of the GFV model (results section / parameter table); confirm base 0 °C, start DOY 60.
+- [ ] **Parker et al. (2013)**, Agric. For. Meteorol. 180 — cultivar F* table (flowering and
+  véraison) for Sauvignon blanc (1282 / 2528) and the South-Moravian cultivars (Grüner
+  Veltliner, Riesling, Pinot blanc, Chardonnay, Müller-Thurgau, Welschriesling, Pinot noir,
+  Blaufränkisch, Saint Laurent, Zweigelt) — main table and supplementary material.
+- [ ] **Parker et al. (2020)**, Agric. For. Meteorol. 285–286, 107902 — GSR F* table (170–220
+  g/L) for Sauvignon blanc (200 g/L = 2820) and the cultivars above; confirm base 0 °C, DOY 91.
+- [ ] **Jones (2006)**, Geoscience Canada Reprint Series 9, pp. 203–216 — climate-maturity
+  figure: GST bounds 13 / 15 / 17 / 19 / 24 °C and the group names; also whether Jones et al.
+  (2010) / Hall & Jones (2010) split hot into 19–21 / 21–24 °C (their class table).
+- [ ] **Gladstones (1992)**, *Viticulture and Environment* — BEDD definition: 19 °C cap, DTR
+  band 10–13 °C, factor 0.25, order of cap and adjustments, day-length (latitude) coefficients
+  table.
+- [ ] **Tonietto & Carbonneau (2004)**, Agric. For. Meteorol. 124 — classification tables: HI
+  class bounds and names (HI+2, HI+3), CI class bounds and inclusive sides, K values per
+  latitude (and the K table in Huglin, 1978).
+- [ ] **Huglin (1978)**, C. R. Acad. Agric. Fr. 64, 1117–1126 — definition of the daily mean
+  temperature used in the index ($(T_{max}+T_{min})/2$ or mean of readings).
+- [ ] **Gubler et al. (1999)**, APSnet Features, and the **UC IPM** model page — whether the
+  daily decrease is limited to 10 points (non-favourable heat day −10 vs −20), heat before
+  onset, restart after the index falls to 0, wording of the classes 0–30 / 40–50 / 60–100.
+- [ ] **Broome et al. (1995)**, Phytopathology 85, 97–102 — logit coefficients (equation in the
+  results), fitting range 4–20 h / 12–30 °C, $R^2$ = 0.75.
+- [ ] **Poling (2008)**, HortScience 43(6), 1652–1662 — table of stage-specific critical
+  temperatures (10 % / 90 % kill) to compare with the 0 °C / −2 °C project defaults.
+- [ ] **Zabadal et al. (2007)**, MSU Extension Bulletin E2930 — hardiness thresholds of
+  *V. vinifera* buds/wood to compare with the −15 / −20 °C project defaults.
 
 ## Inventory of markers (task 1)
 
@@ -117,12 +154,12 @@ three are verified below; updating §7 is left to the owner (hand-off note).
 | CI classes ≤ 12, > 12 ≤ 14, > 14 ≤ 18, > 18 °C | `ripening/cool_night.py` | Tonietto & Carbonneau (2004) as quoted in search extracts (with the "> … ≤ …" notation) | as claimed, cooler class inclusive | unchanged; marker removed | verified (secondary) |
 | DTR ripening index | `ripening/dtr.py` | descriptive, no literature values | — | unchanged | project default |
 | Heat bands 20–30 °C optimum, > 30 °C, > 35 °C | `ripening/heat_hours.py` | not stated as thresholds in the cited papers. Background: light-saturated photosynthesis optimal at 30 °C (Greer & Weedon 2012, abstract); 35 °C maximum halved anthocyanins vs 25 °C (Mori et al. 2007, abstract) | — | values unchanged; labelled project defaults | project default |
-| Characteristic days: tropical day $T_{max}\ge30$, tropical night $T_{min}\ge20$, summer day $T_{max}\ge25$, frost day $T_{min}<0$, ice day $T_{max}<0$ °C | `ripening/characteristic_days.py` | ČHMÚ statement on tropical (hot) days (≥ 30.0 °C); Czech Wikipedia "Charakteristický den" | as claimed | unchanged | verified (secondary) |
+| Characteristic days: tropical day $T_{max}\ge30$, tropical night $T_{min}\ge20$, summer day $T_{max}\ge25$, frost day $T_{min}<0$, ice day $T_{max}<0$ °C | `ripening/characteristic_days.py` | ČHMÚ statement on tropical (hot) days (≥ 30.0 °C); Czech Wikipedia "Charakteristický den" | as claimed | unchanged | partly verified (ČHMÚ post + Wikipedia only) |
 | Hard frost −2 °C | `ripening/frost.py` | plan default; extracts citing Poling (2008): serious damage after budburst below about −2.2 °C | −2.2 °C (secondary) | unchanged; labelled project default | project default |
 | Poling (2008) stage-specific critical temperatures | `frost.md` | table not readable | — | not used | unverifiable |
 | Winter freeze −15 / −20 °C | `ripening/winter_freeze.py` | plan default, not in a source read | — | unchanged; labelled project default | project default |
-| Magnus coefficients a = 17.625, b = 243.04 °C (c = 6.1094 hPa) | `ripening/psychrometry.py` | Alduchov & Eskridge (1996), AERK form, quoted in extracts; xclim 0.62 `aerk96` = (610.94 Pa, 17.625, −30.12 K) | 17.625, 243.04 °C | unchanged | verified |
-| FAO-56 eq. 11: $e^\circ(T) = 0.6108\exp(17.27T/(T+237.3))$ | `ripening/psychrometry.py` | FAO-56 chapter 3, https://www.fao.org/4/x0490e/x0490e07.htm (extract) | as claimed | unchanged | verified |
+| Magnus coefficients a = 17.625, b = 243.04 °C (c = 6.1094 hPa) | `ripening/psychrometry.py` | Alduchov & Eskridge (1996), AERK form, quoted in extracts; xclim 0.62 `aerk96` = (610.94 Pa, 17.625, −30.12 K) | 17.625, 243.04 °C | unchanged | verified (secondary: concordant search extracts + xclim; primary text not read) |
+| FAO-56 eq. 11: $e^\circ(T) = 0.6108\exp(17.27T/(T+237.3))$ | `ripening/psychrometry.py` | FAO-56 chapter 3, https://www.fao.org/4/x0490e/x0490e07.htm (extract) | as claimed | unchanged | verified (official FAO summary page extract; full text not read) |
 
 ## Disease models
 
@@ -247,7 +284,7 @@ Each entry lists where its DOI or data were confirmed.
   2nd ed. University of California Press, Berkeley. ISBN 0-520-02591-1. No DOI.
 - Zabadal, T. J., Dami, I. E., Goffinet, M. C., Martinson, T. E., Chien, M. L. (2007). *Winter
   injury to grapevines and methods of protection.* Michigan State University Extension
-  Bulletin E2930, 105 pp. No DOI; authors confirmed in search extracts.
+  Bulletin E2930. No DOI; authors confirmed in search extracts.
 - Zahumenský, I. (2004). *Guidelines on Quality Control Procedures for Data from Automatic
   Weather Stations.* World Meteorological Organization, Geneva. No DOI.
 
@@ -265,7 +302,9 @@ Secondary and software sources used for values:
   https://blog.pestprophet.com/how-to-use-powdery-mildew-risk-index-model-on-grapes/.
 - Sturman, A., Zawar-Reza, P., Soltanzadeh, I., Katurji, M., Bonnardot, V., Parker, A. K.,
   Trought, M. C. T. The application of high-resolution atmospheric modelling to weather and
-  climate variability in vineyard regions. *OENO One*, https://oeno-one.eu/article/view/1538.
-  [year and volume not verified] [DOI not verified]
+  climate variability in vineyard regions. *OENO One* (2017), 51(2), 99–105,
+  https://oeno-one.eu/article/view/1538; HAL hal-01671144;
+  https://doi.org/10.20870/oeno-one.2016.0.0.1538 [DOI not verified] (year, volume, pages and
+  DOI from a single search extract found by the reviewer; not confirmed)
 - ČHMÚ (Czech Hydrometeorological Institute), statement on tropical (hot) days of 2024 on X
   (@CHMUCHMI); Wikipedia (cs), *Charakteristický den*.
