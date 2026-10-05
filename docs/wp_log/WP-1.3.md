@@ -352,3 +352,58 @@ because the sandbox's chromedriver 147 does not match Chromium 141.
 - The real-browser smoke test was not written: accepted, and the reason (version mismatch) is
   plausible.
 - "Not verified against the real portal" is stated explicitly, as required.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed commits `1b8e09e` and `26e14a6`; `e1b1480` merges the reviewed foundation. Both worker
+commits touch only `src/sivin/ingest/portal/**`, `tests/ingest/portal/**`, `docs/ingest.md` and
+this note.
+
+Gates observed by the reviewer:
+
+- `make lint` → `All checks passed!`, `51 files already formatted`.
+- `make type` → `Success: no issues found in 32 source files`.
+- `make test` → `297 passed`.
+- `make cov` → every module of `src/sivin/ingest/portal/` (now including `page.py`) at 100 %
+  (statements and branches); `Total coverage: 100.00%`.
+- `import sivin.config, sivin.ingest.portal` still loads no `selenium*` module.
+
+**Re-run probes** (`/tmp/claude-0/review-1.3/probe2.py`, `alt2.py`, run against the real
+watcher and the worker's fake portal):
+
+- Late download: after A's timeout, B's snapshot has `pending={'A.xlsx'}`. B ignores the renamed
+  `A.xlsx` and returns its own `B.xlsx`.
+- Session with a `late` device: the late file is never given to the next device. The other
+  devices succeed and the late device fails after 2 attempts.
+- History variant (`tab_adds_history=True`): all 3 devices download.
+  `back_to_device_list()` falls back to a reload each time (4 `get`s).
+- Flaky export button: the first attempt fails and the retry succeeds.
+- Empty file: `DownloadIncompleteError`. An empty file that later fills is accepted.
+- File that appears on the last poll: accepted after the extra confirmation poll.
+- Serial matching: `SensorId.parse` uses `fullmatch`. So `export.xlsx`, `20260301_223857.xlsx`
+  and other unknown names give no serial and are never falsely treated as another sensor's
+  file. A name with another sensor's serial is skipped and orphaned.
+- `Secret`: masked in `repr`, `str`, f-strings and `asdict`. Pickling raises `TypeError`, and
+  `copy` and `deepcopy` keep the value masked.
+- Lock: a second thread waits until the first one has restored the level. The level is
+  restored after an exception and the lock is released.
+
+**Legacy navigation semantics:** unchanged. The order is: spinner wait, presence wait and JS
+click on the device link, `device_settle_s` (3 s, the legacy value), spinner wait, clickable
+wait and JS click on the tab, spinner wait, `tab_settle_s` (2 s, the legacy value), then the
+visible Excel button, scroll into view and JS click, then the watcher, then `back()`. The new
+parts only add to this: the check after `back()` with a reload fallback, and the button search
+that prefers the export section and falls back to the legacy "first visible" rule.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `src/sivin/ingest/portal/watcher.py:244-248` | `pending` maps a partial file to a final name only by stripping the suffix. If Chrome is still using an `Unconfirmed NNN.crdownload` name at the timeout, and the export name has no serial, the late file is still given to the next device. The probe reproduced this: `Unconfirmed 123.crdownload` → `A.xlsx` was accepted for B. With the documented `MeteoData_<device> <serial> …` names, the serial check catches it (probe 2b). Suggestion: on timeout, also orphan the next *complete* name that appears while that partial file disappears, or document the dependence on serial-bearing names. Not blocking | open |
+| minor | `src/sivin/ingest/portal/client.py:321-325` | The device-list marker is the first device's link. If device pages show that link too (breadcrumb or sidebar), `back_to_device_list()` accepts the wrong page. Simulated: every next device fails attempt 1 and only the retry saves it, at the cost of an `element_wait_s` timeout and a reload per device. Suggestion: use a marker that exists only on the folder page, configurable as a selector, after the first real run | open |
+| nit | `src/sivin/ingest/portal/credentials.py:99-101` | `PortalCredentials("u", "plain")` with a `str` password is accepted at runtime (only mypy objects). `repr` then shows the plain password, and `login()` would fail on `.reveal()`. Suggestion: check `isinstance(password, Secret)`, or wrap it, in `__post_init__` | open |
+| nit | `src/sivin/ingest/portal/page.py:468-476` | When the default section XPath does not match the real portal, every device and every attempt waits the full `element_wait_s` (15 s) before the fallback. This is acceptable because it logs a WARNING; tune it on the first real run | open |
+| nit | `src/sivin/ingest/portal/watcher.py:215-221` | A device's own late export from attempt 1 is orphaned during attempt 2, even when its serial matches. This is safe and conservative; the file stays in `download_dir` but is not reported in `SessionResult` | open |
+
+All round-1 findings are verified as fixed, as the statuses above state. No blockers or majors
+remain. The hand-off note still states "Not verified against the real portal".
