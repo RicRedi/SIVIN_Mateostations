@@ -45,8 +45,10 @@ Classes of Tonietto and Carbonneau (2004):
 | CI-1 temperate nights | `temperate_nights` | $14 < CI \le 18$ °C |
 | CI-2 warm nights | `warm_nights` | $CI > 18$ °C |
 
-Which side of each boundary is inclusive is `[to be verified]` against the original table; the
-implementation assigns a value equal to a boundary to the cooler class.
+Bounds and inclusive sides (≤ 12, > 12 ≤ 14, > 14 ≤ 18, > 18 °C) were verified in WP-L.1
+against secondary sources quoting the classification table of Tonietto and Carbonneau (2004)
+(see [literature verification](../literature-verification.md)): a value equal to a boundary
+belongs to the cooler class, as implemented.
 
 ## Assumptions and limitations
 
@@ -67,5 +69,5 @@ implementation assigns a value equal to a boundary to the cooler class.
 ## References
 
 - Tonietto, J., Carbonneau, A. (2004). A multicriteria climatic classification system for
-  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124, 81–97.
-  `[DOI not verified]`
+  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124(1–2), 81–97.
+  https://doi.org/10.1016/j.agrformet.2003.06.001

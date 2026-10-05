@@ -58,5 +58,5 @@ seasons with each other rather than with absolute thresholds.
 ## References
 
 - Tonietto, J., Carbonneau, A. (2004). A multicriteria climatic classification system for
-  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124, 81–97.
-  `[DOI not verified]`
+  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124(1–2), 81–97.
+  https://doi.org/10.1016/j.agrformet.2003.06.001

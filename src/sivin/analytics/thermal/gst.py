@@ -21,16 +21,18 @@ GST_CLASS_BOUNDS: Final = (
     ("warm", 19.0),
     ("hot", 24.0),
 )
-"""Climate-maturity groups of Jones (2006) with inclusive upper bounds in °C [to be verified]:
-cool 13-15, intermediate 15-17, warm 17-19, hot 19-24 °C; below 13 and above 24 °C are outside
-the range of quality wine production (``too_cool`` / ``too_hot``)."""
+"""Climate-maturity groups of Jones (2006) with inclusive upper bounds in °C: cool 13-15,
+intermediate 15-17, warm 17-19, hot 19-24 °C; below 13 and above 24 °C are outside the range
+of quality wine production (``too_cool`` / ``too_hot``). Bounds verified against secondary
+sources quoting Jones (2006) / Jones et al. (2010); which side of a bound is inclusive is a
+project convention (docs/literature-verification.md)."""
 
 GST_TOP_CLASS: Final = "too_hot"
 """Label of growing season temperatures above the last bound."""
 
 
 def gst_classes() -> IntervalClassification:
-    """Return the climate-maturity groups of Jones (2006) [to be verified].
+    """Return the climate-maturity groups of Jones (2006).
 
     Returns
     -------
@@ -52,8 +54,7 @@ class GstParams(ThermalParams):
     )
     classes: IntervalClassification = Field(
         default_factory=gst_classes,
-        description="Climate-maturity groups in °C, inclusive upper bounds (Jones, 2006) "
-        "[to be verified].",
+        description="Climate-maturity groups in °C, inclusive upper bounds (Jones, 2006).",
     )
 
 

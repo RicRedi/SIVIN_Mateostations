@@ -41,14 +41,15 @@ T_{abs} = \min_{d \in D} T_{min,d}$$
 |---|---|---|---|
 | `dormant_start` | `11-01` (previous year) | MM-DD | project default `[to be tuned]` |
 | `dormant_end` | `03-31` (season year) | MM-DD | project default `[to be tuned]` |
-| `damage_threshold_c` | −15.0 (strict `<`) | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
-| `severe_threshold_c` | −20.0 (strict `<`) | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
+| `damage_threshold_c` | −15.0 (strict `<`) | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
+| `severe_threshold_c` | −20.0 (strict `<`) | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
 
 ## Interpretation
 
 Days below the thresholds indicate a risk of bud and wood injury. Cold hardiness depends on
-variety, acclimation and the course of the winter; the thresholds are plan defaults whose
-correspondence to Zabadal et al. (2007) is `[to be verified]`.
+variety, acclimation and the course of the winter; the thresholds are plan defaults, not
+values taken from Zabadal et al. (2007), whose bulletin (105 pages) could not be read in
+WP-L.1.
 
 ## Assumptions and limitations
 
@@ -68,4 +69,4 @@ correspondence to Zabadal et al. (2007) is `[to be verified]`.
 
 - Zabadal, T. J., Dami, I. E., Goffinet, M. C., Martinson, T. E., Chien, M. L. (2007). *Winter
   injury to grapevines and methods of protection.* Michigan State University Extension
-  Bulletin E2930. `[authors to be verified]`
+  Bulletin E2930. (Authors verified in WP-L.1; no DOI.)

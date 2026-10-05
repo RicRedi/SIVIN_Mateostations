@@ -6,8 +6,11 @@ How long the vines spend in a temperature range favourable for photosynthesis an
 how long they are exposed to heat stress. High temperatures during ripening reduce the
 accumulation of anthocyanins in red varieties (Mori et al., 2007); leaf photosynthesis
 declines above its temperature optimum (Greer and Weedon, 2012). The thresholds below are the
-project defaults of MIGRATION_PLAN §3.2; that they match the cited studies is
-`[to be verified]`.
+project defaults of MIGRATION_PLAN §3.2, **not literature values**. WP-L.1 found only background
+support: light-saturated leaf photosynthesis of Semillon was optimal at 30 °C (Greer and
+Weedon, 2012, abstract), and a daily maximum of 35 °C halved the anthocyanin content of
+Cabernet Sauvignon berries compared with 25 °C (Mori et al., 2007, abstract). The optimum band
+20–30 °C has no source.
 
 ## Definition
 
@@ -50,10 +53,10 @@ $$H_B = \frac{1}{3600}\sum_{i \in D} \Delta t_i \cdot \mathbf{1}\left[T_i \in B\
 | Config name | Default | Unit | Source |
 |---|---|---|---|
 | `period_start` / `period_end` | `04-01` / `10-31` | MM-DD | Amerine & Winkler (1944) growing season |
-| `optimum_min_c` | 20.0 | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
-| `optimum_max_c` | 30.0 | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
-| `heat_stress_c` | 30.0 | °C | MIGRATION_PLAN §3.2; background Greer & Weedon (2012) `[to be verified]` |
-| `extreme_heat_c` | 35.0 | °C | MIGRATION_PLAN §3.2; background Mori et al. (2007) `[to be verified]` |
+| `optimum_min_c` | 20.0 | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
+| `optimum_max_c` | 30.0 | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
+| `heat_stress_c` | 30.0 | °C | project default (MIGRATION_PLAN §3.2); background Greer & Weedon (2012): photosynthesis optimum 30 °C |
+| `extreme_heat_c` | 35.0 | °C | project default (MIGRATION_PLAN §3.2); background Mori et al. (2007): 35 °C treatment |
 | `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
 | `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
 
@@ -61,7 +64,8 @@ $$H_B = \frac{1}{3600}\sum_{i \in D} \Delta t_i \cdot \mathbf{1}\left[T_i \in B\
 
 No literature classes are used. More heat-stress hours during ripening indicate a higher risk
 of reduced anthocyanin accumulation (red varieties) and of reduced photosynthesis; the exact
-response depends on variety and duration `[to be verified]`.
+response depends on variety and duration (Mori et al. studied one red variety, Greer and
+Weedon one white variety).
 
 ## Assumptions and limitations
 
@@ -86,10 +90,10 @@ response depends on variety and duration `[to be verified]`.
 ## References
 
 - Amerine, M. A., Winkler, A. J. (1944). Composition and quality of musts and wines of
-  California grapes. *Hilgardia*, 15(6), 493–675. `[DOI not verified]`
+  California grapes. *Hilgardia*, 15(6), 493–675. https://doi.org/10.3733/hilg.v15n06p493
 - Greer, D. H., Weedon, M. M. (2012). Modelling photosynthetic responses to temperature of
   grapevine (*Vitis vinifera* cv. Semillon) leaves on vines grown in a hot climate. *Plant,
-  Cell & Environment*, 35, 1050–1064. `[to be verified]` `[DOI not verified]`
+  Cell & Environment*, 35(6), 1050–1064. https://doi.org/10.1111/j.1365-3040.2011.02471.x
 - Mori, K., Goto-Yamamoto, N., Kitayama, M., Hashizume, K. (2007). Loss of anthocyanins in
-  red-wine grape under high temperature. *Journal of Experimental Botany*, 58, 1935–1945.
-  `[DOI not verified]`
+  red-wine grape under high temperature. *Journal of Experimental Botany*, 58(8), 1935–1945.
+  https://doi.org/10.1093/jxb/erm055

@@ -32,14 +32,18 @@ $$
 | $A_d$ | DTR adjustment: $f(\mathrm{DTR}-u)$ above $u$, $f(\mathrm{DTR}-l)$ (negative) below $l$ | °C·d |
 | BEDD | biologically effective degree-days | °C·d |
 
-This is the form in which the index is commonly quoted from Gladstones (1992) (for example by
-Jones et al., 2010) **[to be verified]**: the cap, the DTR band 10–13 °C and the factor 0.25 are
-not checked against the book.
+This is the form in which the index is quoted from Gladstones (1992) by secondary sources. In
+WP-L.1 the cap of 9 °C·d (19 °C mean), the DTR band 10–13 °C, the factor 0.25 and the order
+"adjust, then cap" were checked against the BEDD implementation and documentation of xclim 0.62
+(`biologically_effective_degree_days`, citing Gladstones 1992 and Hall & Jones 2010):
+$\min\left(k \cdot \max(0, T_{mean} - 10) + A, 9ight)$. The book itself was not read
+(see [literature verification](../literature-verification.md)).
 
-**Order of cap and adjustments** (`cap_order`). Both variants circulate and the book was not
-available to decide [to be verified]:
+**Order of cap and adjustments** (`cap_order`). The default matches the secondary source; the
+alternative was not found in any source checked in WP-L.1 [to be verified]:
 
-- `after_adjustment` (default, the formula above): the adjusted contribution is capped at $c$.
+- `after_adjustment` (default, the formula above): the adjusted contribution is capped at $c$
+  (as in xclim 0.62).
 - `before_adjustment`: the mean excess is capped first (mean capped at 19 °C, as Gladstones'
   monthly formulation is reported), then adjusted; the daily contribution can exceed $c$:
 
@@ -47,8 +51,9 @@ $$
 \mathrm{BEDD}_d = \max\left(0,\; k \cdot \min\left(c, \max(0, T_{mean,d} - T_{base})\right) + A_d\right)
 $$
 
-The final floor at 0 is an implementation choice so that a cold day with a small DTR cannot
-subtract heat [to be verified]. Consequence of the formula as written: a day with
+The final floor at 0 is a project choice so that a cold day with a small DTR cannot subtract
+heat; xclim 0.62 has no such floor, so on such days the two differ (the project value is
+higher). Consequence of the formula as written: a day with
 $T_{mean} \le 10$ °C but $\mathrm{DTR} > 13$ °C gets a small positive contribution.
 
 ## Period and aggregation
@@ -68,12 +73,12 @@ $T_{mean} \le 10$ °C but $\mathrm{DTR} > 13$ °C gets a small positive contribu
 | Config name | Default | Unit | Source |
 |---|---|---|---|
 | `base_temp_c` | 10.0 | °C | Gladstones (1992) |
-| `cap_c_d` | 9.0 | °C·d | Gladstones (1992), 19 °C upper mean [to be verified] |
-| `dtr_lower_c` | 10.0 | °C | Gladstones (1992) [to be verified] |
-| `dtr_upper_c` | 13.0 | °C | Gladstones (1992) [to be verified] |
-| `dtr_factor` | 0.25 | °C·d/°C | Gladstones (1992) [to be verified]; 0 disables |
+| `cap_c_d` | 9.0 | °C·d | Gladstones (1992), 19 °C upper mean; secondary: xclim 0.62 |
+| `dtr_lower_c` | 10.0 | °C | Gladstones (1992); secondary: xclim 0.62 |
+| `dtr_upper_c` | 13.0 | °C | Gladstones (1992); secondary: xclim 0.62 |
+| `dtr_factor` | 0.25 | °C·d/°C | Gladstones (1992); secondary: xclim 0.62; 0 disables |
 | `day_length_coefficient` | 1.0 | — | off; Gladstones gives latitude-dependent values, not shipped [to be verified] |
-| `cap_order` | `after_adjustment` | — | see above [to be verified] |
+| `cap_order` | `after_adjustment` | — | default as in xclim 0.62; `before_adjustment` not found in a source [to be verified] |
 | `daily_mean` | `minmax` | — | project default |
 | `period` | April 1 – October 31 | local month-day | northern-hemisphere growing season |
 
@@ -98,7 +103,12 @@ groups, but I cannot quote the numbers with certainty. Use BEDD to compare senso
 
 ## References
 
-- Gladstones, J. (1992). *Viticulture and Environment.* Winetitles, Adelaide.
+- Gladstones, J. (1992). *Viticulture and Environment.* Winetitles, Adelaide. ISBN 1-875130-12-3.
+- Hall, A., Jones, G. V. (2010). Spatial analysis of climate in winegrape-growing regions in
+  Australia. *Australian Journal of Grape and Wine Research*, 16(3), 389–404.
+  https://doi.org/10.1111/j.1755-0238.2010.00100.x
 - Jones, G. V., Duff, A. A., Hall, A., Myers, J. W. (2010). Spatial analysis of climate in
   winegrape growing regions in the western United States. *American Journal of Enology and
-  Viticulture*, 61(3), 313–326. [DOI not verified]
+  Viticulture*, 61(3), 313–326. https://doi.org/10.5344/ajev.2010.61.3.313
+- Secondary source for the constants: xclim 0.62.0,
+  `xclim.indices.biologically_effective_degree_days` (Ouranos, PyPI package source).

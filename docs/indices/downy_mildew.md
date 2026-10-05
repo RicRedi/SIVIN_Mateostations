@@ -16,7 +16,8 @@ litter and germinate in wet soil, and their zoospores reach the leaves in rain s
 Infection needs free water on the leaf surface. The established models therefore need
 rainfall and/or leaf wetness as **inputs**:
 
-- **"3-10 rule"** (attributed to Baldacci, 1947 **[to be verified]**): primary infections are
+- **"3-10 rule"** (attributed to Baldacci, 1947; attribution and conditions verified in WP-L.1
+  against secondary sources): primary infections are
   expected once the air temperature is at least 10 °C, at least 10 mm of rain has fallen within
   24-48 h, and the shoots are at least 10 cm long. **Rainfall** is a mandatory input, and the
   shoot length needs a phenological observation.
@@ -59,8 +60,8 @@ None. If one is added later, it would be a new `ClimateIndex` subclass in
 
 - Baldacci, E. (1947). Epifitie di *Plasmopara viticola* (1941-46) nell'Oltrepò Pavese ed
   adozione del calendario di incubazione come strumento di lotta. *Atti dell'Istituto Botanico
-  e Laboratorio Crittogamico dell'Università di Pavia*, ser. 5, 8, 45-85.
-  [bibliographic details to be verified] [DOI not verified]
+  e Laboratorio Crittogamico dell'Università di Pavia*, 8, 45-85. (No DOI; volume and pages
+  as quoted by secondary sources, the series number given before could not be confirmed.)
 - Rossi, V., Caffi, T., Giosuè, S., Bugiani, R. (2008). A mechanistic model simulating primary
-  infections of downy mildew in grapevine. *Ecological Modelling*, 212, 480-491.
-  [DOI not verified]
+  infections of downy mildew in grapevine. *Ecological Modelling*, 212(3), 480-491.
+  https://doi.org/10.1016/j.ecolmodel.2007.10.046

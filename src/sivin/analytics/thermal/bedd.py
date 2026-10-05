@@ -22,16 +22,19 @@ BEDD_BASE_TEMP_C: Final = 10.0
 
 BEDD_CAP_C_D: Final = 9.0
 """Upper limit of the daily contribution in °C·d, i.e. no further effect above a 19 °C daily
-mean (Gladstones, 1992) [to be verified]."""
+mean (Gladstones, 1992; as implemented in xclim 0.62, secondary source)."""
 
 BEDD_DTR_LOWER_C: Final = 10.0
-"""Diurnal range in °C below which the contribution is reduced [to be verified]."""
+"""Diurnal range in °C below which the contribution is reduced (Gladstones, 1992; secondary
+source xclim 0.62)."""
 
 BEDD_DTR_UPPER_C: Final = 13.0
-"""Diurnal range in °C above which the contribution is increased [to be verified]."""
+"""Diurnal range in °C above which the contribution is increased (Gladstones, 1992; secondary
+source xclim 0.62)."""
 
 BEDD_DTR_FACTOR: Final = 0.25
-"""Adjustment per °C of diurnal range outside 10-13 °C, in °C·d/°C [to be verified]."""
+"""Adjustment per °C of diurnal range outside 10-13 °C, in °C·d/°C (Gladstones, 1992;
+secondary source xclim 0.62)."""
 
 NO_DAY_LENGTH_ADJUSTMENT: Final = 1.0
 """Day-length coefficient that leaves the contribution unchanged."""
@@ -40,8 +43,9 @@ type CapOrder = Literal["after_adjustment", "before_adjustment"]
 """Whether the daily cap is applied after or before the day-length and DTR adjustments."""
 
 DEFAULT_CAP_ORDER: Final[CapOrder] = "after_adjustment"
-"""Default cap order: the form min(c, max(0, k·max(0, T - 10) + A)) as commonly quoted from
-Gladstones (1992) [to be verified]."""
+"""Default cap order: the adjusted contribution is capped, min(c, k·max(0, T - 10) + A), as
+quoted from Gladstones (1992) by xclim 0.62 (secondary source); the extra floor at 0 is a
+project choice."""
 
 BEDD_DAILY_FORMULAS: Final[Mapping[str, Callable[..., pd.Series]]] = MappingProxyType(
     {"after_adjustment": bedd_daily, "before_adjustment": bedd_daily_cap_before_adjustment}
@@ -50,32 +54,36 @@ BEDD_DAILY_FORMULAS: Final[Mapping[str, Callable[..., pd.Series]]] = MappingProx
 
 
 class BeddParams(ThermalParams):
-    """Parameters of :class:`BeddIndex`; every constant is ``[to be verified]`` in Gladstones."""
+    """Parameters of :class:`BeddIndex`.
+
+    Cap, DTR band and factor match the secondary source xclim 0.62 (citing Gladstones, 1992);
+    the book itself was not consulted (docs/literature-verification.md).
+    """
 
     base_temp_c: float = Field(BEDD_BASE_TEMP_C, description="Base temperature in °C.")
     cap_c_d: float = Field(
         BEDD_CAP_C_D,
         gt=0.0,
         description="Upper limit of the daily contribution in °C·d (19 °C mean - 10 °C base; "
-        "Gladstones, 1992) [to be verified].",
+        "Gladstones, 1992; secondary source).",
     )
     dtr_lower_c: float = Field(
         BEDD_DTR_LOWER_C,
         ge=0.0,
         description="Diurnal temperature range in °C below which the daily contribution is "
-        "reduced (Gladstones, 1992) [to be verified].",
+        "reduced (Gladstones, 1992; secondary source).",
     )
     dtr_upper_c: float = Field(
         BEDD_DTR_UPPER_C,
         ge=0.0,
         description="Diurnal temperature range in °C above which the daily contribution is "
-        "increased (Gladstones, 1992) [to be verified].",
+        "increased (Gladstones, 1992; secondary source).",
     )
     dtr_factor: float = Field(
         BEDD_DTR_FACTOR,
         ge=0.0,
         description="Adjustment in °C·d per °C of diurnal range outside the band; 0 disables "
-        "it (Gladstones, 1992) [to be verified].",
+        "it (Gladstones, 1992; secondary source).",
     )
     day_length_coefficient: float = Field(
         NO_DAY_LENGTH_ADJUSTMENT,
@@ -88,7 +96,8 @@ class BeddParams(ThermalParams):
         DEFAULT_CAP_ORDER,
         description="'after_adjustment': cap the adjusted daily contribution (default, form "
         "commonly quoted from Gladstones, 1992); 'before_adjustment': cap the mean excess, "
-        "then adjust (Gladstones' monthly formulation as reported) [to be verified].",
+        "then adjust (Gladstones' monthly formulation as reported; not found in a source "
+        "[to be verified]).",
     )
     period: Season = Field(
         default_factory=Season.vegetation,

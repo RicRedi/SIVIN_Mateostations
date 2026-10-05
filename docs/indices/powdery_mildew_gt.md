@@ -58,15 +58,17 @@ and 95 °F = 35.0 °C. Both band limits are inclusive.
 ### Interpretation choices (this project)
 
 1. **Index value at onset.** On the onset day the index is set to $I_{on} = 60$, i.e. the three
-   onset days earn their 20 points each. Descriptions differ on whether the index starts at
-   0 or at 60. **[to be verified]** against Gubler et al. (1999); it is configurable as
-   `onset_index_points`.
+   onset days earn their 20 points each. Verified in WP-L.1: the UC IPM model description
+   states that "for each of these three days, the model assigns 20 points". It is configurable
+   as `onset_index_points`.
 2. **Heat and hours on the same day.** The heat penalty is applied independently of the
    hours rule, so a favourable day with heat nets $+20 - 10 = +10$ and a non-favourable heat day
-   $-20$. This is a project interpretation **[to be verified]**: in the descriptions of the
-   index known to us, the two conditions are listed separately, but the original text was not
-   checked. Some descriptions limit the decrease to 10 points per day; this is also
-   **[to be verified]** and listed as an owner question in `docs/wp_log/WP-2.3.md`.
+   $-20$. The $+10$ case is confirmed by a secondary description of the index (Pest Prophet
+   blog, see [literature verification](../literature-verification.md)). The same description
+   says that the index "should not decline by more than 10 points" on one day, which would make
+   a non-favourable heat day $-10$, not $-20$. Neither the APSnet text of Gubler et al. (1999)
+   nor the UC IPM page could be read to confirm it, so the implementation is **unchanged**
+   **[to be verified]**; this is an owner question (`docs/wp_log/WP-L.1.md`).
 3. **Heat before onset** is ignored and does not reset the onset streak. This is a project
    interpretation **[to be verified]**: the descriptions known to us mention the heat penalty
    only for the running index.
@@ -118,7 +120,7 @@ WP).
 | `band_max_temp_c` | 29.44 (85 °F) | °C | Gubler et al. (1999); UC IPM |
 | `min_favourable_run_h` | 6 | h | Gubler et al. (1999); UC IPM |
 | `onset_days` | 3 | d | Gubler et al. (1999); UC IPM |
-| `onset_index_points` | 60 | points | interpretation (3 × 20) **[to be verified]** |
+| `onset_index_points` | 60 | points | UC IPM model description (3 × 20) |
 | `max_undetermined_carry_days` | 1 | d | project default **[to be tuned]** |
 | `favourable_day_points` | 20 | points | Gubler et al. (1999); UC IPM |
 | `unfavourable_day_points` | 10 | points | Gubler et al. (1999); UC IPM |
@@ -131,9 +133,11 @@ WP).
 | `sampling.nominal_interval_s` | 1825 | s | legacy configuration |
 | `sampling.max_sample_duration_s` | 4562.5 (2.5 × 1825) | s | project default, to be tuned |
 
-The values attributed to Gubler et al. (1999) and UC IPM are the widely published rules of the
-index. They were reproduced from knowledge and **not checked against the original text** in
-this workpackage (no access to the sources from the sandbox).
+The values attributed to Gubler et al. (1999) and UC IPM were checked in WP-L.1 against excerpts
+of the UC IPM pages and secondary descriptions found by web search (the pages themselves could
+not be opened): 70–85 °F for 6 continuous hours, three consecutive days for onset, +20 / −10
+points, 95 °F for 15 minutes −10 points, bounds 0–100, classes 0–30 / 40–50 / 60–100. One
+secondary description gives other classes (0–20 / 30–50 / 60–100); the UC IPM text is kept.
 
 ## Interpretation
 
@@ -144,8 +148,10 @@ this workpackage (no access to the sources from the sandbox).
 | 60-100 | `high` | pathogen reproduces about every 5 days; shortest intervals |
 
 The index only changes in steps of 10 points, so the classes have no gaps. The meaning column
-paraphrases the UC IPM guideline from memory **[to be verified]**; the exact spray-interval advice depends on the fungicide
-and is not part of this project.
+follows the UC IPM / APSnet excerpts found in WP-L.1 (60–100: the pathogen reproduces about
+every 5 days; 0–30: about every 15 days or not at all). The "40–50: every 15 days" wording of
+the moderate class was not found and is a paraphrase **[to be verified]**; the exact
+spray-interval advice depends on the fungicide and is not part of this project.
 
 ## Assumptions and limitations
 
@@ -187,6 +193,11 @@ and is not part of this project.
 
 - Gubler, W. D., Rademacher, M. R., Vasquez, S. J., Thomas, C. S. (1999). Control of powdery
   mildew using the UC Davis powdery mildew risk index. *APSnet Features*, American
-  Phytopathological Society. [authors and venue to be verified] [DOI not verified]
+  Phytopathological Society. https://doi.org/10.1094/APSnetFeature-1999-0199
 - University of California Statewide Integrated Pest Management Program (UC IPM). *Grape Pest
-  Management Guidelines: Powdery Mildew* (online). [edition and date to be verified]
+  Management Guidelines: Powdery Mildew* (online), https://ipm.ucanr.edu/agriculture/grape/powdery-mildew/,
+  and *Models: Powdery Mildew of Grape*, https://ipm.ucanr.edu/DISEASE/DATABASE/grapepowderymildew.html.
+  [edition and date not stated in the excerpts; consulted via search index, October 2026]
+- Pest Prophet blog, "How to Use Powdery Mildew Risk Index Model on Grapes",
+  https://blog.pestprophet.com/how-to-use-powdery-mildew-risk-index-model-on-grapes/
+  (secondary, commercial; source of the daily-limit statement in interpretation 2).

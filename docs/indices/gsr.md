@@ -48,23 +48,40 @@ $$
 
 | Config name | Default | Unit | Source |
 |---|---|---|---|
-| `base_temp_c` | 0.0 | °C | Parker et al. (2020) |
-| `period` | April 1 – October 31 | local month-day | start: Parker et al. (2020); end: project default |
+| `base_temp_c` | 0.0 | °C | Parker et al. (2020); verified (WP-L.1) |
+| `period` | April 1 – October 31 | local month-day | start: day of year 91, Parker et al. (2020), verified (WP-L.1); end: project default |
 | `targets` | none | list of `{label, f_star_c_d}` (°C·d) | user-supplied from Parker et al. (2020) |
 | `max_missing_days_at_start` | 0 | d | project default, to be tuned |
 | `daily_mean` | `minmax` | — | project default |
 
 Targets must have unique lower-case labels (e.g. `sugar_200_g_l`) and increasing critical sums.
-**No cultivar values are shipped**: they depend on the cultivar of each sensor (unknown,
-MIGRATION_PLAN §0.6 Q4) and must be copied from Parker et al. (2020) by the owner.
+**No targets are active by default**: they depend on the cultivar of each sensor (unknown,
+MIGRATION_PLAN §0.6 Q4).
 
-Example configuration (numbers are placeholders, not literature values):
+Parker et al. (2020) give F* for six sugar targets (170, 180, 190, 200, 210 and 220 g/L) for 65
+cultivars (base 0 °C, from day of year 91). WP-L.1 could not read the table of the paper; only
+values quoted consistently by secondary sources are provided, as the **optional preset**
+`GSR_CULTIVAR_PRESETS` in `sivin.analytics.thermal` (not active unless configured):
+
+| Preset key | Target | F* (°C·d) | Source |
+|---|---|---|---|
+| `sauvignon_blanc` | `sugar_200_g_l` (200 g/L) | 2820 | Parker et al. (2020), quoted by Ausseil et al. (2021) |
+
+No value could be confirmed for Grüner Veltliner, Riesling, Pinot blanc, Chardonnay,
+Müller-Thurgau, Welschriesling, Pinot noir, Blaufränkisch, Saint Laurent or Zweigelt (for
+Chardonnay the sources found disagree on the sugar target of the quoted value); see
+[literature verification](../literature-verification.md). Further cultivars belong in the preset
+only after their value has been read in Parker et al. (2020).
+
+Example configuration (the Sauvignon blanc preset):
 
 ```yaml
 gsr:
   targets:
-    - {label: sugar_200_g_l, f_star_c_d: <F* from Parker et al. 2020>}
+    - {label: sugar_200_g_l, f_star_c_d: 2820.0}
 ```
+
+In Python: `GsrParams(targets=GSR_CULTIVAR_PRESETS["sauvignon_blanc"])`.
 
 ## Interpretation
 
@@ -82,11 +99,16 @@ No classes; the predicted date and its difference between sensors and seasons.
 
 - Class `GsrIndex` with `GsrParams` and `PhenologyStage` in
   `src/sivin/analytics/thermal/phenology.py`; accumulation by `ThermalTimeModel`.
+- Optional cultivar preset `GSR_CULTIVAR_PRESETS` in `phenology.py`.
 - Tests: `tests/analytics/thermal/test_phenology.py` (not configured, two synthetic targets,
-  validation).
+  validation, Sauvignon blanc preset).
 
 ## References
 
-- Parker, A. K. et al. (2020). Temperature-based grapevine sugar ripeness modelling for a wide
-  range of *Vitis vinifera* L. cultivars. *Agricultural and Forest Meteorology*, 285–286,
-  107902. [DOI not verified]
+- Parker, A. K., García de Cortázar-Atauri, I., Gény, L., Spring, J.-L., Destrac, A., Schultz,
+  H., et al. (2020). Temperature-based grapevine sugar ripeness modelling for a wide range of
+  *Vitis vinifera* L. cultivars. *Agricultural and Forest Meteorology*, 285–286, 107902.
+  https://doi.org/10.1016/j.agrformet.2020.107902
+- Ausseil, A.-G. E., Law, R. M., Parker, A. K., Teixeira, E. I., Sood, A. (2021). Projected wine
+  grape cultivar shifts due to climate change in New Zealand. *Frontiers in Plant Science*, 12,
+  618039. https://doi.org/10.3389/fpls.2021.618039 (secondary source of the preset value)

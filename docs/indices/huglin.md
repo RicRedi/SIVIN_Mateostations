@@ -26,7 +26,8 @@ The clip at 0 is applied per day before multiplying by $K$ (same as the legacy c
 
 **Daily mean.** Huglin (1978) and Tonietto & Carbonneau (2004) use the daily mean air
 temperature of climatological stations; whether it is meant as $(T_{max}+T_{min})/2$ or as a
-mean of more readings is not stated in a source I can verify [to be verified]. The default here
+mean of more readings is not stated in a source that could be checked (WP-L.1: not found)
+[to be verified]. The default here
 is `minmax` (as for GDD); the legacy `vineyard_analyst.calculate_huglin_index` used the mean of
 all samples (`sample_mean`).
 
@@ -51,13 +52,14 @@ all samples (`sample_mean`).
 | `base_temp_c` | 10.0 | °C | Huglin (1978) |
 | `daily_mean` | `minmax` | — | project default, see above [to be verified] |
 | `period` | April 1 – September 30 | local month-day | Huglin (1978) |
-| `k_bands` | table below | °N, — | Tonietto & Carbonneau (2004) [to be verified] |
+| `k_bands` | table below | °N, — | Huglin (1978), Tonietto & Carbonneau (2004); stepwise table as in xclim 0.62 (secondary) |
 | `k_override` | none | — | fixed K instead of the lookup; legacy used 1.05 |
 | `classes` | table below | °C·d | Tonietto & Carbonneau (2004) |
 | `max_missing_days` | 0 | d | project default, to be tuned on real data |
 
-Latitude bands, upper-inclusive as the table is commonly tabulated (40°01'–42° → 1.02, …,
-48°01'–50° → 1.06) [to be verified]:
+Latitude bands, upper-inclusive (40°01'–42° → 1.02, …, 48°01'–50° → 1.06). The table is the
+stepwise "huglin" method of xclim 0.62 (`huglin_day_length_latitude_coefficient`, citing Huglin,
+1978), checked in WP-L.1 (see [literature verification](../literature-verification.md)):
 
 | Latitude | K |
 |---|---|
@@ -67,8 +69,9 @@ Latitude bands, upper-inclusive as the table is commonly tabulated (40°01'–42
 | > 46° – 48° N | 1.05 |
 | > 48° – 50° N | 1.06 |
 
-Tonietto & Carbonneau (2004) give K from 1.02 to 1.06 between 40° and 50° latitude; the 2°
-bands follow that range but the exact band edges are **[to be verified]** against the papers.
+Tonietto & Carbonneau (2004) give K from 1.02 (40°) to 1.06 (50°); the 2° bands with
+upper-inclusive edges match the stepwise table of xclim 0.62. The primary papers were not read,
+so the band edges rest on that secondary source.
 At or below 40° N, above 50° N and for a missing latitude no K is defined: the result is
 `None` unless `k_override` is set. Some authors interpolate K linearly between 1.02 (40°) and
 1.06 (50°), which gives K ≈ 1.056 at 48.88° N; interpolation is not implemented (out of
@@ -100,9 +103,12 @@ bound belongs to the lower class):
 | HI+2 warm | `warm` | 2400 < HI ≤ 3000 |
 | HI+3 very warm | `very_warm` | > 3000 |
 
-The label `temperate_warm` follows the example of the site data contract
-(MIGRATION_PLAN §2.6); the English class name in the paper is "warm temperate"
-[to be verified].
+The class bounds (≤ 1500, 1500–1800, 1800–2100, 2100–2400, 2400–3000, > 3000, each "> lower
+and ≤ upper") were verified in WP-L.1 against secondary sources quoting Tonietto & Carbonneau
+(2004). The label `temperate_warm` follows the example of the site data contract
+(MIGRATION_PLAN §2.6); the class name "warm temperate" (HI+1) appears in those sources. The
+names of HI+2 and HI+3 are given inconsistently there ("warm" / "very warm" vs "warm to very
+warm" / "hot"); the labels `warm` / `very_warm` are kept.
 
 ## Assumptions and limitations
 
@@ -126,7 +132,11 @@ The label `temperate_warm` follows the example of the site data contract
 ## References
 
 - Huglin, P. (1978). Nouveau mode d'évaluation des possibilités héliothermiques d'un milieu
-  viticole. *Comptes Rendus de l'Académie d'Agriculture de France*, 64, 1117–1126.
+  viticole. *Comptes Rendus de l'Académie d'Agriculture de France*, 64, 1117–1126. (No DOI.
+  The same title also appears in the proceedings of the *Symposium International sur
+  l'Écologie de la Vigne*, Constanța, 1978, pp. 89–98, as cited by xclim.)
 - Tonietto, J., Carbonneau, A. (2004). A multicriteria climatic classification system for
-  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124, 81–97.
-  [DOI not verified]
+  grape-growing regions worldwide. *Agricultural and Forest Meteorology*, 124(1–2), 81–97.
+  https://doi.org/10.1016/j.agrformet.2003.06.001
+- Secondary source for the K table: xclim 0.62.0, `xclim.indices.helpers.huglin_day_length_latitude_coefficient`
+  (Ouranos, PyPI package source).

@@ -50,7 +50,7 @@ reported with the prefix `critical_`.
 |---|---|---|---|
 | `period_start` / `period_end` | `04-01` / `10-31` | MM-DD | growing season (Amerine & Winkler 1944), project choice `[to be tuned]` |
 | `frost_c` | 0.0 (≤) | °C | MIGRATION_PLAN §3.2 |
-| `hard_frost_c` | −2.0 (≤) | °C | MIGRATION_PLAN §3.2 `[to be verified]` |
+| `hard_frost_c` | −2.0 (≤) | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
 | `after_date` | `None` | date | e.g. modelled budburst (WP-2.1); must lie in the season year |
 | `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
 | `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
@@ -58,9 +58,10 @@ reported with the prefix `critical_`.
 ## Interpretation
 
 Any frost hour after budburst is a potential damage event. Stage-specific critical temperatures
-are reviewed by Poling (2008); the values in that review are not copied here because they were
-not verified against the paper. The defaults 0 °C and −2 °C are thresholds of the project plan
-`[to be verified]`.
+are reviewed by Poling (2008); the values in that review are not copied here because its table
+could not be read in WP-L.1. The defaults 0 °C and −2 °C are thresholds of the project plan,
+not literature values; secondary sources citing Poling (2008) mention serious damage of green
+tissue after budburst below about −2.2 °C (28 °F).
 
 ## Assumptions and limitations
 
@@ -85,6 +86,6 @@ not verified against the paper. The defaults 0 °C and −2 °C are thresholds o
 ## References
 
 - Poling, E. B. (2008). Spring cold injury to winegrapes and protection strategies and methods.
-  *HortScience*, 43(6), 1652–1662. `[DOI not verified]`
+  *HortScience*, 43(6), 1652–1662. https://doi.org/10.21273/HORTSCI.43.6.1652
 - Amerine, M. A., Winkler, A. J. (1944). Composition and quality of musts and wines of
-  California grapes. *Hilgardia*, 15(6), 493–675. `[DOI not verified]`
+  California grapes. *Hilgardia*, 15(6), 493–675. https://doi.org/10.3733/hilg.v15n06p493
