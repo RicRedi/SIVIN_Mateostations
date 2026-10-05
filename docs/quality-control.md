@@ -103,6 +103,109 @@ falls back to the physical one.
 | `temp_climate_min_c` / `temp_climate_max_c` | −30 / 42 | °C | project default for South Moravia *[to be verified against station records]* |
 | `rh_min_pct` / `rh_max_pct` | 0 / 100 | % | physical limits of relative humidity |
 
+`range` checks temperature and humidity only; precipitation and battery voltage have their own
+checks below.
+
+### Precipitation and battery (WP-1.9): events, never row flags
+
+Since owner decision Q9 (2026-10-05) a series also carries `precip_mm` (precipitation in the
+interval since the previous sample), `precip_total_mm` (the device's cumulative counter) and
+`battery_v`. The row validity rule concerns temperature and humidity only, so **a problem in
+one of these columns must not invalidate the temperature and humidity of its row**. A
+`QcFlag` cannot express that: the `qc` field is one bit field per row (frozen contract,
+plan §2.5) and every excluding flag (`OUT_OF_RANGE`, …) removes the whole row from indices
+and charts. The three checks therefore **never set flags** (their `CheckOutcome.flags` are all
+zero) and report events instead:
+
+| Check | Event kind | Severity | Effect on the data |
+|---|---|---|---|
+| `precip_range` | `precip_out_of_range` | warning | none in the pipeline; `PrecipRangeCheck.set_aside(series)` returns the series with exactly those `precip_mm` values replaced by `NaN` |
+| `precip_counter` | `precip_counter_reset` | info | none |
+| `precip_counter` | `precip_counter_mismatch` | warning | none (which of the two columns is wrong cannot be told) |
+| `battery` | `low_battery` | warning | none |
+
+**Why set-aside values and not a new flag or a per-column flag.** A new `QcFlag` bit that is
+not in the exclusion mask would keep temperature and humidity valid, but every consumer of
+`precip_mm` would then have to remember to mask it, and the flag set is a frozen contract.
+Replacing only the implausible precipitation value by `NaN`
+(`MeasurementSeries.with_values`, allowed for auxiliary columns only) keeps the row and its
+flags untouched, needs no contract change and makes every later consumer (daily sum, web)
+correct without knowing about the check; the event records what was removed. Temperature and
+humidity are never replaced, only flagged. `QualityPipeline` (WP-1.5, not in this
+workpackage's scope) only ORs flags and collects events; applying `set_aside` to
+`QualityResult.series` after the pipeline is the integration step proposed for WP-1.7.
+
+Runs: consecutive affected samples form one event from the first to the last of them
+(`end_utc`); samples without a value in that column neither end nor extend a run
+(`runs_of`).
+
+#### `precip_range` — implausible precipitation per interval
+
+A present `precip_mm` outside $[P_{min}, P_{max}]$ is implausible.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `precip_min_mm` | 0 | mm | physical limit: an amount of precipitation cannot be negative |
+| `precip_max_mm` | 50 | mm per sample interval (nominal 1830 s) | project default *[to be tuned]*; far above the largest value of the first real export (0.9 mm), meant to catch device or transfer errors, not heavy rain; not from literature |
+
+#### `precip_counter` — interval values against the cumulative counter
+
+In the first real export (sensor 77799986, plan §0.6.1) the interval value of a sample equals
+the counter increase since the previous sample, up to 0.1 mm: e.g. the lines
+`2025-12-19 13:36:46;…;0,0;323,6;…` and `2025-12-19 14:07:16;…;0,3;324,0;…` give an interval
+value of 0.3 mm and an increase of 0.4 mm (both columns have 0.1 mm resolution). With
+$\Delta C_i = C_i - C_{j}$, where $C_j$ is the previous present counter value:
+
+- **reset** if $\Delta C_i < -\varepsilon$: `precip_counter_reset` (info), not an error;
+  that step is not compared;
+- **compared** if the previous row has a counter value, $t_i - t_{i-1} \le \Delta t_{max}$,
+  $p_i$ and $C_i$ are present and the step is no reset;
+- **mismatch** if compared and $|p_i - \Delta C_i| > \varepsilon$.
+
+After a longer gap the counter also contains the precipitation of the missing samples, so such
+steps are not compared. The 139-day gap of the real export changes the counter by 0 mm.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `tolerance_mm` ($\varepsilon$) | 0.15 | mm | 0.1 mm export resolution plus margin; differences of 0.1 mm occur in the real export; project default *[to be tuned]* |
+| `max_interval_s` ($\Delta t_{max}$) | 2745 | s | 1.5 × the nominal interval of 1830 s (one regular step with jitter); project default *[to be tuned]* |
+
+With these defaults the real excerpt `tests/fixtures/exports/real/` gives no event; with
+$\varepsilon$ = 0.05 mm it gives exactly the 0.1 mm difference above (tested).
+
+#### `battery` — low battery
+
+A present `battery_v` below `low_battery_v` is a low reading; each run gives one `low_battery`
+warning with its lowest voltage. A low battery says nothing about the measurement of that
+moment, so nothing is flagged or removed.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `low_battery_v` | 3.3 | V | project default *[to be tuned]*; the real export reads 3.0–3.7 V (3.0 V in its two oldest lines, which gives one event); the voltage at which the device stops measuring is unknown *[to be verified against the device data sheet]* |
+
+#### Wiring (proposed for WP-1.7)
+
+The checks are registered (`check_registry`) but not enabled by default, because the default
+check lists live in `QualityPipelineSettings` (outside this workpackage). Proposed
+configuration:
+
+```yaml
+quality:
+  screening_checks: [missing, sampling, range, precip_range, precip_counter, battery]
+  check_settings:
+    precip_range: { precip_min_mm: 0.0, precip_max_mm: 50.0 }
+    precip_counter: { tolerance_mm: 0.15, max_interval_s: 2745.0 }
+    battery: { low_battery_v: 3.3 }
+```
+
+and, after `QualityPipeline.run`, `PrecipRangeCheck(settings).set_aside(result.series)` before
+daily aggregation and the site export. Enabling them changes no flag of any row (tested in
+`tests/quality/test_precip_battery.py`).
+
+Implementation: `sivin/quality/checks/precip.py` (`PrecipRangeCheck`, `PrecipCounterCheck`,
+`CounterSteps`), `sivin/quality/checks/battery.py` (`BatteryCheck`), `runs_of` in
+`sivin/quality/checks/range_check.py`; tests in `tests/quality/test_precip_battery.py`.
+
 ### `spike` — isolated departure that returns → `SPIKE`
 
 With $d^- = x_i - x_{i-1}$, $d^+ = x_{i+1} - x_i$ (previous and next *valid* samples), rate
