@@ -164,13 +164,163 @@ first if it really returns to use.
 
 Set `to` of the current placement and `status: "inactive"`. When it comes back, add a new
 placement as in *Move a sensor* (same coordinates if it returns to the same spot) and set
-`status: "active"` (`with_moved` does that for you).
+`status: "active"` (`with_moved` does that for you). If the sensor keeps recording while it is
+away, also add the period to the [off-site log](#off-site-log): only the log keeps those
+samples out of the indices.
 
 ### Retire a sensor
 
 Set `to` of the last placement and `status: "retired"`. Keep the feature: its placement
 history is needed to interpret the data it recorded. Delete a feature only if it was added by
 mistake.
+
+## Off-site log
+
+`sensors/offsite_log.yaml` (MIGRATION_PLAN §2.8) lists the periods when a sensor was **not**
+measuring in the vineyard: in the office, at the service, in transport or in storage. By default
+every sensor is assumed to measure in the vineyard; the log is the only source of truth for the
+exceptions (owner decision of 2026-10-05; automatic detection only warns, see
+[quality-control.md](quality-control.md#deployment-detection)). Samples recorded inside a logged
+period get the flag `PRE_DEPLOYMENT`, are left out of every climate index, and are shown on the
+web as a grey band without a line ([web.md](web.md#off-site-periods)).
+
+The file is edited by hand (directly on GitHub; later in the web admin mode, WP-3.3). Its
+structure is described by `sensors/offsite_log.schema.json`, generated from
+`sivin.registry.offsite` (do not edit it by hand). The committed file has a header comment that
+explains the format, the first real entry (sensor 77799986, owner decision Q10: off site for the
+whole real export, 30 Jul 2025 – 1 Mar 2026) and a commented-out example under the same
+`entries:` key. The example uses dates in the year 2000, so even uncommented as is it excludes
+nothing.
+
+### Format
+
+All periods are list items (`- sensor: ...`) under **one** `entries:` key:
+
+```yaml
+entries:
+  - sensor: "77799986"          # 8-digit serial; any known spelling of the name is accepted
+    from: "2025-12-17 12:00"    # start, inclusive
+    to:   "2026-03-15 09:00"    # end, exclusive; open = still off site
+    reason: office              # office | service | transport | storage | other
+    note: "winter storage in the office"   # optional
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `sensor` | yes | The sensor, in any spelling of [Sensor names that are recognised](#sensor-names-that-are-recognised) (serial, portal name, GPX name, a unique legacy short name). It must be in `sensors/sensors.geojson`. Write it in quotes; an unquoted serial is accepted as written. |
+| `from` | yes | Start of the period, **inclusive**. |
+| `to` | yes | End of the period, **exclusive**. Write **`to: open`** while the sensor is still off site (`to: null` means the same). A `to:` with nothing after it is an **error**, so a half-filled entry never silently excludes everything from `from` on. |
+| `reason` | yes | `office`, `service`, `transport`, `storage` or `other` (lower case). |
+| `note` | no | Free text in quotes. The web shows `"<reason>: <note>"` in the band's tooltip. |
+
+The file is read strictly: **a key written twice is an error** (YAML itself would silently keep
+the last one). That covers a second `entries:` line, e.g. from pasting a whole example file, and
+two `from:` lines in one entry.
+
+**Times.** Write local wall-clock time of the vineyards, `YYYY-MM-DD HH:MM` (seconds optional,
+`T` instead of the space also accepted), in quotes. The zone is Europe/Prague (configurable,
+`OffSiteLogSettings.timezone`). Alternatively give an absolute instant in ISO 8601 with an
+explicit offset or `Z`: `"2025-12-17T12:00+01:00"`, `"2025-12-17T11:00Z"`. Everything is stored
+and compared in UTC; messages show local time with UTC in brackets. Twice a year a local time is
+not unique:
+
+* in the night of the **last Sunday of October** the clock goes back from 03:00 to 02:00, so
+  `02:00`–`02:59` happen twice; such a local time is rejected as *ambiguous*. Write it with the
+  offset you mean: `+02:00` for the first pass (summer time, CEST), `+01:00` for the second
+  (winter time, CET); the message suggests both;
+* in the night of the **last Sunday of March** the clock jumps from 02:00 to 03:00, so
+  `02:00`–`02:59` do not exist; such a local time is rejected as *nonexistent*. Use a time from
+  03:00 on, or the time the clock showed before the change with the winter offset `+01:00`
+  (the message suggests exactly that one).
+
+### Examples
+
+A sensor kept in the office over the winter:
+
+```yaml
+entries:
+  - sensor: "77799986"
+    from: "2025-12-17 12:00"
+    to: "2026-03-15 09:00"
+    reason: office
+    note: "winter storage in the office"
+```
+
+A service visit (taken down Monday morning, back in the vineyard Wednesday afternoon), plus the
+car ride as its own period if you want it separate (further items under the same `entries:`):
+
+```yaml
+  - sensor: "8615620 77678271"
+    from: "2026-06-01 07:30"
+    to: "2026-06-01 08:15"
+    reason: transport
+  - sensor: "8615620 77678271"
+    from: "2026-06-01 08:15"
+    to: "2026-06-03 14:00"
+    reason: service
+    note: "battery replacement"
+```
+
+Periods of one sensor may touch (one ends exactly when the next starts) but not overlap.
+
+A sensor that is still off site (only its last period may be open):
+
+```yaml
+  - sensor: "77680921 (VUT)"
+    from: "2026-10-01 10:00"
+    to: open
+    reason: storage
+    note: "waiting for a new mast"
+```
+
+When it goes back to the vineyard, replace `open` with the time it was put up.
+
+A time in the repeated hour of 25 October 2026:
+
+```yaml
+    from: "2026-10-25T02:30+01:00"   # the second 02:30, already winter time
+```
+
+The advisory deployment detector suggests periods it suspects are missing in this form: its
+warning names the period in local time and gives `from:` / `to:` values with offset, ready to
+paste ([quality-control.md](quality-control.md#deployment-detection)).
+
+### Validation
+
+`OffSiteLogStore.load(path, registry, timezone)` reads the file on every pipeline run (and in
+the tests); an invalid log **stops the run** — no update is better than wrongly flagged data.
+Every message names the entry as **`entry #N`** — the N-th `- sensor:` item, counted from 1 —
+with the line number of the entry or of the field, and says how to fix it. All problems are
+reported at once. Examples (shortened):
+
+| Message | Cause |
+|---|---|
+| `line 31: the key 'entries' appears a second time (first on line 25); keep only one - YAML would silently use the last (put all entries as '- sensor: ...' items under one 'entries:')` | A second `entries:` (or any key twice in one entry). |
+| `entry #2, 'sensor' (line 31): sensor '12345678' is not in sensors/sensors.geojson (known sensors: 77678271, …); check the serial, or add the sensor to the registry first` | Unknown sensor, typo in the serial. |
+| `entry #1, 'sensor' (line 2): Legacy short name '9986' is ambiguous … Use the full 8-digit serial.` | A 4-digit short name that fits several sensors. |
+| `entry #2, 'to' (line 33): is empty - write a date/time, or 'open' if the sensor is still off site` | `to:` with nothing after it. |
+| `entry #2 (line 31): the key 'to' is missing - add a line like to: "2026-03-05 16:00"   (or  to: open  if the sensor is still off site)` | A required key is missing (each key has its own example). |
+| `entry #2, 'form' (line 32): unknown key 'form' - allowed keys are sensor, from, to, reason, note (check the spelling)` | Misspelt key. |
+| `entry #2, 'from' (line 32): local time '2026-10-25 02:30' is ambiguous in Europe/Prague …; give an explicit offset: '2026-10-25T02:30+02:00' for the first one (summer time) or '2026-10-25T02:30+01:00' for the second one (winter time)` | Local time in the repeated hour. |
+| `entry #2, 'to' (line 33): local time '2026-03-29 02:30' does not exist in Europe/Prague …; write a time after the change, or the time on the clock before the change with its offset: '2026-03-29T02:30+01:00'` | Local time in the skipped hour. |
+| `entry #2, 'from' (line 32): time '17.12.2025 12:00' must be local 'YYYY-MM-DD HH:MM' or ISO 8601 with an offset, e.g. …` | Wrong format (also `'2025-12-17' has no time of day` for a bare date). |
+| `entry #2 (line 31): 'from' (2026-05-01 08:00 CEST (06:00 UTC)) must be before 'to' (…); swap or correct the times` | `from` equals or follows `to`. |
+| `entry #2, 'reason' (line 34): Input should be 'office', 'service', 'transport', 'storage' or 'other' (lower case, exactly one of these)` | Unknown reason. |
+| `entry #3 (line 37), 'from': the period of sensor 77799986 starting 2026-01-05 00:00 CET (2026-01-04 23:00 UTC) overlaps entry #2 (line 31) (…); periods of one sensor must not overlap - correct the times or merge the two entries` | Two periods of one sensor overlap. |
+| `entry #1 (line 25), 'to': sensor 77799986 has an open period ('to: open') that is not its last one (entry #2 (line 31) starts …); write the end time into entry #1 (line 25) or remove the later entry` | An open period followed by a later one. |
+| `unknown top-level key(s) 'entires' (line 1); the file must contain one key 'entries:' …` / `the file must contain one key 'entries:' with a list of entries …; write 'entries: []' when there are no periods` | File structure (misspelt or missing `entries:`, empty file). |
+| `not valid YAML (indent with spaces, not tabs; put times and notes in quotes): …` | YAML syntax. |
+
+Check the file locally with:
+
+```bash
+.venv/bin/python -c "from pathlib import Path; from sivin.registry.geojson import GeoJsonRegistryStore; from sivin.registry.offsite import OffSiteLogStore; r = GeoJsonRegistryStore().load(Path('sensors/sensors.geojson')); print(OffSiteLogStore().load(Path('sensors/offsite_log.yaml'), r))"
+```
+
+The JSON Schema checks the structure of every entry (keys, reason, time pattern or `open`).
+Duplicate keys, blank values, the checks that need the registry or several entries (known
+sensor, overlaps, open period last) and the daylight-saving checks are done by the Python
+loader only.
 
 ## How the initial file was created
 

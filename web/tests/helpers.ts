@@ -37,3 +37,8 @@ export function fakeFetcher(base: string, files: Readonly<Record<string, unknown
   };
   return { fetcher, requested };
 }
+
+/** The synthetic off-site period of sensor 77799986 in the committed fixture (generate-fixture.mjs). */
+export const OFF_SITE_START = utc(2026, 6, 4, 6);
+export const OFF_SITE_END = utc(2026, 6, 5, 14);
+export const OFF_SITE_DETAIL = 'service: synthetic example, battery replacement in the office';

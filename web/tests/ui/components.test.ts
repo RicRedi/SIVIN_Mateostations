@@ -106,7 +106,7 @@ describe('SensorPanel', () => {
     const text = cards[0]?.textContent ?? '';
     expect(text).toContain('77799986 (VUT)');
     expect(text).toContain('219 m');
-    expect(text).toContain('3. 6. 2026');
+    expect(text).toContain('1. 6. 2026');
     expect(text).toContain('11,2 °C');
     expect(text).not.toContain('Vinice');
     expect(cards[1]?.querySelector('.is-stale')).not.toBeNull();

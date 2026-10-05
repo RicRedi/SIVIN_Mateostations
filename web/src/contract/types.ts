@@ -107,17 +107,56 @@ export const DAILY_VALUE_COLUMNS = [
 ] as const;
 export type DailyValueColumn = (typeof DAILY_VALUE_COLUMNS)[number];
 
-/** Event types produced by the deployment detector (§2.7). */
-export const SENSOR_EVENT_TYPES = ['deployment', 'retrieval', 'step'] as const;
+/** Point event types produced by the deployment detector (§2.7). */
+export const POINT_EVENT_TYPES = ['deployment', 'retrieval', 'step'] as const;
+export type PointEventType = (typeof POINT_EVENT_TYPES)[number];
+
+/** Interval event type: a period from the off-site log (§2.8). */
+export const OFF_SITE_EVENT_TYPE = 'off_site';
+
+/** All event types of `events/<sensor_id>.json`. */
+export const SENSOR_EVENT_TYPES = [...POINT_EVENT_TYPES, OFF_SITE_EVENT_TYPE] as const;
 export type SensorEventType = (typeof SENSOR_EVENT_TYPES)[number];
 
-/** One entry of `events/<sensor_id>.json`. */
-export interface SensorEvent {
-  readonly type: SensorEventType;
+/** A point event of `events/<sensor_id>.json` (deployment, retrieval, step); has no `t_end`. */
+export interface PointSensorEvent {
+  readonly type: PointEventType;
   readonly t: number;
   readonly source: string;
   readonly confidence: number | null;
   readonly detail: string | null;
+}
+
+/**
+ * A period when the sensor was not in the vineyard (§2.8): `[t, t_end)`, `t_end` is `null` while
+ * the sensor is still off site. `source` is `"log"`, `detail` is `"<reason>: <note>"`.
+ */
+export interface OffSiteEvent {
+  readonly type: typeof OFF_SITE_EVENT_TYPE;
+  readonly t: number;
+  readonly t_end: number | null;
+  readonly source: string;
+  readonly confidence: number | null;
+  readonly detail: string | null;
+}
+
+/** One entry of `events/<sensor_id>.json`. */
+export type SensorEvent = PointSensorEvent | OffSiteEvent;
+
+/** True for the interval event `off_site`. */
+export function isOffSiteEvent(event: SensorEvent): event is OffSiteEvent {
+  return event.type === OFF_SITE_EVENT_TYPE;
+}
+
+/**
+ * True if the event belongs to the window `[startT, endT)` (Unix seconds): a point event lies in
+ * it, an `off_site` period `[t, t_end)` overlaps it (an open period runs on indefinitely).
+ */
+export function eventInWindow(event: SensorEvent, startT: number, endT: number): boolean {
+  if (isOffSiteEvent(event)) {
+    return event.t < endT && (event.t_end ?? Number.POSITIVE_INFINITY) > startT;
+  }
+  return event.t >= startT && event.t < endT;
 }
 
 /** `events/<sensor_id>.json`. */

@@ -45,6 +45,10 @@ class EventKind(StrEnum):
     """Detected and known (registry) deployment times disagree."""
     UNCONFIRMED_TRANSITION = "unconfirmed_transition"
     """A possible indoor period that is not applied because the evidence is incomplete."""
+    OFF_SITE = "off_site"
+    """A period from the off-site log (MIGRATION_PLAN §2.8); ``type`` of the site contract."""
+    UNLOGGED_OFF_SITE = "unlogged_off_site"
+    """A detected indoor-like period that the off-site log does not cover (advisory)."""
 
 
 TRANSITION_KINDS: Final = frozenset({EventKind.DEPLOYMENT, EventKind.RETRIEVAL, EventKind.STEP})
@@ -63,6 +67,8 @@ class EventSource(StrEnum):
 
     DETECTED = "detected"
     REGISTRY = "registry"
+    LOG = "log"
+    """The off-site log ``sensors/offsite_log.yaml`` (MIGRATION_PLAN §2.8)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,11 +86,13 @@ class QualityEvent:
     severity : Severity
         ``INFO`` or ``WARNING``.
     source : EventSource
-        ``DETECTED`` from the data or taken from the sensor ``REGISTRY``.
+        ``DETECTED`` from the data, taken from the sensor ``REGISTRY`` or from the off-site
+        ``LOG``.
     confidence : float or None
         Confidence 0-1 (dimensionless) where the producer defines one.
     end_utc : pandas.Timestamp or None
-        End of the interval (UTC) for interval events such as gaps.
+        End of the interval (UTC) for interval events such as gaps; ``None`` for a point
+        event and for an ``off_site`` period that is still open.
     origin : str
         Name of the check or detector that produced the event.
 

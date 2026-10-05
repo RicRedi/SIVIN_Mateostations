@@ -1,0 +1,39 @@
+# Off-site log: periods when a sensor was NOT measuring in the vineyard
+# (office, service, transport, storage). MIGRATION_PLAN §2.8, docs/sensors.md.
+#
+# By default every sensor is assumed to measure in the vineyard. Samples recorded inside a
+# period listed here get the quality flag PRE_DEPLOYMENT, are left out of all climate indices
+# and are drawn as a grey band (without a line) in the web charts.
+#
+# One entry per period, all of them as "- sensor: ..." items under the single "entries:" key
+# below (never write a second "entries:" line - that is rejected as a duplicate key):
+#   sensor  the 8-digit serial in quotes; any known spelling of the name is accepted
+#           ("77799986", "8615620 77799986", "77799986 (VUT)").
+#   from    start, inclusive. Local time "YYYY-MM-DD HH:MM" (Europe/Prague), in quotes, or
+#           ISO 8601 with an explicit offset or Z ("2025-10-26T02:30+01:00", "2025-12-17T11:00Z").
+#           In the repeated hour in October and the skipped hour in March a local time is
+#           rejected: give it with an explicit offset.
+#   to      end, exclusive, same formats. Write "to: open" while the sensor is still off site
+#           (only the last period of a sensor may be open). A "to:" left empty is an error.
+#   reason  office | service | transport | storage | other
+#   note    free text in quotes (optional).
+#
+# Rules checked on every run: the sensor is in sensors/sensors.geojson, from < to, periods of
+# one sensor do not overlap, no key is written twice. An invalid log stops the pipeline with an
+# error that names the entry (entry #1 = the first "- sensor:" item) and its line.
+
+entries:
+  - sensor: "77799986"
+    from: "2025-07-30 10:00"
+    to: "2026-03-01 22:30"
+    reason: service
+    note: "Derived from the real export (indoor regime 18–28 °C, RH ~30–40 %, daily range < 2 °C); end = end of the export 2026-03-01 — extend if newer data still show indoor values."
+
+  # EXAMPLE ONLY (sensor and dates in the year 2000 are placeholders; harmless if uncommented,
+  # because no data exist then). To add a period, copy these five lines, remove the leading
+  # "# " and put in the real sensor, times, reason and note:
+  # - sensor: "77678271"
+  #   from: "2000-01-03 08:00"
+  #   to: "2000-01-05 16:00"
+  #   reason: service
+  #   note: "EXAMPLE - battery replacement"

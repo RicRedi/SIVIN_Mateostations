@@ -16,7 +16,7 @@ import { de } from '../src/i18n/de';
 import { en } from '../src/i18n/en';
 import { I18n } from '../src/i18n/I18n';
 import { DEFAULT_APP_STATE } from '../src/state/AppState';
-import { fakeFetcher, fixtureExists, fixtureJson, utc } from './helpers';
+import { OFF_SITE_DETAIL, OFF_SITE_END, OFF_SITE_START, fakeFetcher, fixtureExists, fixtureJson, utc } from './helpers';
 
 const BASE = 'data/';
 const zone = new TimeZone('Europe/Prague');
@@ -53,7 +53,7 @@ describe('SensorCatalog', () => {
     expect(sensor?.lat).toBe(48.879593);
     expect(sensor?.hasData).toBe(true);
     expect(catalog.get('77800065')?.latest?.stale).toBe(true);
-    expect(catalog.get('77799986')?.placedSince).toBe('2026-06-03T08:00:00Z');
+    expect(catalog.get('77799986')?.placedSince).toBe('2026-06-01T00:00:00Z');
   });
 
   it('drops unknown ids', () => {
@@ -62,14 +62,29 @@ describe('SensorCatalog', () => {
 });
 
 describe('ChartDataLoader', () => {
-  it('loads raw samples and in-window events for the office sensor', async () => {
-    const window = new TimeWindow(utc(2026, 6, 2), utc(2026, 6, 5), 'raw');
+  it('loads raw samples and the off-site period of the service sensor', async () => {
+    const window = new TimeWindow(utc(2026, 6, 3), utc(2026, 6, 6), 'raw');
     const data = await loader().load(['77799986'], window);
     const sensor = data.sensors[0];
-    expect(sensor?.events.map((e) => e.type)).toEqual(['deployment']);
-    // Office samples before the deployment carry PRE_DEPLOYMENT and are hidden (null).
-    const firstValid = sensor?.temp_c.values.findIndex((value) => value !== null) ?? -1;
-    expect(sensor?.temp_c.t[firstValid]).toBeGreaterThanOrEqual(sensor?.events[0]?.t ?? Infinity);
+    expect(sensor?.events).toEqual([
+      { type: 'off_site', t: OFF_SITE_START, t_end: OFF_SITE_END, source: 'log', confidence: null, detail: OFF_SITE_DETAIL },
+    ]);
+    // Samples inside the period carry PRE_DEPLOYMENT and are hidden (null); the others are shown.
+    const inside = (t: number) => t >= OFF_SITE_START && t < OFF_SITE_END;
+    const values = sensor?.temp_c.values ?? [];
+    const times = sensor?.temp_c.t ?? [];
+    expect(times.filter(inside).length).toBeGreaterThan(0);
+    expect(times.every((t, i) => !inside(t) || values[i] === null)).toBe(true);
+    expect(times.some((t, i) => t < OFF_SITE_START && values[i] !== null)).toBe(true);
+    expect(times.some((t, i) => t >= OFF_SITE_END && values[i] !== null)).toBe(true);
+  });
+
+  it('keeps an off-site period that starts before the window', async () => {
+    const window = new TimeWindow(utc(2026, 6, 5), utc(2026, 6, 6), 'hourly');
+    const data = await loader().load(['77799986'], window);
+    expect(data.sensors[0]?.events.map((e) => e.type)).toEqual(['off_site']);
+    const later = new TimeWindow(OFF_SITE_END, OFF_SITE_END + 3600, 'raw');
+    expect((await loader().load(['77799986'], later)).sensors[0]?.events).toEqual([]);
   });
 
   it('produces one hourly mean per hour of the window', async () => {
@@ -117,7 +132,7 @@ describe('ChartDataLoader failure handling', () => {
     expect(data.sensors.every((s) => s.temp_c.validCount > 0)).toBe(true);
     expect(warnings.messages).toEqual([
       'Events of sensor 77678271 ignored: Cannot load data/events/77678271.json: HTTP 404',
-      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].type must be one of ["deployment","retrieval","step"], got "moved"',
+      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].type must be one of ["deployment","retrieval","step","off_si…, got "moved"',
     ]);
   });
 });
