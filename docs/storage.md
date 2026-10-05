@@ -43,7 +43,7 @@ the same bytes (git sees no change when nothing changed).
 | `timestamp_utc` | time of the sample | UTC | ISO 8601 `YYYY-MM-DDTHH:MM:SSZ`; a fraction of a second is written only when non-zero, as `.` and up to 9 digits without trailing zeros (`2026-01-01T00:00:00.5Z`) | never |
 | `temp_c` | air temperature | °C | decimal number, see below | empty field |
 | `rh_pct` | relative humidity | % | decimal number, see below | empty field |
-| `source` | name of the export file the row came from | — | text | empty field = unknown |
+| `source` | name of the last export that contributed a value to the row | — | text | empty field = unknown |
 
 **Numbers.** `.` is the decimal point, positional notation (never an exponent), at least one
 digit after the point, and otherwise the **shortest** digit string that reads back as exactly
