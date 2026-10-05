@@ -36,11 +36,12 @@ class PersistenceSettings(CheckSettings):
         ),
     )
     temp_min_duration_s: float = Field(
-        6 * S_PER_H,
+        12 * S_PER_H,
         gt=0,
         description=(
             "Shortest duration (s) of an unchanged temperature run that is flagged. Project "
-            "default 6 h for 30-min data [to be tuned on real data]."
+            "default 12 h for 30-min data, longer than calm isothermal nights "
+            "[to be tuned on real data]."
         ),
     )
     rh_tolerance_pct: float = Field(
@@ -60,11 +61,21 @@ class PersistenceSettings(CheckSettings):
         ),
     )
     rh_saturation_pct: float | None = Field(
-        99.0,
+        97.0,
         description=(
-            "Humidity runs entirely at or above this value (%) are not flagged: saturated air "
-            "(fog, dew) legitimately keeps the reading at its maximum for many hours. Null "
-            "disables the exemption. Project default [to be tuned on real data]."
+            "Relative humidity (%) at or above which the air counts as saturated. A run "
+            "(temperature or humidity) in which at least saturation_share of the samples are "
+            "saturated is not flagged: in fog or an inversion both readings legitimately stay "
+            "constant for many hours. Null disables the exemption. Project default "
+            "[to be tuned on real data]."
+        ),
+    )
+    saturation_share: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description=(
+            "Share (0-1, dimensionless) of saturated samples that exempts a run. Project default."
         ),
     )
 
@@ -75,7 +86,7 @@ class _Rule:
 
     tolerance: float
     min_duration_s: float
-    exempt_at_or_above: float | None
+    saturation_share: float
 
 
 @check_registry.register
@@ -84,7 +95,8 @@ class PersistenceCheck(QualityCheck[PersistenceSettings]):
 
     Valid (non-``NaN``) values are scanned left to right; a run grows while
     ``max - min <= tolerance``. A run whose first and last sample are at least the minimum
-    duration apart gets ``STUCK`` on all its samples. Humidity runs at saturation are exempt.
+    duration apart gets ``STUCK`` on all its samples, unless at least ``saturation_share`` of
+    its samples have saturated humidity (fog, inversion), for either variable.
     """
 
     check_id = "persistence"
@@ -104,23 +116,31 @@ class PersistenceCheck(QualityCheck[PersistenceSettings]):
             ``STUCK`` on the samples of every long unchanged run; no events.
         """
         samples = SampleArrays.of(series)
+        saturation = self.settings.rh_saturation_pct
+        with np.errstate(invalid="ignore"):
+            saturated = (
+                np.zeros(len(samples), dtype=np.bool_)
+                if saturation is None
+                else np.asarray(samples.rh_pct >= saturation, dtype=np.bool_)
+            )
         mask = np.zeros(len(samples), dtype=np.bool_)
         for variable, rule in self._rules().items():
-            mask |= _stuck(samples.t_s, samples.values(variable), rule)
+            mask |= _stuck(samples.t_s, samples.values(variable), saturated, rule)
         logger.debug("Sensor %s: %d stuck sample(s).", series.sensor_id, int(mask.sum()))
         return CheckOutcome.from_mask(mask, QcFlag.STUCK)
 
     def _rules(self) -> Mapping[Variable, _Rule]:
         settings = self.settings
+        share = settings.saturation_share
         return {
-            Variable.TEMP: _Rule(settings.temp_tolerance_c, settings.temp_min_duration_s, None),
-            Variable.RH: _Rule(
-                settings.rh_tolerance_pct, settings.rh_min_duration_s, settings.rh_saturation_pct
-            ),
+            Variable.TEMP: _Rule(settings.temp_tolerance_c, settings.temp_min_duration_s, share),
+            Variable.RH: _Rule(settings.rh_tolerance_pct, settings.rh_min_duration_s, share),
         }
 
 
-def _stuck(t_s: FloatArray, values: FloatArray, rule: _Rule) -> npt.NDArray[np.bool_]:
+def _stuck(
+    t_s: FloatArray, values: FloatArray, saturated: npt.NDArray[np.bool_], rule: _Rule
+) -> npt.NDArray[np.bool_]:
     mask = np.zeros(values.shape, dtype=np.bool_)
     valid = np.flatnonzero(np.isfinite(values))
     x = values[valid]
@@ -128,11 +148,10 @@ def _stuck(t_s: FloatArray, values: FloatArray, rule: _Rule) -> npt.NDArray[np.b
     for first, last in _runs(x, rule.tolerance):
         if t[last] - t[first] < rule.min_duration_s:
             continue
-        if rule.exempt_at_or_above is not None and x[first : last + 1].min() >= (
-            rule.exempt_at_or_above
-        ):
+        rows = valid[first : last + 1]
+        if saturated[rows].mean() >= rule.saturation_share:
             continue
-        mask[valid[first : last + 1]] = True
+        mask[rows] = True
     return mask
 
 

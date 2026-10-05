@@ -49,14 +49,14 @@ class TestPipeline:
         trace = (
             SyntheticSensor(2)
             .trace([("indoor", 3), ("outdoor", 10)])
-            .with_stuck(20, 40)  # indoor, 20 samples ≈ 10 h: not checked
+            .with_stuck(20, 50)  # indoor, 30 samples ≈ 15 h: not checked
             .with_spike(300, delta_c=9.0)
-            .with_stuck(400, 420)  # outdoor: stuck
+            .with_stuck(400, 430)  # outdoor: stuck
             .with_step(600, 7.0)
         )
         result = pipeline.run(trace.series())
         assert _rows_with(result.series, QcFlag.SPIKE) == [300]
-        assert _rows_with(result.series, QcFlag.STUCK) == list(range(400, 420))
+        assert _rows_with(result.series, QcFlag.STUCK) == list(range(400, 430))
         assert 600 in _rows_with(result.series, QcFlag.STEP)
         step_events = [e for e in result.events if e.kind is EventKind.STEP]
         assert trace.timestamp(600) in [e.t_utc for e in step_events]

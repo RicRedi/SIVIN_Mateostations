@@ -66,6 +66,16 @@ class StepSettings(CheckSettings):
             "relative to the median level before it. Project default."
         ),
     )
+    max_adjacent_fraction: float = Field(
+        0.4,
+        ge=0,
+        le=1,
+        description=(
+            "Largest change (as a share 0-1 of the jump, dimensionless) allowed in each of the "
+            "two neighbouring intervals: a sensor step happens within one interval, a weather "
+            "front (e.g. -10 °C within 1 h) spreads over several. Project default."
+        ),
+    )
     max_interval_s: float = Field(
         3 * LEGACY_SAMPLING_INTERVAL_S,
         gt=0,
@@ -94,7 +104,10 @@ class StepCheck(QualityCheck[StepSettings]):
     :math:`t_k - t_{k-1} \le \Delta t_{max}`, let :math:`m^-` be the median over
     :math:`[t_{k-1} - W, t_{k-1}]` and :math:`m^+` the median over :math:`[t_k, t_k + W]`.
     Sample :math:`k` is a step if :math:`\operatorname{sign}(m^+ - m^-) =
-    \operatorname{sign}(x_k - x_{k-1})` and :math:`|m^+ - m^-| \ge f |x_k - x_{k-1}|`.
+    \operatorname{sign}(x_k - x_{k-1})`, :math:`|m^+ - m^-| \ge f |x_k - x_{k-1}|` and the
+    neighbouring intervals change little: :math:`|x_{k-1} - x_{k-2}|` and
+    :math:`|x_{k+1} - x_k|` are at most :math:`a |x_k - x_{k-1}|` (a front spreads over
+    several intervals, a sensor step does not).
     """
 
     check_id = "step"
@@ -143,11 +156,14 @@ class StepCheck(QualityCheck[StepSettings]):
             (np.abs(jumps) >= min_jump) & (np.diff(t) <= settings.max_interval_s)
         )
         for k in candidates + 1:
+            jump = x[k] - x[k - 1]
+            neighbours = jumps[max(k - 2, 0) : k - 1].tolist() + jumps[k : k + 1].tolist()
+            if any(abs(n) > settings.max_adjacent_fraction * abs(jump) for n in neighbours):
+                continue
             before = x[np.searchsorted(t, t[k - 1] - settings.window_s, side="left") : k]
             after = x[k : np.searchsorted(t, t[k] + settings.window_s, side="right")]
             if min(before.size, after.size) < settings.min_window_samples:
                 continue
-            jump = x[k] - x[k - 1]
             shift = float(np.median(after) - np.median(before))
             if shift * jump > 0 and abs(shift) >= settings.persistence_fraction * abs(jump):
                 yield int(valid[k]), shift

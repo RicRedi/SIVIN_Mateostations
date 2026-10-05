@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from pydantic import ValidationError
-from tests.quality.synthetic import INTERVAL_S, custom_trace, flat_trace
+from tests.quality.synthetic import INTERVAL_S, Trace, custom_trace, flat_trace
 
 from sivin.core.flags import QcFlag
 from sivin.quality.checks import (
@@ -146,6 +146,14 @@ class TestStepCheck:
         trace = flat_trace([10.0] * 8 + [16.0] + [10.0] * 7)
         assert StepCheck().check(trace.series()).count(QcFlag.STEP) == 0
 
+    def test_fast_front_over_two_intervals_is_not_a_step(self) -> None:
+        # -10 °C within about 1 h: two jumps of -5 °C; each neighbour is as large as the
+        # jump (more than 0.4 x 5 °C), so the change is not confined to one interval.
+        trace = flat_trace([18.0] * 8 + [13.0, 8.0] + [8.0] * 8)
+        assert StepCheck().check(trace.series()).count(QcFlag.STEP) == 0
+        lenient = StepCheck(StepSettings(max_adjacent_fraction=1.0))
+        assert lenient.check(trace.series()).count(QcFlag.STEP) == 2
+
     def test_gradual_change_is_not_a_step(self) -> None:
         # A cold front: -8 °C over 4 intervals (2 °C each) is below the 5 °C jump threshold.
         trace = flat_trace([18.0] * 8 + [16.0, 14.0, 12.0, 10.0] + [10.0] * 8)
@@ -173,43 +181,61 @@ class TestStepCheck:
         assert "rh_pct level step +40.0 %" in outcome.events[0].detail
 
 
+def _temps(values_c: list[float]) -> Trace:
+    """Regular trace whose humidity alternates by 1 % (> tolerance), so only T can stick."""
+    rh = [60.0 + (i % 2) for i in range(len(values_c))]
+    return custom_trace([i * INTERVAL_S for i in range(len(values_c))], values_c, rh)
+
+
 class TestPersistenceCheck:
     def test_long_unchanged_run_is_stuck(self) -> None:
-        # 13 samples span 12 * 1825 s = 21 900 s >= 6 h = 21 600 s.
-        trace = flat_trace([12.3] * 13 + [12.5])
+        # 25 samples span 24 * 1825 s = 43 800 s >= 12 h = 43 200 s.
+        trace = _temps([12.3] * 25 + [12.5])
         flags = PersistenceCheck().check(trace.series()).flags
-        assert _flagged(flags, QcFlag.STUCK) == list(range(13))
+        assert _flagged(flags, QcFlag.STUCK) == list(range(25))
 
     def test_short_run_is_not_stuck(self) -> None:
-        # 12 samples span 11 * 1825 s = 20 075 s < 21 600 s.
-        trace = flat_trace([12.3] * 12 + [12.5])
+        # 24 samples span 23 * 1825 s = 41 975 s < 43 200 s.
+        trace = _temps([12.3] * 24 + [12.5])
         assert PersistenceCheck().check(trace.series()).count(QcFlag.STUCK) == 0
 
     def test_changing_values_are_not_stuck(self) -> None:
-        trace = flat_trace([12.3, 12.4] * 10)  # range 0.1 > tolerance 0.05 °C
+        trace = _temps([12.3, 12.4] * 20)  # range 0.1 > tolerance 0.05 °C
         assert PersistenceCheck().check(trace.series()).count(QcFlag.STUCK) == 0
 
     def test_irregular_sampling_uses_real_durations(self) -> None:
-        # Only 4 samples, but they span 7 h.
-        trace = custom_trace([0, 3600, 7200, 25_200, 27_000], [5.0, 5.0, 5.0, 5.0, 6.0])
+        # Only 4 samples, but they span 13 h.
+        trace = custom_trace(
+            [0, 3600, 7200, 46_800, 48_600], [5.0, 5.0, 5.0, 5.0, 6.0], [60.0, 61.0] * 2 + [60.0]
+        )
         flags = PersistenceCheck().check(trace.series()).flags
         assert _flagged(flags, QcFlag.STUCK) == [0, 1, 2, 3]
 
     def test_missing_values_are_skipped_and_not_flagged(self) -> None:
-        values = [12.3] * 6 + [float("nan")] + [12.3] * 7
-        trace = flat_trace(values)
+        values = [12.3] * 12 + [float("nan")] + [12.3] * 13
+        trace = _temps(values)
         flags = PersistenceCheck().check(trace.series()).flags
-        assert _flagged(flags, QcFlag.STUCK) == [i for i in range(14) if i != 6]
+        assert _flagged(flags, QcFlag.STUCK) == [i for i in range(26) if i != 12]
 
-    def test_humidity_at_saturation_is_exempt(self) -> None:
+    def test_saturated_air_exempts_both_variables(self) -> None:
         offsets = [i * INTERVAL_S for i in range(30)]  # 29 * 1825 s = 14.7 h >= 12 h
-        temps = [10.0 + 0.5 * (i % 2) for i in range(30)]
-        fog = custom_trace(offsets, temps, [100.0] * 30)
+        # Fog: temperature and humidity constant, humidity saturated.
+        fog = custom_trace(offsets, [3.0] * 30, [99.0] * 30)
         assert PersistenceCheck().check(fog.series()).count(QcFlag.STUCK) == 0
-        stuck = custom_trace(offsets, temps, [55.0] * 30)
+        # Half of the samples saturated (share 0.5) still exempts the run.
+        half = custom_trace(offsets, [3.0] * 30, [99.0, 96.0] * 15)
+        assert PersistenceCheck().check(half.series()).count(QcFlag.STUCK) == 0
+        # Not saturated: both variables stuck.
+        stuck = custom_trace(offsets, [3.0] * 30, [55.0] * 30)
         assert PersistenceCheck().check(stuck.series()).count(QcFlag.STUCK) == 30
         no_exemption = PersistenceCheck(PersistenceSettings(rh_saturation_pct=None))
         assert no_exemption.check(fog.series()).count(QcFlag.STUCK) == 30
+
+    def test_constant_humidity_alone_is_stuck(self) -> None:
+        offsets = [i * INTERVAL_S for i in range(30)]
+        temps = [10.0 + 0.5 * (i % 2) for i in range(30)]
+        stuck = custom_trace(offsets, temps, [55.0] * 30)
+        assert PersistenceCheck().check(stuck.series()).count(QcFlag.STUCK) == 30
 
 
 class TestSamplingCheck:
