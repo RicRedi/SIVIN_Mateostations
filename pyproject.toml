@@ -28,8 +28,10 @@ viz = [
     "seaborn>=0.13",
 ]
 dev = [
-    "ruff>=0.6",
-    "mypy>=1.11",
+    # Linters are bounded to the tested release series (ruff also pinned in pre-commit), so
+    # a new upstream release cannot turn CI red without a code change.
+    "ruff>=0.16,<0.17",
+    "mypy>=2.4,<3",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pandas-stubs>=3.0",
@@ -86,7 +88,16 @@ warn_required_dynamic_aliases = true
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = ["slow: long-running tests, deselect with '-m \"not slow\"'"]
-filterwarnings = ["error"]
+# Every warning fails a test, except deprecations raised inside third-party packages, which
+# would otherwise make CI depend on upstream releases (runtime deps have no upper bound).
+# Deprecations triggered by our own code (stacklevel points to sivin) still fail.
+filterwarnings = [
+    "error",
+    "default::DeprecationWarning",
+    "default::PendingDeprecationWarning",
+    "error::DeprecationWarning:sivin",
+    "error::PendingDeprecationWarning:sivin",
+]
 
 [tool.coverage.run]
 source = ["sivin"]
