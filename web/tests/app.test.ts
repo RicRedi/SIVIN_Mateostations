@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ChartDataLoader } from '../src/app/ChartDataLoader';
 import { ChartPresenter, type ChartView } from '../src/app/ChartPresenter';
 import type { ChartData } from '../src/app/ChartDataLoader';
-import { SensorCatalog } from '../src/app/SensorCatalog';
+import { SensorCatalog, withStaleness } from '../src/app/SensorCatalog';
 import { parseLatestFile, parseManifest, parseSensorsGeoJSON } from '../src/contract';
 import { DataClient } from '../src/data/DataClient';
 import { DISPLAY_EXCLUDE_MASK, QcMask } from '../src/domain/QcFlags';
@@ -58,6 +58,22 @@ describe('SensorCatalog', () => {
 
   it('drops unknown ids', () => {
     expect(catalog.knownIds(['00000000', '77678271'])).toEqual(['77678271']);
+  });
+
+  it('judges staleness against the current time with stale_after_s (WP-3.2)', () => {
+    const manifest = { ...(fixtureJson('manifest.json') as Record<string, unknown>), stale_after_s: 36 * 3600 };
+    const latest = parseLatestFile(fixtureJson('latest.json'));
+    const fresh = latest.sensors['77678271'];
+    if (fresh === undefined) {
+      throw new Error('fixture sensor missing');
+    }
+    expect(fresh.stale).toBe(false);
+    const registry = parseSensorsGeoJSON(fixtureJson('sensors.geojson'));
+    const at = (nowS: number) => SensorCatalog.build(registry, parseManifest(manifest), latest, nowS).get('77678271')?.latest?.stale;
+    expect([at(fresh.t + 36 * 3600), at(fresh.t + 36 * 3600 + 1)]).toEqual([false, true]);
+    // Without stale_after_s (older data) only the pipeline's flag counts.
+    expect(SensorCatalog.build(registry, parseManifest(fixtureJson('manifest.json')), latest, fresh.t + 1e9).get('77678271')?.latest?.stale).toBe(false);
+    expect(withStaleness(null, 1, 0)).toBeNull();
   });
 });
 

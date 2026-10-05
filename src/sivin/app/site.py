@@ -83,7 +83,7 @@ class SiteIndices:
         if not checked:
             return IndexBatch()
         report = self._service.run(season, list(checked), checked=checked)
-        return IndexBatch(report.results, report.failures)
+        return IndexBatch(report.results, report.failures, frozenset(report.errors))
 
 
 class SiteInputsLoader:

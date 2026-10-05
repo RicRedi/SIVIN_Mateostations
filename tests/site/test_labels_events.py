@@ -59,6 +59,7 @@ def test_settings_defaults_and_duplicates() -> None:
     settings = SiteSettings()
     assert settings.stale_after_s == DEFAULT_STALE_AFTER_S == 36 * 3600
     assert settings.events == DEFAULT_PUBLISHED_EVENTS
+    assert EventKind.UNLOGGED_OFF_SITE not in settings.events  # opt-in only (review round 1)
     assert SiteSettings(events=("step",)).events == (EventKind.STEP,)
     with pytest.raises(ValueError, match="listed twice"):
         SiteSettings(events=(EventKind.STEP, EventKind.STEP))
@@ -95,7 +96,8 @@ def test_interval_events_have_an_end() -> None:
         confidence=0.876,
         end_utc=T0 + pd.Timedelta(days=1),
     )
-    mapping = SiteEventMapping(DEFAULT_PUBLISHED_EVENTS)
+    assert SiteEventMapping(DEFAULT_PUBLISHED_EVENTS).entries([unlogged]) == []
+    mapping = SiteEventMapping([*DEFAULT_PUBLISHED_EVENTS, EventKind.UNLOGGED_OFF_SITE])
     off_site, low, warning = mapping.entries([open_period, battery, unlogged])
     assert off_site == {
         "type": "off_site",

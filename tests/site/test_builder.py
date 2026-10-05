@@ -26,7 +26,7 @@ from sivin.site.labels import IndexSpec
 from sivin.site.sensor_builder import DailyAggregation, SensorSiteBuilder, SummaryBuilder
 from sivin.site.sensor_files import default_sensor_writers
 from sivin.site.site_files import default_site_writers
-from sivin.site.state import STATE_FILE, StoreFingerprints
+from sivin.site.state import STATE_FILE, StateFile, StoreFingerprints
 
 NOW = datetime(2026, 10, 5, 4, 0, tzinfo=UTC)
 PRAGUE = "Europe/Prague"
@@ -74,7 +74,8 @@ class FakeIndices:
             results[sensor_id] = {
                 "mean_t": IndexResult("mean_t", sensor_id, season, value, "°C", 0.5, False)
             }
-        return IndexBatch(results, tuple(failures))
+        failed = frozenset(self.fail_for & set(checked))
+        return IndexBatch(results, tuple(failures), failed)
 
 
 class Rig:
@@ -96,8 +97,10 @@ class Rig:
             ),
             default_site_writers(129_600.0),
             StoreFingerprints(self.raw),
-            lambda: NOW,
+            StateFile(root / "derived" / STATE_FILE),
+            lambda: self.now,
         )
+        self.now = NOW
         self.statuses: dict[SensorId, str] = {}
 
     def add(self, sensor_id: SensorId, times: list[str], temps: list[float]) -> None:
@@ -137,7 +140,8 @@ def test_first_build_is_full(rig: Rig) -> None:
     assert report.failures == ()
     indices = json.loads(rig.files()["indices/2026.json"])
     assert indices["sensors"]["77678271"]["mean_t"]["value"] == 15.0
-    assert STATE_FILE in rig.files()
+    assert STATE_FILE not in rig.files()  # the state is kept outside the published data
+    assert rig.builder._state_file.path.is_file()
 
 
 def test_unchanged_sensors_are_reused(rig: Rig) -> None:
@@ -223,6 +227,58 @@ def test_failed_sensor_keeps_its_previous_output(rig: Rig) -> None:
     assert rig.builder.build(rig.output, rig.inputs()).built == (OTHER,)
 
 
+def test_failed_sensor_survives_a_full_build(rig: Rig) -> None:
+    """Reviewer's reproduction: a broken store file, then a changed off-site log (full build)."""
+    rig.builder.build(rig.output, rig.inputs())
+    before = rig.files()
+    rig.add(OTHER, ["2026-06-01T10:00:00", "2026-06-01T10:30:30"], [15.0, 17.0])
+    rig.source.failing.add(OTHER)
+    rig.now = datetime(2026, 10, 6, 4, 0, tzinfo=UTC)
+    assert rig.builder.build(rig.output, rig.inputs()).failures
+    for settings, full in (("s2", False), ("s2", True)):
+        report = rig.builder.build(rig.output, rig.inputs(settings), full=full)
+        assert report.full
+        assert report.failures == ("site 77680921: synthetic failure of 77680921",)
+        assert report.removed == ()
+        files = rig.files()
+        for path in ("series/77680921/daily.json", "events/77680921.json"):
+            assert files[path] == before[path]
+        manifest = json.loads(files["manifest.json"])["sensors"]
+        assert manifest["77680921"]["data_status"] == "error"
+        assert manifest["77680921"]["last_built_at"] == "2026-10-05T04:00:00Z"
+        assert "data_status" not in manifest["77678271"]
+        indices = json.loads(files["indices/2026.json"])["sensors"]
+        assert indices["77680921"]["mean_t"]["value"] == 15.0
+
+
+def test_failed_sensor_is_retried_until_it_succeeds(rig: Rig) -> None:
+    rig.builder.build(rig.output, rig.inputs())
+    rig.source.failing.add(OTHER)
+    rig.builder.build(rig.output, rig.inputs(), full=True)
+    rig.source.calls.clear()
+    # Same fingerprint as the earlier successful build, but the failure is never reused.
+    again = rig.builder.build(rig.output, rig.inputs())
+    assert again.failures
+    assert rig.source.calls == [OTHER]
+    rig.source.failing.clear()
+    fixed = rig.builder.build(rig.output, rig.inputs())
+    assert (fixed.built, fixed.failures) == ((OTHER,), ())
+    assert "data_status" not in json.loads(rig.files()["manifest.json"])["sensors"]["77680921"]
+
+
+def test_failed_index_is_retried_and_fails_every_run(rig: Rig) -> None:
+    rig.indices.fail_for.add(SENSOR)
+    for expected in ((SENSOR, OTHER), (SENSOR,)):
+        report = rig.builder.build(rig.output, rig.inputs())
+        assert report.built == expected
+        assert report.failures == ("indices 77678271 mean_t: synthetic",)
+    rig.indices.fail_for.clear()
+    fixed = rig.builder.build(rig.output, rig.inputs())
+    assert (fixed.built, fixed.failures) == ((SENSOR,), ())
+    assert "77678271" in json.loads(rig.files()["indices/2026.json"])["sensors"]
+    assert rig.builder.build(rig.output, rig.inputs()).built == ()
+
+
 def test_failed_new_sensor_is_not_published(rig: Rig) -> None:
     rig.source.failing.add(OTHER)
     report = rig.builder.build(rig.output, rig.inputs())
@@ -254,4 +310,4 @@ def test_no_sensors(tmp_path: Path) -> None:
     empty = Rig(tmp_path)
     report = empty.builder.build(empty.output, empty.inputs())
     assert report.seasons == ()
-    assert sorted(empty.files()) == [STATE_FILE, "latest.json", "manifest.json", "sensors.geojson"]
+    assert sorted(empty.files()) == ["latest.json", "manifest.json", "sensors.geojson"]

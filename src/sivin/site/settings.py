@@ -28,9 +28,12 @@ DEFAULT_PUBLISHED_EVENTS: Final = (
     EventKind.RETRIEVAL,
     EventKind.STEP,
     EventKind.LOW_BATTERY,
-    EventKind.UNLOGGED_OFF_SITE,
 )
-"""QC event kinds written to ``events/<sensor_id>.json`` by default (``docs/site.md``)."""
+"""QC event kinds written to ``events/<sensor_id>.json`` by default (``docs/site.md``).
+
+``unlogged_off_site`` (an unconfirmed detector guess whose text is an instruction for the
+owner) is not public by default (WP-3.2 review); it can be added to ``site.events``, and the
+scheduled run reports it in its summary (WP-4.1)."""
 
 
 class SiteSettings(BaseModel):
@@ -56,8 +59,9 @@ class SiteSettings(BaseModel):
         description=(
             "QC event kinds (no unit) published in events/<sensor_id>.json. 'off_site' is the "
             "off-site log period, 'deployment'/'retrieval'/'step' are point markers, "
-            "'low_battery' and 'unlogged_off_site' are advisory intervals (docs/site.md). The "
-            "other kinds (gap, irregular_sampling, precip_*, ...) stay in the derived events."
+            "'low_battery' is an advisory interval; 'unlogged_off_site' (advisory interval, an "
+            "unconfirmed detector guess) can be added. The other kinds (gap, "
+            "irregular_sampling, precip_*, ...) stay in the derived events (docs/site.md)."
         ),
     )
 

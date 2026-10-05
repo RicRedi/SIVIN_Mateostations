@@ -90,10 +90,14 @@ def test_site_of_the_real_and_a_synthetic_sensor(project: Project) -> None:
     indices = json.loads((root / "indices" / "2026.json").read_text(encoding="utf-8"))
     assert indices["computed_at"] == "2026-10-05T04:00:00Z"
     huglin = indices["sensors"][OUTDOOR_SENSOR]["huglin"]
-    assert set(huglin) == {"value", "unit", "coverage", "complete", "class", "estimated"}
+    assert set(huglin) == {
+        "value", "unit", "coverage", "complete", "class", "estimated", "status",
+    }  # fmt: skip
     assert huglin["complete"] is False
     assert not (project.root / "data" / "derived" / "indices").exists()  # dry-run indices
-    state = (root / STATE_FILE).read_text(encoding="utf-8")
+    assert huglin["class"] is None  # never a class for an incomplete result
+    assert not (root / STATE_FILE).exists()  # the build state is not published
+    state = (project.root / "data" / "derived" / STATE_FILE).read_text(encoding="utf-8")
     assert str(project.root) not in state
 
 
@@ -166,3 +170,35 @@ def test_site_indices_without_sensors(project: Project) -> None:
 def test_site_data_dir(project: Project) -> None:
     workspace = make_factory(project).workspace
     assert workspace.site_data_dir == project.root / "site" / "data"
+
+
+OFF_SITE_ALL_SEASON = """\
+entries:
+  - sensor: "77799986"
+    from: "2025-07-30 10:00"
+    to: "2026-03-01 22:30"
+    reason: service
+  - sensor: "77678271"
+    from: "2026-01-01 00:00"
+    to: "2027-01-01 00:00"
+    reason: office
+    note: "SYNTHETIC test period"
+"""
+
+
+def test_no_index_value_or_class_without_data(project: Project) -> None:
+    """A sensor off site for the whole season gets no value, class or risk statement."""
+    project.write_offsite_log(OFF_SITE_ALL_SEASON)
+    make_factory(project).site_service().build(seasons=[2026])
+    indices = json.loads((project.root / "site/data/indices/2026.json").read_text("utf-8"))
+    entries = indices["sensors"][OUTDOOR_SENSOR]
+    for index_id in ("powdery_mildew_gt", "botrytis_broome", "huglin", "gdd_winkler"):
+        entry = entries[index_id]
+        assert entry["coverage"] == 0.0, index_id
+        assert (entry["value"], entry["class"], entry["status"], entry["detail"]) == (
+            None,
+            None,
+            "no_data",
+            "no data",
+        ), index_id
+    assert all(entry["value"] is None for entry in entries.values() if entry["coverage"] == 0)

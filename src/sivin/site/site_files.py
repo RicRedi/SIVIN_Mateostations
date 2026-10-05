@@ -25,6 +25,9 @@ MANIFEST_FILE: Final = "manifest.json"
 REGISTRY_FILE: Final = "sensors.geojson"
 LATEST_FILE: Final = "latest.json"
 
+DATA_STATUS_ERROR: Final = "error"
+"""``data_status`` of a manifest sensor whose last build failed (its files are older)."""
+
 
 def indices_path(season: int) -> str:
     """Return ``indices/<season>.json``."""
@@ -69,28 +72,35 @@ class ManifestWriter(SiteFileWriter):
 
     Every sensor entry has ``first_t``, ``last_t``, ``raw_months`` (§2.6) and ``status``, the
     registry life-cycle state (``active``, ``inactive``, ``retired``), so the web can grey out
-    retired sensors whose history is still published.
+    retired sensors whose history is still published. A sensor whose build failed (its files
+    are from an earlier build) also has ``data_status: "error"`` and ``last_built_at``. The
+    manifest also carries ``stale_after_s``, so the web can judge staleness against the
+    current time.
 
     Parameters
     ----------
     catalog : IndexCatalog
         Labels and documentation links of the indices.
+    stale_after_s : float
+        Staleness threshold in seconds (``site.stale_after_s``).
     variables : sequence of VariableSpec, optional
         The variables; :data:`~sivin.site.labels.VARIABLES` when omitted.
     redactor : SecretRedactor, optional
         Applied to every string written.
     """
 
-    __slots__ = ("_catalog", "_variables")
+    __slots__ = ("_catalog", "_stale_after_s", "_variables")
 
     def __init__(
         self,
         catalog: IndexCatalog,
+        stale_after_s: float,
         variables: Sequence[VariableSpec] = VARIABLES,
         redactor: SecretRedactor | None = None,
     ) -> None:
         super().__init__(redactor)
         self._catalog = catalog
+        self._stale_after_s = stale_after_s
         self._variables = tuple(variables)
 
     def files(self, snapshot: SiteSnapshot) -> list[SiteFile]:
@@ -106,19 +116,23 @@ class ManifestWriter(SiteFileWriter):
         list of SiteFile
             The manifest.
         """
-        sensors = {
-            str(sensor.sensor_id): {
+        sensors: dict[str, Any] = {}
+        for sensor in snapshot.sensors:
+            entry: dict[str, Any] = {
                 "first_t": sensor.summary.first_t,
                 "last_t": sensor.summary.last_t,
                 "raw_months": list(sensor.summary.raw_months),
                 "status": sensor.status,
             }
-            for sensor in snapshot.sensors
-        }
+            if sensor.failed:
+                entry["data_status"] = DATA_STATUS_ERROR
+                entry["last_built_at"] = sensor.last_built_at
+            sensors[str(sensor.sensor_id)] = entry
         document = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": iso_utc_seconds(snapshot.generated_at),
             "display_timezone": snapshot.display_timezone,
+            "stale_after_s": self._stale_after_s,
             "variables": [variable.as_dict() for variable in self._variables],
             "sensors": sensors,
             "seasons": list(snapshot.seasons),
@@ -255,7 +269,9 @@ def default_site_writers(
         The writers.
     """
     return (
-        ManifestWriter(catalog if catalog is not None else IndexCatalog(), redactor=redactor),
+        ManifestWriter(
+            catalog if catalog is not None else IndexCatalog(), stale_after_s, redactor=redactor
+        ),
         RegistryCopyWriter(redactor),
         LatestWriter(stale_after_s, redactor),
         SeasonIndicesWriter(redactor),

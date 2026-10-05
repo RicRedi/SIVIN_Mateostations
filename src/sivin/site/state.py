@@ -1,6 +1,7 @@
-"""The build state of the incremental site build (``site/data/.build-state.json``).
+"""The build state of the incremental site build (``<paths.derived_dir>/site-build-state.json``).
 
-The state remembers, per published sensor, a fingerprint of its store partition files, the
+It lives next to the derived data, outside the published ``site/data``, so it is never
+deployed. The state remembers, per published sensor, a fingerprint of its store partition files, the
 SHA-256 of every file written for it, its summary and its index entries. A later build reuses
 a sensor whose fingerprint and output files are unchanged without reading or checking its
 data again; any other change (configuration, registry, off-site log, seasons, ``sivin``
@@ -13,7 +14,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final
@@ -21,13 +22,14 @@ from typing import Any, Final
 from sivin.core.ids import SensorId
 from sivin.site.files import SiteFile, encode_json
 from sivin.site.model import IndexEntries, SensorSummary
+from sivin.storage.atomic import AtomicFileWriter
 
 logger = logging.getLogger(__name__)
 
-STATE_FILE: Final = ".build-state.json"
-"""Name of the build state in the output directory."""
+STATE_FILE: Final = "site-build-state.json"
+"""Name of the build state in ``paths.derived_dir``."""
 
-STATE_FORMAT: Final = 1
+STATE_FORMAT: Final = 2
 """Version of the state layout; a state of another version is ignored (full build)."""
 
 
@@ -104,12 +106,22 @@ class SensorState:
         Its summary.
     indices : Mapping of int to IndexEntries
         Season → index id → published entry.
+    built_at : str
+        ``generated_at`` of the last build that built the sensor successfully (ISO 8601 UTC).
+    retry : bool
+        Something failed in the last build (an index, or the whole sensor); the sensor is never
+        reused, so the next build tries again.
+    failed : bool
+        The last build of the sensor failed; these are the files of an earlier build.
     """
 
     inputs: str
     outputs: Mapping[str, str]
     summary: SensorSummary
     indices: Mapping[int, IndexEntries] = field(default_factory=dict)
+    built_at: str = ""
+    retry: bool = False
+    failed: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "outputs", MappingProxyType(dict(self.outputs)))
@@ -122,6 +134,8 @@ class SensorState:
         files: Iterable[SiteFile],
         summary: SensorSummary,
         indices: Mapping[int, IndexEntries],
+        built_at: str,
+        retry: bool = False,
     ) -> SensorState:
         """Build the state of a freshly built sensor.
 
@@ -135,13 +149,28 @@ class SensorState:
             Its summary.
         indices : Mapping of int to IndexEntries
             Its index entries per season.
+        built_at : str
+            ``generated_at`` of this build (ISO 8601 UTC).
+        retry : bool, optional
+            An index of the sensor failed; build it again next time.
 
         Returns
         -------
         SensorState
             The state.
         """
-        return cls(inputs, {file.path: file.digest for file in files}, summary, indices)
+        outputs = {file.path: file.digest for file in files}
+        return cls(inputs, outputs, summary, indices, built_at, retry)
+
+    def as_failed(self) -> SensorState:
+        """Return this (earlier) state marked as failed in the current build.
+
+        Returns
+        -------
+        SensorState
+            The same files, summary and indices, with ``failed`` and ``retry`` set.
+        """
+        return replace(self, failed=True, retry=True)
 
     def to_data(self) -> dict[str, Any]:
         """Return the state as JSON data.
@@ -159,6 +188,9 @@ class SensorState:
                 str(season): {k: dict(v) for k, v in entries.items()}
                 for season, entries in sorted(self.indices.items())
             },
+            "built_at": self.built_at,
+            "retry": self.retry,
+            "failed": self.failed,
         }
 
     @classmethod
@@ -188,6 +220,9 @@ class SensorState:
                 int(season): {str(k): dict(v) for k, v in entries.items()}
                 for season, entries in data["indices"].items()
             },
+            built_at=str(data["built_at"]),
+            retry=bool(data["retry"]),
+            failed=bool(data["failed"]),
         )
 
 
@@ -213,12 +248,12 @@ class BuildState:
     def __post_init__(self) -> None:
         object.__setattr__(self, "sensors", MappingProxyType(dict(self.sensors)))
 
-    def to_file(self) -> SiteFile:
-        """Return the state as the file :data:`STATE_FILE`.
+    def to_bytes(self) -> bytes:
+        """Return the state as file content.
 
         Returns
         -------
-        SiteFile
+        bytes
             Compact JSON, sensors sorted by id.
         """
         document = {
@@ -227,11 +262,11 @@ class BuildState:
             "seasons": list(self.seasons),
             "sensors": {sid: state.to_data() for sid, state in sorted(self.sensors.items())},
         }
-        return SiteFile(STATE_FILE, encode_json(document))
+        return encode_json(document)
 
     @classmethod
     def parse(cls, content: bytes | None) -> BuildState | None:
-        """Read a state written by :meth:`to_file`.
+        """Read a state written by :meth:`to_bytes`.
 
         Parameters
         ----------
@@ -261,3 +296,47 @@ class BuildState:
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             logger.warning("Site build state is unreadable (%s); building everything.", error)
             return None
+
+
+class StateFile:
+    """Where the build state is kept (``<paths.derived_dir>/site-build-state.json``).
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The state file.
+    writer : AtomicFileWriter, optional
+        Replaces the file atomically.
+    """
+
+    __slots__ = ("_path", "_writer")
+
+    def __init__(self, path: Path, writer: AtomicFileWriter | None = None) -> None:
+        self._path = path
+        self._writer = writer if writer is not None else AtomicFileWriter()
+
+    @property
+    def path(self) -> Path:
+        """The state file."""
+        return self._path
+
+    def read(self) -> BuildState | None:
+        """Return the stored state (``None`` if missing or unusable, see :meth:`BuildState.parse`).
+
+        Returns
+        -------
+        BuildState or None
+            The state.
+        """
+        return BuildState.parse(self._path.read_bytes() if self._path.is_file() else None)
+
+    def write(self, state: BuildState) -> None:
+        """Replace the stored state.
+
+        Parameters
+        ----------
+        state : BuildState
+            The new state.
+        """
+        with self._writer.open(self._path) as stream:
+            stream.write(state.to_bytes())

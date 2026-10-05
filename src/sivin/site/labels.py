@@ -115,7 +115,7 @@ INDEX_LABELS: Final[Mapping[str, Label]] = MappingProxyType(
             "Riziko plísně šedé (Broome)", "Botrytis-Risiko (Broome)", "Botrytis risk (Broome)"
         ),
         "budburst": Label("Odhad rašení", "Geschätzter Austrieb", "Budburst estimate"),
-        "cool_night": Label("Index chladných nocí", "Kühle-Nächte-Index", "Cool night index"),
+        "cool_night": Label("Index chladných nocí", "Index kühler Nächte", "Cool night index"),
         "dew_point": Label("Rosný bod", "Taupunkt", "Dew point"),
         "dtr_ripening": Label(
             "Denní rozpětí teplot při zrání",
@@ -126,7 +126,9 @@ INDEX_LABELS: Final[Mapping[str, Label]] = MappingProxyType(
             "Mrazové hodiny a noci", "Froststunden und -nächte", "Frost hours and nights"
         ),
         "gdd_winkler": Label(
-            "Sumy aktivních teplot (Winkler)", "Gradtage (Winkler)", "Growing degree-days (Winkler)"
+            "Suma efektivních teplot (Winklerův index)",
+            "Gradtage nach Winkler",
+            "Growing degree-days (Winkler)",
         ),
         "gfv": Label(
             "Model kvetení a zaměkání (GFV)",
@@ -157,7 +159,11 @@ INDEX_LABELS: Final[Mapping[str, Label]] = MappingProxyType(
         "tropical_days_nights": Label(
             "Tropické dny a noci", "Tropentage und Tropennächte", "Tropical days and nights"
         ),
-        "vpd": Label("Deficit tlaku vodní páry", "Dampfdruckdefizit", "Vapour pressure deficit"),
+        "vpd": Label(
+            "Sytostní doplněk (deficit tlaku vodní páry)",
+            "Dampfdruckdefizit",
+            "Vapour pressure deficit",
+        ),
         "winter_freeze": Label("Zimní mrazy", "Winterfrost", "Winter freeze"),
     }
 )

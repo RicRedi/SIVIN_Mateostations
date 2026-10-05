@@ -263,7 +263,10 @@ log, set of seasons or `sivin` version rebuilds everything. The files are byte-i
 full build. Files no longer produced (removed sensors, months, seasons) are deleted. Prints one
 summary line (`Site data (full|incremental) -> DIR: N sensor(s) built, M reused, K file(s)
 written, R removed; seasons: ...`) and the failures. Exit code 1 if a sensor or an index
-failed (its previous files stay), 3 for an invalid configuration, registry or off-site log.
+failed — its previously published files stay (also in a full build), the manifest marks it with
+`data_status: "error"`, and every later build retries it and exits 1 while it keeps failing —
+3 for an invalid configuration, registry or off-site log. The build state is kept in
+`<paths.derived_dir>/site-build-state.json`, never in the published directory.
 
 ```console
 $ sivin build-site                     # site/data, incremental

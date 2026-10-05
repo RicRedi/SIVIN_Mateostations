@@ -41,7 +41,7 @@ from sivin.site.events import SiteEventMapping
 from sivin.site.sensor_builder import DailyAggregation, SensorSiteBuilder, SummaryBuilder
 from sivin.site.sensor_files import default_sensor_writers
 from sivin.site.site_files import default_site_writers
-from sivin.site.state import StoreFingerprints
+from sivin.site.state import StateFile, StoreFingerprints
 from sivin.storage.config import build_store
 from sivin.storage.runlog import RunLog
 from sivin.storage.store import RAW_DIR, MeasurementStore
@@ -375,6 +375,7 @@ class ServiceFactory:
             sensor_builder,
             default_site_writers(config.site.stale_after_s, redactor=self._redactor),
             StoreFingerprints(self._workspace.data_dir / RAW_DIR),
+            StateFile(self._workspace.site_state_file),
             self._clock,
             self._error_text,
         )

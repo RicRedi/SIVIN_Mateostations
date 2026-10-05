@@ -49,7 +49,8 @@ SiteFileWriter (ABC): ManifestWriter, RegistryCopyWriter, LatestWriter, SeasonIn
     default_site_writers()
 SiteEventMapping(published).entries(events); POINT_KINDS
 SiteFile(path, content), SiteOutput(root).write/has/read/prune, encode_json()
-BuildState / SensorState / StoreFingerprints / fingerprint(); STATE_FILE = ".build-state.json"
+BuildState / SensorState / StoreFingerprints / StateFile / fingerprint();
+    STATE_FILE = "site-build-state.json" (in paths.derived_dir; round 2)
 IndexCatalog, INDEX_LABELS, VARIABLES, Label, IndexSpec; index_entry(IndexResult)
 columns: unix_seconds, rounded, utc_month_keys, local_years, iso_utc_seconds, VALUE_DECIMALS=2,
     SHARE_DECIMALS=3, INDEX_DECIMALS=2, CONFIDENCE_DECIMALS=2
@@ -142,9 +143,14 @@ All commands in `/home/user/wt/wp-3.2` (venv by `uv`, Python 3.12; Node 22).
 - Web (WP-3.4): grey out retired sensors (manifest `status`), draw `unlogged_off_site` as a
   band, show precipitation/battery and the index cards; `web/scripts/generate-fixture.mjs`
   still uses a 1825 s step (only the doc wording was changed here).
-- WP-4.1: keep `site/data` (incl. `.build-state.json`) between scheduled runs, e.g. on the
-  `data` branch, or every run is a full build; decide whether `.build-state.json` should be
-  deployed to Pages (harmless: fingerprints, relative paths, summaries only).
+- WP-4.1: keep `site/data` and `data/derived/site-build-state.json` between scheduled runs
+  (e.g. on the `data` branch), or every run is a full build; report the `unlogged_off_site`
+  warnings (no longer public by default) in the job summary.
+- **WP-2.3 (disease models)**: `powdery_mildew_gt` and `botrytis_broome` return a value of 0.0
+  and the class `"low"` (powdery mildew) when there are no data at all (coverage 0, e.g. a sensor
+  off site for the whole season). The site now publishes `null`/`no_data` for them at the
+  publication boundary, but the models themselves should return `value=None` and no class at
+  zero coverage (also for `data/derived/indices/` and every other consumer).
 - The root `.gitignore` already ignores `/site/` (generated output) and every `data/`
   directory; the fixture `web/tests/fixtures/python-site/` is not affected.
 
@@ -153,13 +159,63 @@ All commands in `/home/user/wt/wp-3.2` (venv by `uv`, Python 3.12; Node 22).
 1. Contract §2.6 additions (all optional, see *Deviations* 3): accept them into the plan text
    (`status` in the manifest, `precip_n_samples`, `estimated`, `low_battery` and
    `unlogged_off_site` events, the two extra variables)?
-2. Default published event kinds (`site.events`): off_site, deployment, retrieval, step,
-   low_battery, unlogged_off_site. Should `unlogged_off_site` (an advisory detector warning with
-   a long text telling how to fill the log) be public on the portal, or only in the job
-   summary?
+2. ~~Should `unlogged_off_site` be public?~~ Decided in round 2 (orchestrator): not by default;
+   it stays an opt-in in `site.events`, and WP-4.1 reports it in the job summary.
 3. Staleness 36 h (`site.stale_after_s`) — fine with the daily 06:00 run?
 4. A stored sensor that is not in the registry is not published (no position); is that right,
    or should it appear in the manifest without a map marker?
+5. `sensors.geojson` is a byte copy of the registry (§2.6 "kopie registru"). It publishes
+   `portal_name` (with the provider account number 8615620) and internal placement notes such as
+   "placeholder deployment date — owner to confirm (MIGRATION_PLAN Q3)". Publish as is (current
+   behaviour, kept in round 2), or publish only the public properties? (Raised by the
+   orchestrator.)
+6. Round 2: a sensor whose build failed is marked in the manifest with **`data_status: "error"`**
+   and `last_built_at`, not with `status: "error"` as the orchestrator suggested: `status` is the
+   registry life-cycle state, and overwriting it would hide that a sensor is retired. Rename if
+   you prefer.
+
+## Round 2 (changes after review round 1)
+
+Orchestrator decisions on review round 1, all implemented (see the Status column):
+
+- **Major, no-data index entries:** `index_entry` publishes `value: null`, `class: null`,
+  `status: "no_data"`, `detail: "no data"` when `coverage` is 0, and a `class` only for a
+  `complete` result (no index declares its own rule for partial classes, so none is published
+  partially). Every entry now has `status` (`ok`/`no_data`). Tests: `tests/site/test_indices.py`
+  and `tests/site/test_service.py::test_no_index_value_or_class_without_data` (77678271 off site
+  for the whole 2026 season: powdery mildew, Broome, Huglin and Winkler all `null`/`no_data`);
+  the web fixture test checks every entry of 77799986. WP-2.3 follow-up under *Out of scope*.
+- **Failed sensor survives a full build:** the stored state is always read; a failing sensor
+  takes its last state (also when the shared inputs changed or `--full` is given), keeps its
+  files and stays in the manifest with `data_status: "error"` and `last_built_at` (open question
+  6). Test with the reviewer's reproduction: `test_failed_sensor_survives_a_full_build`
+  (broken store, then changed settings, then `--full`: nothing removed, files byte-identical).
+- **Failures are retried:** `SensorState` has `retry` (a failed index or sensor) and `failed`; a
+  state with `retry` is never reused, so every build retries and exits 1 while it keeps failing.
+  `IndexBatch.failed_sensors` carries the sensors with failed indices. Tests:
+  `test_failed_index_is_retried_and_fails_every_run`, `test_failed_sensor_is_retried_until_it_succeeds`.
+- **`unlogged_off_site`** removed from the default `site.events` (opt-in); `config/sivin.yaml`,
+  configuration reference and docs updated; the python-site fixture did not contain one.
+- **Labels:** `gdd_winkler` cs "Suma efektivních teplot (Winklerův index)", de "Gradtage nach
+  Winkler"; also checked the others and changed `cool_night` de to "Index kühler Nächte" and
+  `vpd` cs to "Sytostní doplněk (deficit tlaku vodní páry)" (the Czech term for VPD).
+- **Build state** moved out of the published directory to
+  `<paths.derived_dir>/site-build-state.json` (`StateFile`, `Workspace.site_state_file`; state
+  format 2). Documented in `docs/site.md`, `docs/cli.md`, `docs/web.md`.
+- **Staleness at viewing time:** the manifest publishes `stale_after_s`; the web
+  (`SensorCatalog.build(..., nowS)`, `withStaleness`) marks a latest sample stale when it is
+  older than that at the current time, the build-time `stale` stays. Web test in
+  `tests/app.test.ts`; optional contract fields `stale_after_s`, `data_status`,
+  `last_built_at`, index `status`/`detail` with tolerance tests in `tests/contract.site.test.ts`.
+- **`sensors.geojson`:** unchanged byte copy; owner question 5.
+- Outside the literal Files scope (requested by the orchestrator): `web/src/app/SensorCatalog.ts`
+  (staleness at viewing time, `nowS` defaults to the clock, so `main.ts` is unchanged).
+- The python-site fixture was regenerated (`indices/*.json`, `manifest.json` changed).
+
+Gates after round 2 (in `/home/user/wt/wp-3.2`): `make lint` → all checks passed; `make type`
+→ `Success: no issues found in 176 source files`; `make cov` → **1844 passed**, total 99 %,
+every `sivin/site/*` module, `app/site.py` and `app/workspace.py` 100 %. Web: lint and
+typecheck clean, `npm test` → **168 passed**, lines 99.39 %; `npm run build` OK.
 
 ## Review
 Verdict: CHANGES_REQUESTED (round 1)
@@ -212,14 +268,14 @@ Reviewer: independent reviewer session, 2026-10-05. Throwaway scripts and screen
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/site/indices.py:17-40` (`index_entry`), `docs/site.md` § indices | A sensor with **no valid sample in the season** still gets numeric risk values and a risk class (details below). | open |
-| minor | `src/sivin/site/builder.py:202,273` (`previous = None` drops `_previous_states`), `docs/site.md:182` | A failing sensor is unpublished by every full build, although `docs/site.md` says "Failures never remove published data" (details below). | open |
-| minor | `src/sivin/site/builder.py:312-340` (`compute_indices` / `states`) | An index failure is cached by the incremental build (from reading the code, not reproduced; details below). | open |
-| minor | `src/sivin/site/settings.py:31` (`DEFAULT_PUBLISHED_EVENTS`) | `unlogged_off_site` is public by default with an operator instruction as its tooltip (details below). | open |
-| minor | `src/sivin/site/labels.py:128-130` | The Czech label of `gdd_winkler` is "Sumy aktivních teplot (Winkler)", which names a different index (details below). | open |
-| nit | `src/sivin/site/files.py` / `docs/site.md` § incremental | `.build-state.json` sits in `site/data` and would be deployed publicly (47 KB with 4 sensors). It is harmless, but WP-4.1 should exclude it from the Pages artifact or keep it outside `data/`. | open |
-| nit | `src/sivin/site/site_files.py` (`RegistryCopyWriter`) | `sensors.geojson` is a byte copy, as the plan says. It publishes `portal_name` (with the provider account number 8615620) and internal placement notes ("placeholder deployment date — owner to confirm (MIGRATION_PLAN Q3)"). Owner decision: publish as is, or keep only the public properties. | open |
-| nit | `src/sivin/site/site_files.py` (`LatestWriter`) | `stale` is frozen at `generated_at`. If the daily job stops, the portal keeps showing `stale: false` indefinitely. The web could also compare `generated_at` with the current time (WP-3.4/4.1). | open |
+| major | `src/sivin/site/indices.py:17-40` (`index_entry`), `docs/site.md` § indices | A sensor with **no valid sample in the season** still gets numeric risk values and a risk class (details below). | fixed: coverage 0 → `value`/`class` `null`, `status: "no_data"`, `detail: "no data"`; class only for complete results; tests (whole season off site); WP-2.3 note in *Out of scope* |
+| minor | `src/sivin/site/builder.py:202,273` (`previous = None` drops `_previous_states`), `docs/site.md:182` | A failing sensor is unpublished by every full build, although `docs/site.md` says "Failures never remove published data" (details below). | fixed: the stored state is the fallback of a failed sensor in every build (also full); files kept, manifest `data_status: "error"` + `last_built_at`; test with the reproduction |
+| minor | `src/sivin/site/builder.py:312-340` (`compute_indices` / `states`) | An index failure is cached by the incremental build (from reading the code, not reproduced; details below). | fixed: `retry` in the sensor state for a failed index or sensor; never reused, every build retries and exits 1; tests |
+| minor | `src/sivin/site/settings.py:31` (`DEFAULT_PUBLISHED_EVENTS`) | `unlogged_off_site` is public by default with an operator instruction as its tooltip (details below). | fixed: not in the default `site.events` (opt-in); WP-4.1 job summary |
+| minor | `src/sivin/site/labels.py:128-130` | The Czech label of `gdd_winkler` is "Sumy aktivních teplot (Winkler)", which names a different index (details below). | fixed: "Suma efektivních teplot (Winklerův index)"; also de Winkler, de cool_night, cs vpd |
+| nit | `src/sivin/site/files.py` / `docs/site.md` § incremental | `.build-state.json` sits in `site/data` and would be deployed publicly (47 KB with 4 sensors). It is harmless, but WP-4.1 should exclude it from the Pages artifact or keep it outside `data/`. | fixed: state moved to `<paths.derived_dir>/site-build-state.json`, documented |
+| nit | `src/sivin/site/site_files.py` (`RegistryCopyWriter`) | `sensors.geojson` is a byte copy, as the plan says. It publishes `portal_name` (with the provider account number 8615620) and internal placement notes ("placeholder deployment date — owner to confirm (MIGRATION_PLAN Q3)"). Owner decision: publish as is, or keep only the public properties. | kept (byte copy); owner question 5 |
+| nit | `src/sivin/site/site_files.py` (`LatestWriter`) | `stale` is frozen at `generated_at`. If the daily job stops, the portal keeps showing `stale: false` indefinitely. The web could also compare `generated_at` with the current time (WP-3.4/4.1). | fixed: manifest `stale_after_s`; the web also judges staleness at viewing time; test |
 
 **Major: zero-coverage index entries (`indices.py:17-40`).** A sensor with no valid sample in
 the season still gets risk values and a risk class.

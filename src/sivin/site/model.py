@@ -146,12 +146,18 @@ class PublishedSensor:
         Its data availability and latest sample.
     indices : Mapping of int to IndexEntries
         Season → index id → published entry.
+    failed : bool
+        The sensor failed in this build; its files are those of an earlier build.
+    last_built_at : str or None
+        For a failed sensor: ``generated_at`` of its last successful build (ISO 8601 UTC).
     """
 
     sensor_id: SensorId
     status: str
     summary: SensorSummary
     indices: Mapping[int, IndexEntries] = field(default_factory=dict)
+    failed: bool = False
+    last_built_at: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "indices", MappingProxyType(dict(self.indices)))

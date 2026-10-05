@@ -19,7 +19,14 @@ from sivin.site.site_files import (
     SeasonIndicesWriter,
     default_site_writers,
 )
-from sivin.site.state import BuildState, SensorState, StoreFingerprints, fingerprint
+from sivin.site.state import (
+    STATE_FILE,
+    BuildState,
+    SensorState,
+    StateFile,
+    StoreFingerprints,
+    fingerprint,
+)
 
 GENERATED = datetime(2026, 10, 5, 4, 0, tzinfo=UTC)
 GENERATED_S = 1_791_172_800
@@ -53,13 +60,14 @@ def test_hand_computed_generated_time() -> None:
 
 
 def test_manifest() -> None:
-    (file,) = ManifestWriter(IndexCatalog()).files(snapshot(GENERATED_S, None))
+    (file,) = ManifestWriter(IndexCatalog(), STALE_AFTER_S).files(snapshot(GENERATED_S, None))
     manifest = json.loads(file.content)
     assert file.path == "manifest.json"
     assert list(manifest) == [
-        "schema_version", "generated_at", "display_timezone", "variables", "sensors",
-        "seasons", "indices",
+        "schema_version", "generated_at", "display_timezone", "stale_after_s", "variables",
+        "sensors", "seasons", "indices",
     ]  # fmt: skip
+    assert manifest["stale_after_s"] == STALE_AFTER_S
     assert manifest["schema_version"] == 1
     assert manifest["generated_at"] == "2026-10-05T04:00:00Z"
     assert manifest["sensors"]["77680921"] == {
@@ -130,17 +138,24 @@ def test_store_fingerprints_follow_the_files(tmp_path: Path) -> None:
     assert fingerprints.of(OTHER) == nothing
 
 
-def test_state_round_trip() -> None:
+def test_state_round_trip(tmp_path: Path) -> None:
     sensor_state = SensorState.of(
         "abc",
         [SiteFile("events/77678271.json", b"{}\n")],
         summary(GENERATED_S),
         {2026: {"huglin": HUGLIN}},
+        "2026-10-05T04:00:00Z",
+        retry=True,
     )
     state = BuildState("settings", (2025, 2026), {"77678271": sensor_state})
-    parsed = BuildState.parse(state.to_file().content)
-    assert parsed == state
-    assert state.to_file().path == ".build-state.json"
+    assert BuildState.parse(state.to_bytes()) == state
+    failed = sensor_state.as_failed()
+    assert (failed.failed, failed.retry, failed.outputs) == (True, True, sensor_state.outputs)
+    store = StateFile(tmp_path / "derived" / STATE_FILE)
+    assert store.read() is None
+    store.write(state)
+    assert store.read() == state
+    assert store.path.name == "site-build-state.json"
 
 
 @pytest.mark.parametrize(
@@ -148,8 +163,8 @@ def test_state_round_trip() -> None:
     [
         b"not json",
         b"[]",
-        b'{"format": 1}',
-        b'{"format": 1, "settings": "s", "seasons": [], "sensors": {"x": {}}}',
+        b'{"format": 2}',
+        b'{"format": 2, "settings": "s", "seasons": [], "sensors": {"x": {}}}',
     ],
 )
 def test_unreadable_state_is_ignored(content: bytes) -> None:

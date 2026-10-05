@@ -71,7 +71,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `ui/SensorList` | Checkbox list of all sensors (keyboard path to the comparison). |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
 | `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
-| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site`, grey bands for `off_site` (below). |
+| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site` (the latter only if the pipeline is configured to publish it), grey bands for `off_site` (below). |
 | `ui/SensorColors` | Line colours of the compared sensors, assigned in selection order; a sensor keeps its colour while selected, a new one takes the first free colour, so the (at most 8) compared sensors never share a colour. |
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
 | `ui/App` | Coordinates store and views: user actions update the store, changes re-render views and reload the chart. |
@@ -155,7 +155,8 @@ chart window (a point event, and the start `t` of a marked interval, must lie in
 
 **Event types the SiteBuilder publishes** ([site.md](site.md#eventsidjson)): besides `off_site`
 and the point events, two advisory intervals of quality control, `low_battery` (a low-battery
-episode) and `unlogged_off_site` (an indoor-like period the off-site log does not cover). They
+episode) and `unlogged_off_site` (an indoor-like period the off-site log does not cover; published
+only when enabled in the pipeline's `site.events`). They
 need an integer `t_end` ≥ `t`, are drawn like a point event at `t` (dashed line) with an
 **amber** button (`#b45309`, 5.0:1 against white) whose label names the period
 ("Slabá baterie" / "Schwache Batterie" / "Low battery", "Možné nezapsané období mimo vinici" /
@@ -219,8 +220,7 @@ into `site/data/` ([site.md](site.md)); the deployment is WP-4.1. To serve them:
 3. Replace `dist/data/` with the generated `site/data/` before uploading the Pages artifact
    (or copy `site/data/` into `web/public/data/` before the build). The app always reads
    `<base>/data/`; to read from elsewhere, change `DATA_BASE_URL` in `src/main.ts`.
-   `site/data/.build-state.json` is the pipeline's incremental build state; the app never reads
-   it.
+   (The pipeline's incremental build state is kept in `data/derived/`, not in `site/data`.)
 
 What the real data look like to the portal:
 
@@ -231,10 +231,18 @@ What the real data look like to the portal:
   `battery_min_v` (optional, not drawn yet).
 - `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
   optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
-  history). The UI does not grey out retired sensors yet (WP-3.4).
+  history); a sensor whose last pipeline build failed has `data_status: "error"` and
+  `last_built_at`. The UI does not use them yet (WP-3.4).
+- **Staleness at viewing time.** The manifest carries `stale_after_s`; `SensorCatalog.build`
+  marks a latest sample stale if `latest.json` says so **or** if it is older than
+  `stale_after_s` at the current time (`withStaleness`), so a pipeline that stopped publishing
+  still greys the sensors out. Without `stale_after_s` (older data) only the build-time
+  `stale` counts.
 - A sensor without a valid sample (e.g. off site the whole time) is missing from `latest.json`
   and is drawn grey on the map.
-- `indices/<season>.json` entries may carry `estimated` (index based on a proxy).
+- `indices/<season>.json` entries may carry `estimated` (index based on a proxy), `status`
+  (`ok` / `no_data`) and `detail`; a `no_data` entry has `value` and `class` `null`, and an
+  incomplete result has `class: null`.
 
 **Cross-language contract test.** `web/tests/fixtures/python-site/` is written by the Python
 pipeline (`sivin run --skip-fetch` on the trimmed real export of 77799986 and a synthetic

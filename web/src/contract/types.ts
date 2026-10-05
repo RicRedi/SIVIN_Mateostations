@@ -21,14 +21,17 @@ export interface VariableSpec {
 /**
  * Per-sensor availability in the manifest. `raw_months` are `YYYY-MM` keys (UTC months).
  *
- * `status` (optional, WP-3.2) is the registry life-cycle state (`active`, `inactive`, `retired`);
- * a retired sensor keeps its published history.
+ * Optional (WP-3.2): `status` is the registry life-cycle state (`active`, `inactive`, `retired`;
+ * a retired sensor keeps its published history). `data_status: "error"` marks a sensor whose
+ * last pipeline build failed, so its files are from the build at `last_built_at` (ISO 8601).
  */
 export interface ManifestSensor {
   readonly first_t: number;
   readonly last_t: number;
   readonly raw_months: readonly string[];
   readonly status?: string;
+  readonly data_status?: string;
+  readonly last_built_at?: string;
 }
 
 /** A climate index advertised by the manifest. */
@@ -44,6 +47,11 @@ export interface Manifest {
   readonly schema_version: typeof SUPPORTED_SCHEMA_VERSION;
   readonly generated_at: string;
   readonly display_timezone: string;
+  /**
+   * Optional (WP-3.2): age in seconds after which a latest sample is stale. The web judges
+   * staleness against the current time with it, so a stopped pipeline shows up as stale.
+   */
+  readonly stale_after_s?: number;
   readonly variables: readonly VariableSpec[];
   readonly sensors: Readonly<Record<string, ManifestSensor>>;
   readonly seasons: readonly number[];
@@ -206,8 +214,9 @@ export interface EventsFile {
 }
 
 /**
- * One index result in `indices/<season>.json`. `estimated` (optional, WP-3.2) is true when the
- * index relies on a proxy, e.g. leaf wetness estimated from humidity.
+ * One index result in `indices/<season>.json`. Optional (WP-3.2): `estimated` is true when the
+ * index relies on a proxy, e.g. leaf wetness estimated from humidity; `status` is `"ok"` or
+ * `"no_data"` (coverage 0: `value` and `class` are `null`), `detail` explains it.
  */
 export interface IndexValue {
   readonly value: number | null;
@@ -216,6 +225,8 @@ export interface IndexValue {
   readonly complete: boolean;
   readonly class: string | null;
   readonly estimated?: boolean;
+  readonly status?: string;
+  readonly detail?: string;
 }
 
 /** `indices/<season>.json`: sensor id → index id → result. */

@@ -41,8 +41,10 @@ site/data/series/<sensor_id>/raw/<YYYY-MM>.json
 site/data/series/<sensor_id>/daily.json
 site/data/events/<sensor_id>.json
 site/data/indices/<season>.json
-site/data/.build-state.json        # incremental build state (not part of the contract)
 ```
+
+The incremental build state is kept outside the published directory, in
+`<paths.derived_dir>/site-build-state.json` (`data/derived/`), so it is never deployed.
 
 **Encoding.** UTF-8 JSON, compact (no spaces), one line plus a final line break. Keys are
 written in the order of the contract (§2.6), sensors sorted by id, so the same data always give
@@ -61,14 +63,19 @@ seconds (rounded down; the store keeps whole seconds); `generated_at` and `compu
 
 ### `manifest.json`
 
-`schema_version` (1), `generated_at`, `display_timezone`, then:
+`schema_version` (1), `generated_at`, `display_timezone`, **`stale_after_s`** (the staleness
+threshold, so the web can judge staleness against the current time; optional in the web
+contract), then:
 
 - `variables`: `temp_c` (°C), `rh_pct` (%), `precip_mm` (mm) and `battery_v` (V) with labels
   `cs`/`de`/`en` (`sivin.site.labels.VARIABLES`). The web looks labels up by id; extra entries
   do no harm.
 - `sensors`: per published sensor `first_t`, `last_t` (first and last sample), `raw_months`
   (UTC months with a raw file) and **`status`** (`active`, `inactive`, `retired`; optional in
-  the web contract).
+  the web contract). A sensor whose build **failed** in this run (its files are those of an
+  earlier build) also has **`data_status: "error"`** and **`last_built_at`** (the
+  `generated_at` of its last successful build). `status` is not overwritten with `"error"`,
+  because it would hide that a sensor is retired.
 - `seasons`: the seasons with an indices file.
 - `indices`: every registered index with `id`, `unit`, `doc` (`docs/indices/<id>.md`) and
   `label` (`sivin.site.labels.INDEX_LABELS`; an index without a label is shown under its id and
@@ -88,7 +95,10 @@ informative flags can be set) and `stale`. A sensor without any valid sample (fo
 **Staleness:** `stale` is `true` when `generated_at − t > site.stale_after_s`, default
 **36 h** (129 600 s): the pipeline runs once a day at 06:00 local time (Q5), so a healthy
 sensor's last sample is at most about 24 h old; 36 h tolerates one late or failed run before
-the map greys a sensor out. A sample exactly 36 h old is not stale.
+the map greys a sensor out. A sample exactly 36 h old is not stale. Because `stale` is frozen at
+`generated_at`, the manifest also carries `stale_after_s` and the web marks a sample stale when it
+is older than that **at the time of viewing** (`SensorCatalog.build`), so a stopped pipeline
+shows up as stale too; the build-time `stale` stays for compatibility.
 
 ### `series/<id>/raw/<YYYY-MM>.json`
 
@@ -130,24 +140,34 @@ its kind as `type`; `source` is `log`, `detected` or `registry`; `confidence` is
 | `deployment`, `retrieval` (detector, `enforce` mode only) | yes | point (no `t_end`) | dashed line + marker |
 | `step` (step check) | yes | point | dashed line + marker |
 | `low_battery` (battery check) | yes | interval, `t_end` = last low reading | amber marker at `t`, label with the end; no data hidden |
-| `unlogged_off_site` (detector, advisory) | yes | interval, `t_end` = end of the indoor-like period | amber marker at `t`, label with the end; no data hidden |
+| `unlogged_off_site` (detector, advisory) | **no** (opt-in in `site.events`) | interval, `t_end` = end of the indoor-like period | amber marker at `t`, label with the end; no data hidden |
 | `unconfirmed_transition` | no | point | — |
 | `gap`, `irregular_sampling`, `non_positive_interval`, `precip_out_of_range`, `precip_counter_reset`, `precip_counter_mismatch`, `deployment_mismatch` | no | interval if it has an end | — (stay in `data/derived/events/`) |
 
 A kind added to `site.events` that the web does not know is skipped by the web with a console
 warning (it does not reject the file). In the default advisory mode the detector produces no
-`deployment`/`retrieval` events; its findings are `unlogged_off_site` warnings.
+`deployment`/`retrieval` events; its findings are `unlogged_off_site` warnings — an unconfirmed
+guess whose `detail` is an instruction for the owner, so it is not public by default (review of
+WP-3.2) and the scheduled run reports it in its job summary instead (WP-4.1).
 
 ### `indices/<season>.json`
 
 `season`, `computed_at` (the `generated_at` of the build that wrote the file) and `sensors`:
-sensor → index id → `value`, `unit`, `coverage`, `complete`, `class` and **`estimated`** (`true`
-when the index uses a proxy, e.g. leaf wetness from humidity; optional in the web contract).
-The index `details` are not published. A sensor without data in the season window is absent;
-an index that failed for a sensor is left out of its entry and reported as a failure (exit
-code 1). Off-site data are excluded from the indices, so a sensor that was off site the whole
-season has `value: null` (or a value with `coverage: 0` for the disease counts) and
-`complete: false`; the web must use `complete`.
+sensor → index id → `value`, `unit`, `coverage`, `complete`, `class`, **`estimated`** (`true`
+when the index uses a proxy, e.g. leaf wetness from humidity) and **`status`** (`"ok"` or
+`"no_data"`); `estimated`, `status` and `detail` are optional in the web contract. The index
+`details` are not published. A sensor without data in the season window is absent; an index
+that failed for a sensor is left out of its entry and reported as a failure (exit code 1).
+
+**Nothing is published that the data do not support** (`sivin.site.indices.index_entry`):
+
+- **coverage 0** (no complete day in the index period, e.g. a sensor off site the whole
+  season): `value: null`, `class: null`, `status: "no_data"`, `detail: "no data"` — whatever the
+  index returned (the disease models return 0 and `"low"` without data, see the hand-off note of
+  WP-3.2);
+- a **`class` only for a `complete` result**: a class of a partial heat sum or of a partial risk
+  count would be misleading, so an incomplete result keeps its `value` (with `complete: false`
+  and its `coverage`) but `class: null`.
 
 **Seasons:** `--season YEAR` (repeatable) sets them; by default every calendar year (display
 time zone) from the first to the last sample of any published sensor. The output holds exactly
@@ -155,10 +175,11 @@ these seasons; indices files of other seasons are removed.
 
 ## Incremental build
 
-The output directory keeps `.build-state.json`: a fingerprint of the shared inputs, the seasons,
+The build state `<paths.derived_dir>/site-build-state.json` (outside the published directory)
+holds a fingerprint of the shared inputs, the seasons,
 and per sensor a fingerprint of its store files (`data/raw/<id>/*`, names and contents), the
-SHA-256 of every per-sensor file written, its summary (times, months, latest sample, years) and
-its index entries.
+SHA-256 of every per-sensor file written, its summary (times, months, latest sample, years), its
+index entries, the time of its last successful build and whether it must be retried.
 
 A build
 
@@ -166,7 +187,8 @@ A build
    or if the **shared inputs** changed: the configuration (every section except `paths` and
    `ingest`), the registry file, the off-site log file, the `sivin` version or the output format
    version (`SITE_OUTPUT_FORMAT`). Then every sensor is rebuilt;
-2. **reuses** a sensor whose store fingerprint is unchanged and whose files are all present
+2. **reuses** a sensor whose store fingerprint is unchanged, that did not fail last time (neither
+   the sensor nor one of its indices) and whose files are all present
    with their recorded SHA-256 (a deleted or edited output file makes it rebuild) — without
    reading or checking its data;
 3. quality-checks and writes the other sensors, computes their indices, and rebuilds every
@@ -179,15 +201,20 @@ A build
 The result is **byte-identical** to a full build of the same inputs at the same time
 (`tests/site/test_service.py::test_incremental_and_full_builds_are_byte_identical`).
 
-**Failures** never remove published data: a sensor whose QC fails keeps its previous files and
-state (with the old fingerprint, so the next build tries again); a new sensor that fails is not
-published. Failures are printed and give exit code 1; in `sivin run` they go into the run
-record. If the output directory cannot be written, `sivin run` records `site: ...` and goes on.
+**Failures** never remove published data, also not in a full build: a sensor whose QC or build
+fails keeps the files, summary and indices of its last successful build (taken from the state
+even when the shared inputs changed or `--full` is given), stays in the manifest with
+`data_status: "error"` and `last_built_at`, and is retried by every later build. A sensor or
+index that failed is never recorded as up to date, so every build retries it and exits with 1
+while it keeps failing. A new sensor that fails is not published. Failures are printed; in
+`sivin run` they go into the run record. If the output directory cannot be written, `sivin run`
+records `site: ...` and goes on.
 
-The state file sits next to the data and is deployed with it; it holds only fingerprints,
-relative paths, summaries and index entries — no paths of the machine, no credentials. For the
-incremental build to help, the scheduled workflow (WP-4.1) has to keep `site/data` (with the
-state) between runs; otherwise every run is a full build, which gives the same files.
+The state holds only fingerprints, relative paths, summaries and index entries — no paths of the
+machine, no credentials. For the incremental build to help, the scheduled workflow (WP-4.1) has
+to keep `site/data` and `data/derived/site-build-state.json` between runs; otherwise every run is
+a full build, which gives the same files. The state describes the last build; a build into
+another `--out` directory still checks every reused file there by its SHA-256.
 
 ## Cross-language contract test
 
@@ -214,7 +241,7 @@ Regenerate after a change of the output (and bump `SITE_OUTPUT_FORMAT` in
 | Key | Default | Meaning |
 |---|---|---|
 | `site.stale_after_s` | `129600.0` | staleness threshold of `latest.json` in seconds (36 h) |
-| `site.events` | `off_site, deployment, retrieval, step, low_battery, unlogged_off_site` | published QC event kinds |
+| `site.events` | `off_site, deployment, retrieval, step, low_battery` | published QC event kinds (`unlogged_off_site` opt-in) |
 
 The output directory is `<paths.site_dir>/data`. Reference: [configuration.md](configuration.md).
 

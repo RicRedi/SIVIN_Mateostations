@@ -94,6 +94,21 @@ describe('optional fields written by the SiteBuilder', () => {
     indices: [],
   });
 
+  it('reads stale_after_s and the build status of a sensor', () => {
+    const value = {
+      ...manifest('active'),
+      stale_after_s: 129600,
+      sensors: { [SENSOR]: { first_t: 1, last_t: 2, raw_months: [], status: 'active', data_status: 'error', last_built_at: '2026-10-04T04:00:00Z' } },
+    };
+    const parsed = parseManifest(value);
+    expect(parsed.stale_after_s).toBe(129600);
+    expect(parsed.sensors[SENSOR]).toMatchObject({ data_status: 'error', last_built_at: '2026-10-04T04:00:00Z' });
+    const { warnings, warn } = collect();
+    expect(parseManifest({ ...value, stale_after_s: '36h' }, 'manifest.json', warn).stale_after_s).toBeUndefined();
+    expect(warnings).toEqual(['manifest.json: $.stale_after_s must be a finite number, got "36h"; optional field ignored']);
+    expect('stale_after_s' in parseManifest(manifest('active'))).toBe(false);
+  });
+
   it('reads the sensor status of the manifest', () => {
     expect(parseManifest(manifest('retired')).sensors[SENSOR]?.status).toBe('retired');
     expect('status' in (parseManifest(manifest(undefined)).sensors[SENSOR] ?? {})).toBe(false);
@@ -120,6 +135,18 @@ describe('optional fields written by the SiteBuilder', () => {
       'i.json: $.sensors.77799986.botrytis_broome.estimated must be true or false, got "yes"; optional field ignored',
     ]);
     expect(parseIndicesFile(indices(undefined), 'i.json').sensors[SENSOR]?.botrytis_broome?.estimated).toBeUndefined();
+  });
+
+  it('reads the no-data status of an index result', () => {
+    const file = parseIndicesFile(
+      {
+        season: 2026,
+        computed_at: '2026-10-05T04:00:00Z',
+        sensors: { [SENSOR]: { powdery_mildew_gt: { value: null, unit: 'points', coverage: 0, complete: false, class: null, estimated: true, status: 'no_data', detail: 'no data' } } },
+      },
+      'i.json',
+    );
+    expect(file.sensors[SENSOR]?.powdery_mildew_gt).toMatchObject({ value: null, class: null, status: 'no_data', detail: 'no data' });
   });
 
   it('reads precip_n_samples of the daily file', () => {

@@ -474,6 +474,6 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | Key | Default | Description |
 |---|---|---|
 | `site.stale_after_s` | `129600.0` | Age in seconds of a sensor's last valid sample, relative to generated_at, above which latest.json marks it stale (default 36 h = 129600 s: one daily run at 06:00 plus a missed or late run; project default). |
-| `site.events` | `["off_site", "deployment", "retrieval", "step", "low_battery", "unlogged_off_site"]` | QC event kinds (no unit) published in events/<sensor_id>.json. 'off_site' is the off-site log period, 'deployment'/'retrieval'/'step' are point markers, 'low_battery' and 'unlogged_off_site' are advisory intervals (docs/site.md). The other kinds (gap, irregular_sampling, precip_*, ...) stay in the derived events. |
+| `site.events` | `["off_site", "deployment", "retrieval", "step", "low_battery"]` | QC event kinds (no unit) published in events/<sensor_id>.json. 'off_site' is the off-site log period, 'deployment'/'retrieval'/'step' are point markers, 'low_battery' is an advisory interval; 'unlogged_off_site' (advisory interval, an unconfirmed detector guess) can be added. The other kinds (gap, irregular_sampling, precip_*, ...) stay in the derived events (docs/site.md). |
 
 <!-- END GENERATED REFERENCE -->

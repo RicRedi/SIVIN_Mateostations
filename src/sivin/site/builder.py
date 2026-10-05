@@ -10,7 +10,12 @@ One build:
    build, every sensor is rebuilt;
 4. computes the indices of the rebuilt sensors for every season;
 5. writes the site-wide files (manifest, registry copy, latest values, one indices file per
-   season), removes files no longer produced and saves the new state.
+   season), removes files no longer produced and saves the new state (outside the output).
+
+A sensor that fails keeps the files of its last successful build (from any earlier build, also
+across a full build) and is marked ``data_status: "error"`` in the manifest; a failed sensor or
+index is never recorded as up to date, so every later build tries again (and fails the run
+while it keeps failing).
 
 Incremental and full builds give byte-identical files (tested).
 """
@@ -26,12 +31,13 @@ from typing import Final, Protocol
 
 from sivin.core.ids import SensorId
 from sivin.quality.pipeline import QualityResult
+from sivin.site.columns import iso_utc_seconds
 from sivin.site.files import SiteFile, SiteOutput
 from sivin.site.indices import IndexSource, index_entry
 from sivin.site.model import IndexEntries, PublishedSensor, SiteSnapshot
 from sivin.site.sensor_builder import BuiltSensor, SensorSiteBuilder
 from sivin.site.site_files import SiteFileWriter
-from sivin.site.state import STATE_FILE, BuildState, SensorState, StoreFingerprints
+from sivin.site.state import BuildState, SensorState, StateFile, StoreFingerprints
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +139,8 @@ class SiteBuilder:
         The site-wide file kinds.
     fingerprints : StoreFingerprints
         Fingerprints of the stored files of each sensor.
+    state_file : StateFile
+        Where the build state is kept (outside the published directory).
     clock : callable
         Current time (aware), ``generated_at``.
     error_text : callable, optional
@@ -147,6 +155,7 @@ class SiteBuilder:
         "_sensors",
         "_site_writers",
         "_source",
+        "_state_file",
     )
 
     def __init__(
@@ -156,9 +165,11 @@ class SiteBuilder:
         sensors: SensorSiteBuilder,
         site_writers: Sequence[SiteFileWriter],
         fingerprints: StoreFingerprints,
+        state_file: StateFile,
         clock: Callable[[], datetime],
         error_text: Callable[[BaseException], str] = str,
     ) -> None:
+        self._state_file = state_file
         self._source = source
         self._indices = indices
         self._sensors = sensors
@@ -196,7 +207,8 @@ class SiteBuilder:
             What was built, reused, written and removed, and the failures.
         """
         generated_at = self._clock()
-        previous = None if full else BuildState.parse(output.read(STATE_FILE))
+        stored = self._state_file.read()
+        previous = None if full else stored
         if previous is not None and previous.settings != inputs.settings:
             logger.info("Configuration, registry or off-site log changed: full site build.")
             previous = None
@@ -209,7 +221,9 @@ class SiteBuilder:
             output,
             inputs,
             previous,
+            {} if stored is None else stored.sensors,
             {sensor_id: self._fingerprints.of(sensor_id) for sensor_id in inputs.sensors},
+            iso_utc_seconds(generated_at),
         )
         run.build_sensors(run.changed())
         chosen = tuple(sorted(set(seasons))) if seasons else run.default_seasons()
@@ -229,7 +243,7 @@ class SiteBuilder:
         states = run.states()
         keep = {path for state in states.values() for path in state.outputs}
         removed = output.prune(keep | {file.path for file in site_files})
-        output.write(BuildState(inputs.settings, chosen, states).to_file())
+        self._state_file.write(BuildState(inputs.settings, chosen, states))
         logger.info(
             "Site data: %d sensor(s) built, %d reused, %d file(s) written, %d removed.",
             len(run.built),
@@ -262,7 +276,9 @@ class _BuildRun:
         output: SiteOutput,
         inputs: SiteInputs,
         previous: BuildState | None,
+        fallback: Mapping[str, SensorState],
         fingerprints: Mapping[SensorId, str],
+        built_at: str,
     ) -> None:
         self._sensors = sensors
         self._index_source = indices
@@ -271,7 +287,11 @@ class _BuildRun:
         self._output = output
         self._inputs = inputs
         self._previous_states = dict(previous.sensors) if previous is not None else {}
+        self._fallback = fallback
         self._fingerprints = fingerprints
+        self._built_at = built_at
+        self._failed: set[SensorId] = set()
+        self._index_failed: set[SensorId] = set()
         self._fresh: dict[SensorId, BuiltSensor] = {}
         self._indices: dict[SensorId, dict[int, IndexEntries]] = {}
         self.failures: list[str] = []
@@ -294,11 +314,14 @@ class _BuildRun:
         """Quality-check and build the given sensors."""
         for sensor_id in sensor_ids:
             self.reused.discard(sensor_id)
+            self._failed.discard(sensor_id)
+            self._fresh.pop(sensor_id, None)
             try:
                 built = self._sensors.build(sensor_id, self._load(sensor_id))
             except BUILD_ERRORS as error:
                 logger.error("Site data of sensor %s failed: %s", sensor_id, error)
                 self.failures.append(f"site {sensor_id}: {self._error_text(error)}")
+                self._failed.add(sensor_id)
                 continue
             if built is not None:
                 self._fresh[sensor_id] = built
@@ -317,23 +340,36 @@ class _BuildRun:
         for season in seasons:
             batch = self._index_source.compute(season, checked)
             self.failures.extend(batch.failures)
+            self._index_failed.update(batch.failed_sensors)
             for sensor_id, results in batch.results.items():
                 entries = {index_id: index_entry(r) for index_id, r in sorted(results.items())}
                 self._indices.setdefault(sensor_id, {})[season] = entries
 
     def states(self) -> dict[str, SensorState]:
-        """The new state of every published sensor."""
+        """The new state of every published sensor.
+
+        A built sensor gets a fresh state (marked for a retry if one of its indices failed); a
+        failed sensor keeps its last published state, from any earlier build, marked as failed;
+        a reused sensor keeps its state.
+        """
         states: dict[str, SensorState] = {}
         for sensor_id in sorted(self._inputs.sensors):
+            key = str(sensor_id)
             built = self._fresh.get(sensor_id)
             if built is not None:
-                indices = self._indices.get(sensor_id, {})
-                fingerprint = self._fingerprints[sensor_id]
-                states[str(sensor_id)] = SensorState.of(
-                    fingerprint, built.files, built.summary, indices
+                states[key] = SensorState.of(
+                    self._fingerprints[sensor_id],
+                    built.files,
+                    built.summary,
+                    self._indices.get(sensor_id, {}),
+                    self._built_at,
+                    retry=sensor_id in self._index_failed,
                 )
-            elif str(sensor_id) in self._previous_states:
-                states[str(sensor_id)] = self._previous_states[str(sensor_id)]
+            elif sensor_id in self._failed:
+                if key in self._fallback:
+                    states[key] = self._fallback[key].as_failed()
+            elif key in self._previous_states:
+                states[key] = self._previous_states[key]
         return states
 
     def published(self) -> tuple[PublishedSensor, ...]:
@@ -344,6 +380,8 @@ class _BuildRun:
                 self._inputs.sensors[SensorId(sensor_id)],
                 state.summary,
                 state.indices,
+                state.failed,
+                state.built_at if state.failed else None,
             )
             for sensor_id, state in self.states().items()
         )
@@ -358,6 +396,6 @@ class _BuildRun:
 
     def _is_reusable(self, sensor_id: SensorId) -> bool:
         state = self._previous_states.get(str(sensor_id))
-        if state is None or state.inputs != self._fingerprints[sensor_id]:
+        if state is None or state.retry or state.inputs != self._fingerprints[sensor_id]:
             return False
         return all(self._output.has(path, sha) for path, sha in state.outputs.items())

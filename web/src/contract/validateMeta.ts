@@ -51,9 +51,14 @@ function readLabel(reader: FieldReader, value: unknown, path: string): Localized
 
 function readManifestSensor(reader: FieldReader, value: unknown, path: string, warn: ContractWarning): ManifestSensor {
   const sensor = reader.object(value, path);
-  const status = optionalField(sensor.status, (item) => reader.string(item, `${path}.status`), warn);
+  const optionalText = (name: string): Record<string, string> => {
+    const text = optionalField(sensor[name], (item) => reader.string(item, `${path}.${name}`), warn);
+    return text === undefined ? {} : { [name]: text };
+  };
   return {
-    ...(status === undefined ? {} : { status }),
+    ...optionalText('status'),
+    ...optionalText('data_status'),
+    ...optionalText('last_built_at'),
     first_t: reader.integer(sensor.first_t, `${path}.first_t`),
     last_t: reader.integer(sensor.last_t, `${path}.last_t`),
     raw_months: reader.list(sensor.raw_months, `${path}.raw_months`, (item, itemPath) => {
@@ -76,10 +81,12 @@ export function parseManifest(value: unknown, file = 'manifest.json', warn: Cont
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   reader.literal(root.schema_version, [SUPPORTED_SCHEMA_VERSION], '$.schema_version');
+  const staleAfterS = optionalField(root.stale_after_s, (item) => reader.number(item, '$.stale_after_s'), warn);
   return {
     schema_version: SUPPORTED_SCHEMA_VERSION,
     generated_at: reader.string(root.generated_at, '$.generated_at'),
     display_timezone: reader.string(root.display_timezone, '$.display_timezone'),
+    ...(staleAfterS === undefined ? {} : { stale_after_s: staleAfterS }),
     variables: reader.list(root.variables, '$.variables', (item, path) => {
       const variable = reader.object(item, path);
       return {
@@ -189,8 +196,12 @@ export function parseEventsFile(value: unknown, file: string, warn: ContractWarn
 function readIndexValue(reader: FieldReader, value: unknown, path: string, warn: ContractWarning): IndexValue {
   const result = reader.object(value, path);
   const estimated = optionalField(result.estimated, (item) => reader.boolean(item, `${path}.estimated`), warn);
+  const status = optionalField(result.status, (item) => reader.string(item, `${path}.status`), warn);
+  const detail = optionalField(result.detail, (item) => reader.string(item, `${path}.detail`), warn);
   return {
     ...(estimated === undefined ? {} : { estimated }),
+    ...(status === undefined ? {} : { status }),
+    ...(detail === undefined ? {} : { detail }),
     value: reader.nullableNumber(result.value, `${path}.value`),
     unit: reader.string(result.unit, `${path}.unit`),
     coverage: reader.number(result.coverage, `${path}.coverage`),
