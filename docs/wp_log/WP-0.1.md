@@ -17,6 +17,12 @@ daily aggregation, no silent duplicate UTC instants, stricter validation (`Daily
 imports via `sivin.core.defaults`, bounded dev tools and a `.gitignore` test. Details per
 finding are in the *Status* column of the review table.
 
+**Round 3** (converter only, review round 2): only the clock-jump rule yields resolved
+fall-back rows (spacing guesses are `unresolved`), the input order contract "source order,
+oldest first" is validated (`ValueError`), equal consecutive wall-clock values are duplicates
+rather than a jump, `from_records` rejects `NaT` before the duplicate reduction, and
+`IndexContext` rejects a `bool` mask and latitudes outside -90..90.
+
 ## Changed files
 
 - Tooling: `pyproject.toml`, `Makefile`, `.pre-commit-config.yaml`, `.gitignore`,
@@ -114,6 +120,20 @@ setup_logging(level="INFO")
 
 ## How it was verified
 
+Round 3 (same venv):
+
+- `make lint` → `All checks passed!`, `32 files already formatted`.
+- `make type` → `Success: no issues found in 20 source files`.
+- `make test` → `190 passed`.
+- `make cov` → `TOTAL 843 0 186 0 100%`, `Total coverage: 100.00%`.
+- Reviewer probe `r2/fb_min.py` (73 phases × every drop of ≤ 3 of 12 samples):
+  `patterns with silent wrong rows, by #dropped: {}` (was 8 / 482 for 2 / 3 drops).
+  `r2/fb_order.py`: input sorted by local time is converted with the repeated hour flagged
+  `unresolved`. Newest-first input raises `ValueError` ("oldest first").
+- New regression tests: the `01:58:20 / 02:29:35 / 03:00:00` case, newest-first input
+  raising, a duplicated row in the repeated hour, `NaT` rejected before duplicate handling in
+  `from_records`, `bool` mask and out-of-range latitude in `IndexContext`.
+
 Round 2 (all commands in `/home/user/wt/wp-0.1`, same venv; ruff 0.16.10, mypy 2.4.0):
 
 - `make lint` → `All checks passed!`, `32 files already formatted`.
@@ -182,16 +202,18 @@ Round 1, with a venv created by
    normalises to `ns` as required by plan §2.5.
 2. **Every ambiguous fall-back time is marked suspect**, also when its offset was resolved.
    Plan WP-1.2 says "ambiguous → `TIMESTAMP_SUSPECT`"; the brief only asked to mark the cases
-   where inference fails. Resolution rule (round 2; pandas' `ambiguous="infer"` is no longer
-   used): ambiguous rows are grouped per local date, so every transition is resolved on its own;
-   (a) exactly one backward jump of the wall clock in recorded order (`NaT` skipped, "not later
-   than the predecessor") is the switch point; (b) without a jump, the split that maximises the
-   smallest step between consecutive UTC instants (including the nearest unambiguous
-   neighbours) wins if it is strictly increasing and unique, because the sensors sample at an
-   almost constant interval; (c) otherwise (several jumps, ties, no neighbours) the group is
-   read as standard time and flagged in the new `ConversionResult.unresolved` mask, with a
-   warning. Rule (b) is a heuristic; it is what makes a missing sample in the repeated hour
-   resolvable.
+   where inference fails. Resolution rule (round 3; pandas' `ambiguous="infer"` is no longer
+   used): the input must be in source order, oldest first (validated: decreasing unambiguous
+   rows raise `ValueError`); ambiguous rows are grouped per local date, so every transition is
+   resolved on its own; (a) exactly one backward jump of the wall clock (`NaT` skipped, a
+   sample *strictly* earlier than its predecessor) is the switch point, and is the **only**
+   rule that marks rows resolved; (b) without a jump, the split that maximises the smallest
+   step between consecutive UTC instants (including the nearest unambiguous neighbours) is
+   used as a best guess if it is strictly increasing and unique, (c) otherwise standard time;
+   both (b) and (c) flag the group in `ConversionResult.unresolved` with a warning. Equal
+   consecutive wall-clock values are duplicates, not a jump: both copies get the same instant
+   and become `NaT` + `unresolved` by the collision rule. Callers drop `NaT` rows before
+   `from_records`, which rejects `NaT` before reducing duplicates.
 3. **Nonexistent spring-forward times** are read with the UTC offset in force before the
    transition (PEP 495 `fold=0`), i.e. shifted forward by the length of the gap
    (02:15 → 03:15 CEST = 01:15 UTC). pandas' `nonexistent="shift_forward"` would collapse all of
@@ -256,6 +278,9 @@ Round 1, with a venv created by
   `requirements.txt` exists; the remark becomes obsolete after the merge.
 - WP-1.4 / WP-4.1: the briefed `/data/` rule also matches `data/raw/...` on the `data` branch;
   that branch needs its own `.gitignore` or `git add -f`.
+- WP-1.2: parsers must pass rows to `LocalTimeConverter.to_utc` in source order, oldest
+  first (reverse a newest-first export, never sort by local time), and drop/report `NaT`
+  rows before `from_records`.
 - WP-1.2 / WP-1.4: store readers and parsers must build series through `from_records`
   (pandas 3 reads `datetime64[us]`), and resolve conflicting duplicate timestamps before it.
 - Proposal: QualityCheck (WP-1.5) and ExportParser (WP-1.2) registries will repeat the
@@ -274,8 +299,8 @@ Round 1, with a venv created by
 5. `qc` is one bit field per row (frozen contract §2.5), so an RH-only QC finding also
    excludes that row's temperature. Should the contract get per-variable flags before WP-1.5?
    (Raised by the reviewer.)
-6. Is the spacing heuristic for fall-back groups without a clock jump (decision 2b)
-   acceptable, or should such groups always be `unresolved`?
+6. (Answered in round 3: groups without a single clock jump are always `unresolved`; the
+   spacing heuristic only chooses the guessed value.)
 
 ## Review
 
@@ -432,12 +457,12 @@ thresholds).
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/core/timeutil.py:303-336` (rule 2 of `switch_point`) | **R2-1. The spacing heuristic resolves fall-back groups silently wrong, and contradicts the documented contract.** The class docstring (l. 59-61) and `ConversionResult.unresolved` say a group *without exactly one clock jump* is read as standard time and marked `unresolved`; the code instead applies rule 2 (max of the smallest step) and returns `unresolved=False`. Reproduced on 2026-10-25, 1825 s sampling: local `01:58:20, 02:29:35, 03:00:00` (two samples missing, i.e. a ~1 h gap) → `02:29:35` returned as `00:29:35 UTC` (summer) instead of `01:29:35 UTC`, `suspect=True, unresolved=False`, output monotonic, so no later check can see it (the scores differ by only 50 s: 31:15 vs 30:25 min). Second case: `02:01:40` (summer) and `02:32:55` (standard) with neighbours on both sides → both read as summer, one sample 1 h early. Exhaustive count (73 phases × all drops of ≤ 3 of 12 samples): 0/876 wrong with one drop, **8/4818** with two, **482/16056** with three; multi-year random loss 5 % / 20 % / 50 %: 1 / 20 / 54 silently wrong rows over 30 runs × 5 years. This is the same failure class as round 1 major (b), only needing a longer gap. A margin on the score does not fix it (0.5 × 1825 s margin still leaves 146/16056). Verified that the clock-jump rule alone (rule 1) is never wrong on chronological input (0 silent in all patterns). Impact is limited (one or two samples per transition, still `suspect`, local date unchanged so daily aggregates are unaffected), but it breaks sub-daily alignment and the meaning of `unresolved`. Fix: keep the rule-2 guess if wanted, but **mark those rows `unresolved`** (and log), and align the class and `ConversionResult` docstrings and `docs/architecture.md`; add the two examples above as tests. This also answers open question 6. | open |
-| major | `src/sivin/core/timeutil.py:54,104,309` | **R2-2. Input order is assumed but not checked; newest-first or locally sorted input is resolved silently wrong.** "Recorded order" is ambiguous for an export listed newest first (format not verified, Q1/Q2; the legacy `one_variable_plot.py:57` and `two_variable_plot.py:42` sort after reading, so ascending order is not guaranteed). Reproduced: complete 1825 s data across 2026-10-25 reversed (phase 1625 s) → one "backward jump" is found in the reversed sequence and the split is inverted: `02:29:35` → `00:29:35 UTC` (true `01:29:35`), `02:28:45` → `01:28:45` (true `00:28:45`), all `unresolved=False`. 20 of 365 phases wrong with complete data; with ≤ 2 dropped samples 1851/5767 patterns silently wrong for reversed input and 1395/5767 for input sorted by local wall-clock time (the natural thing a parser might do). Fix: document "chronological recorded order, oldest first; do not sort before conversion" and validate it: the non-`NaT`, non-ambiguous rows must be strictly increasing (wall clock or UTC); otherwise raise `ValueError` (or reverse a fully descending input explicitly). Add tests for reversed and sorted input. **API impact:** `to_utc` gains a documented `ValueError`; WP-1.2 parsers must pass rows oldest-first. | open |
-| minor | `src/sivin/core/timeutil.py:309` | **R2-3.** An exactly repeated wall-clock value (`<=`) counts as a clock jump. A duplicated export row inside the repeated hour (complete 1825 s data, row `02:31:15` twice) → two "jumps" → the whole group (5 rows) is read as standard time and `unresolved`, and both copies of the duplicate become `NaT` (the sample is lost although its first copy was unambiguous). Combined with a missing pass it can resolve silently wrong (only "jump" is the duplicate). Suggest: treat equal consecutive wall-clock values as a duplicate, not a jump (`<`), and leave duplicates to the collision check / `InputValidator`; add a test. | open |
-| minor | `src/sivin/core/schema.py:167` + `timeutil.py` `ConversionResult` | **R2-4.** `to_utc` now returns `NaT` rows, and `from_records` rejects `NaT` with `SchemaError` — correct — but first logs `dropped 1 row(s) with a duplicate timestamp` because several `NaT` count as duplicates of each other. Nothing in `ConversionResult` tells the caller to drop the `NaT` rows before building the series. Suggest: check for `NaT` before the duplicate reduction in `from_records`, and state in `ConversionResult.timestamps_utc` that callers drop (and report) `NaT` rows; mention it in the WP-1.2 brief. | open |
-| nit | `src/sivin/analytics/base.py:84,89` | **R2-5.** `IndexContext` accepts `exclude_mask=True` (bool, unlike `AnalyticsConfig` which is `StrictInt`) and any `latitude_deg` (e.g. `200.0`); Huglin's latitude coefficient will rely on it. Suggest `-90 <= latitude_deg <= 90` and rejecting `bool`. | open |
-| nit | `src/sivin/config.py:17-22` | **R2-6.** `DEFAULT_TIMEZONE` and `LEGACY_SAMPLING_INTERVAL_S` moved to `sivin.core.defaults`; `from sivin.config import DEFAULT_TIMEZONE` still runs but fails mypy strict (`does not explicitly export attribute`). All parallel worktrees branch from `bcde7d9`, so nobody depends on the old location; noting it only so the hand-off API (which lists `sivin.core.defaults`) stays the single source. | open |
+| major | `src/sivin/core/timeutil.py:303-336` (rule 2 of `switch_point`) | **R2-1. The spacing heuristic resolves fall-back groups silently wrong, and contradicts the documented contract.** The class docstring (l. 59-61) and `ConversionResult.unresolved` say a group *without exactly one clock jump* is read as standard time and marked `unresolved`; the code instead applies rule 2 (max of the smallest step) and returns `unresolved=False`. Reproduced on 2026-10-25, 1825 s sampling: local `01:58:20, 02:29:35, 03:00:00` (two samples missing, i.e. a ~1 h gap) → `02:29:35` returned as `00:29:35 UTC` (summer) instead of `01:29:35 UTC`, `suspect=True, unresolved=False`, output monotonic, so no later check can see it (the scores differ by only 50 s: 31:15 vs 30:25 min). Second case: `02:01:40` (summer) and `02:32:55` (standard) with neighbours on both sides → both read as summer, one sample 1 h early. Exhaustive count (73 phases × all drops of ≤ 3 of 12 samples): 0/876 wrong with one drop, **8/4818** with two, **482/16056** with three; multi-year random loss 5 % / 20 % / 50 %: 1 / 20 / 54 silently wrong rows over 30 runs × 5 years. This is the same failure class as round 1 major (b), only needing a longer gap. A margin on the score does not fix it (0.5 × 1825 s margin still leaves 146/16056). Verified that the clock-jump rule alone (rule 1) is never wrong on chronological input (0 silent in all patterns). Impact is limited (one or two samples per transition, still `suspect`, local date unchanged so daily aggregates are unaffected), but it breaks sub-daily alignment and the meaning of `unresolved`. Fix: keep the rule-2 guess if wanted, but **mark those rows `unresolved`** (and log), and align the class and `ConversionResult` docstrings and `docs/architecture.md`; add the two examples above as tests. This also answers open question 6. | fixed: only the clock-jump rule resolves; spacing and fallback guesses are `unresolved`; docstrings and architecture aligned; both examples covered (`r2/fb_min.py`: 0 silent wrong) |
+| major | `src/sivin/core/timeutil.py:54,104,309` | **R2-2. Input order is assumed but not checked; newest-first or locally sorted input is resolved silently wrong.** "Recorded order" is ambiguous for an export listed newest first (format not verified, Q1/Q2; the legacy `one_variable_plot.py:57` and `two_variable_plot.py:42` sort after reading, so ascending order is not guaranteed). Reproduced: complete 1825 s data across 2026-10-25 reversed (phase 1625 s) → one "backward jump" is found in the reversed sequence and the split is inverted: `02:29:35` → `00:29:35 UTC` (true `01:29:35`), `02:28:45` → `01:28:45` (true `00:28:45`), all `unresolved=False`. 20 of 365 phases wrong with complete data; with ≤ 2 dropped samples 1851/5767 patterns silently wrong for reversed input and 1395/5767 for input sorted by local wall-clock time (the natural thing a parser might do). Fix: document "chronological recorded order, oldest first; do not sort before conversion" and validate it: the non-`NaT`, non-ambiguous rows must be strictly increasing (wall clock or UTC); otherwise raise `ValueError` (or reverse a fully descending input explicitly). Add tests for reversed and sorted input. **API impact:** `to_utc` gains a documented `ValueError`; WP-1.2 parsers must pass rows oldest-first. | fixed: contract "source order, oldest first" documented (class docstring, architecture.md) and validated with `ValueError`; tests for newest-first input |
+| minor | `src/sivin/core/timeutil.py:309` | **R2-3.** An exactly repeated wall-clock value (`<=`) counts as a clock jump. A duplicated export row inside the repeated hour (complete 1825 s data, row `02:31:15` twice) → two "jumps" → the whole group (5 rows) is read as standard time and `unresolved`, and both copies of the duplicate become `NaT` (the sample is lost although its first copy was unambiguous). Combined with a missing pass it can resolve silently wrong (only "jump" is the duplicate). Suggest: treat equal consecutive wall-clock values as a duplicate, not a jump (`<`), and leave duplicates to the collision check / `InputValidator`; add a test. | fixed: strict `<`; equal consecutive values are duplicates (same instant, then `NaT` + `unresolved` by the collision rule), documented; test added |
+| minor | `src/sivin/core/schema.py:167` + `timeutil.py` `ConversionResult` | **R2-4.** `to_utc` now returns `NaT` rows, and `from_records` rejects `NaT` with `SchemaError` — correct — but first logs `dropped 1 row(s) with a duplicate timestamp` because several `NaT` count as duplicates of each other. Nothing in `ConversionResult` tells the caller to drop the `NaT` rows before building the series. Suggest: check for `NaT` before the duplicate reduction in `from_records`, and state in `ConversionResult.timestamps_utc` that callers drop (and report) `NaT` rows; mention it in the WP-1.2 brief. | fixed: `from_records` rejects `NaT` before duplicate handling; `to_utc`, `ConversionResult` and `from_records` docstrings tell callers to drop `NaT`/handle `unresolved`; test added |
+| nit | `src/sivin/analytics/base.py:84,89` | **R2-5.** `IndexContext` accepts `exclude_mask=True` (bool, unlike `AnalyticsConfig` which is `StrictInt`) and any `latitude_deg` (e.g. `200.0`); Huglin's latitude coefficient will rely on it. Suggest `-90 <= latitude_deg <= 90` and rejecting `bool`. | fixed: `bool` mask and latitude outside -90..90 rejected; tests added |
+| nit | `src/sivin/config.py:17-22` | **R2-6.** `DEFAULT_TIMEZONE` and `LEGACY_SAMPLING_INTERVAL_S` moved to `sivin.core.defaults`; `from sivin.config import DEFAULT_TIMEZONE` still runs but fails mypy strict (`does not explicitly export attribute`). All parallel worktrees branch from `bcde7d9`, so nobody depends on the old location; noting it only so the hand-off API (which lists `sivin.core.defaults`) stays the single source. | accepted: no compatibility shim; nobody depends on the old location, `sivin.core.defaults` is the single source |
 
 #### Round 2 design changes (part c)
 
