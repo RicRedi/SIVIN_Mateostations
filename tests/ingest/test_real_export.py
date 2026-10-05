@@ -121,12 +121,69 @@ def test_newest_first_rows_are_reversed() -> None:
     assert inspection.source_rows is not None
     # Oldest data line is file line 302, newest is line 3 (title and header are lines 1-2).
     assert (inspection.source_rows[0], inspection.source_rows[-1]) == (302, 3)
-    # The extra columns (precipitation, cumulative precipitation, battery) are ignored.
+    # All six columns are mapped (precipitation, counter and battery since WP-1.9).
     assert inspection.missing_columns == ()
     assert inspection.column_problems == ()
+    assert inspection.optional_column_problems == ()
     assert inspection.temp is not None
     assert inspection.rh is not None
     assert (inspection.temp.header, inspection.rh.header) == ("Teplota (°C)", "Vlhkost (%)")
+    headers = [column.header for column in inspection.auxiliary_columns]
+    assert headers == ["Srážky (mm)", "Celkové srážky (mm)", "Nabití baterie (V)"]
+
+
+@pytest.mark.parametrize(
+    ("raw_line", "utc", "values"),
+    [
+        # Newest line of the file (CET, UTC+1).
+        (
+            "2026-03-01 22:27:05;23,79;31,1;0,0;326,4;3,60",
+            "2026-03-01 21:27:05",
+            (23.79, 31.1, 0.0, 326.4, 3.6),
+        ),
+        (
+            "2025-12-19 17:41:22;21,99;32,8;0,9;324,9;3,60",
+            "2025-12-19 16:41:22",
+            (21.99, 32.8, 0.9, 324.9, 3.6),
+        ),
+        (
+            "2025-12-18 14:13:58;3,19;84,4;0,3;323,6;3,50",
+            "2025-12-18 13:13:58",
+            (3.19, 84.4, 0.3, 323.6, 3.5),
+        ),
+        # CEST, UTC+2.
+        (
+            "2025-07-31 13:21:23;26,61;42,5;0,0;323,0;3,70",
+            "2025-07-31 11:21:23",
+            (26.61, 42.5, 0.0, 323.0, 3.7),
+        ),
+        # Oldest line of the file.
+        (
+            "2025-07-30 10:22:29;28,66;41,8;0,0;323,0;3,00",
+            "2025-07-30 08:22:29",
+            (28.66, 41.8, 0.0, 323.0, 3.0),
+        ),
+    ],
+)
+def test_all_six_columns_are_read(
+    frame: pd.DataFrame, raw_line: str, utc: str, values: tuple[float, ...]
+) -> None:
+    assert raw_line in REAL_PATH.read_bytes().decode("utf-8").split("\r\n")
+    row = frame.loc[frame["timestamp_utc"] == pd.Timestamp(utc, tz="UTC")]
+    assert len(row) == 1
+    columns = ["temp_c", "rh_pct", "precip_mm", "precip_total_mm", "battery_v"]
+    assert tuple(row[columns].iloc[0].tolist()) == values
+    assert row["qc"].iloc[0] == int(QcFlag.OK)
+
+
+def test_auxiliary_ranges_of_the_excerpt(frame: pd.DataFrame) -> None:
+    # Read by hand from the 300 data lines: precipitation 0.0 or 0.3/0.9 mm, the counter rises
+    # from 323.0 mm (oldest line) to 326.4 mm (newest line), the battery reads 3.0 to 3.7 V.
+    assert not frame[["precip_mm", "precip_total_mm", "battery_v"]].isna().to_numpy().any()
+    assert sorted(frame["precip_mm"].unique().tolist()) == [0.0, 0.3, 0.9]
+    assert (frame["precip_total_mm"].min(), frame["precip_total_mm"].max()) == (323.0, 326.4)
+    assert frame["precip_total_mm"].is_monotonic_increasing
+    assert (frame["battery_v"].min(), frame["battery_v"].max()) == (3.0, 3.7)
 
 
 def test_same_content_under_the_spaced_name_gives_the_same_series(

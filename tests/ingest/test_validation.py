@@ -39,6 +39,7 @@ EXPECTED_RULES = (
     "required-columns",
     "data-rows",
     "short-rows",
+    "optional-columns",
     "numbers-parseable",
     "timestamps-parseable",
     "values-present",
@@ -51,6 +52,9 @@ EXPECTED_RULES = (
     "daylight-saving",
     "temperature-bounds",
     "humidity-bounds",
+    "precipitation-bounds",
+    "precipitation-total-bounds",
+    "battery-bounds",
     "humidity-fraction",
 )
 
