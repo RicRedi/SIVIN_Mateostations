@@ -231,3 +231,51 @@ Acceptance criteria of MIGRATION_PLAN §4 WP-1.6 (three drifting sensors with ha
 expectations for both strategies, gap longer than the limit stays empty, N sensors without code
 change, QC-excluded values not paired) are met and tested; the changes requested concern the
 usefulness of the default tolerance and the memory of `pairwise_differences`.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Re-review of commit `5e2e5ce`. Probes re-run from `/tmp/claude-0/review-1.6/` (not committed).
+
+Gates observed: `make lint` passed (43 files formatted); `make type` mypy strict, no issues in
+26 source files; `make test` 288 passed; `make cov` 288 passed, every `src/sivin/alignment/*.py`
+module 100 % statements and branches (546 statements, 86 branches). Scope against `bcde7d9`
+unchanged (alignment package, its tests, `docs/alignment.md`, this note).
+
+Measurements (same synthetic year as round 1: 30 sensors, 1825 s ± 0.5 s, random phases,
+whole-second timestamps, 1800 s grid, interior rows):
+
+| Setting | coverage per sensor | `complete_rows` share | max offset |
+|---|---|---|---|
+| nearest, defaults (τ = 932.5 s), union | 1.0000 | 1.0000 | 916 s |
+| nearest, defaults, overlap | 1.0000 | 1.0000 | 913 s |
+| nearest, `tolerance_s = 900` (old behaviour) | 0.9868 | 0.6741 | 900 s |
+| linear, defaults | 1.0000 | 1.0000 | — |
+
+`AlignmentConfig()` → `SensorAligner.from_config` gives τ = 932.5 s.
+
+`pairwise_differences("temp_c")` (tracemalloc peak while building; columns
+`datetime64[ns, UTC]`, `category`, `category`, `float64`):
+
+| Sensors | pairs | rows | result | peak | time |
+|---|---|---|---|---|---|
+| 30 | all 435 | 7.62 M | 137 MB (round 1: 965 MB) | 412 MB | 1.4 s |
+| 30 | 84 neighbour pairs (`pairs=`) | 1.47 M | 26 MB | 80 MB | 0.03 s |
+| 100 | all 4950 | 86.7 M | 1.56 GB (round 1: 11 GB) | 4.7 GB | 21.6 s |
+| 100 | 294 neighbour pairs (`pairs=`) | 5.15 M | 93 MB | 278 MB | 0.12 s |
+
+| Severity | File:line | Finding (round 1 → round 2) | Status |
+|---|---|---|---|
+| major | strategies.py (NearestParams, `tolerance_s`) | Default tolerance Δ/2 left periodic empty grid points. Now τ = `expected_interval_s`/2 + `margin_s` = 932.5 s, override kept, margin marked [to be tuned], docs state sample reuse; measured full coverage and complete rows. | closed |
+| major | panel.py `pairwise_differences` | Memory of all-pairs output. Categorical labels cut the result 7×; `pairs=` filter makes neighbour QC cheap (26 MB / 93 MB). All pairs of 100 sensors still peak at 4.7 GB, which is inherent in N(N−1)/2 and documented with the advice to pass `pairs`. | closed |
+| minor | registry.py:18 | Duplicate registry; accepted by orchestrator, generic core registry planned later. | accepted |
+| minor | strategies.py `SampleSet.from_series`, grid.py `usable_span` | Grid `DatetimeIndex` now built once; `times_ns` still converts on each call (cheap) and `series.frame` copies remain (contract has no column accessor; noted under Out of scope). | accepted |
+| nit | grid.py `validate_step_s` | Step < 1 s or not whole ns now rejected with a clear error; tested. | closed |
+| nit | config.py `params` | Read-only `Mapping[str, Any]`, validated by the strategy model, serialised as dict. | closed |
+| nit | strategies.py `__init_subclass__` | `params_model` checked against the generic argument; tested. | closed |
+| nit (new) | strategies.py `NearestWithinTolerance.tolerance_s`, docs/alignment.md:60 | The default tolerance no longer scales with the grid step, so on a finer grid (e.g. 600 s) one sample fills about three consecutive grid points (measured max offset 912 s, validity 100 %). Documented as "derived from the sampling, not from the grid"; a sentence advising `linear_interpolation` or an explicit `tolerance_s` for grids finer than the sampling would help. Not blocking. | open |
+| nit (new) | panel.py `pairwise_differences` | All-pairs peak is ~3× the result because per-pair arrays are collected then concatenated; preallocating from the per-pair counts would cut the peak. Not blocking given the `pairs=` filter. | open |
+
+Open question 4 of the hand-off note (pass the global `time.expected_interval_s` into
+`NearestParams` in WP-1.7 so the two cannot diverge) is endorsed.
