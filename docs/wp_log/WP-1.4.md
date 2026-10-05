@@ -266,3 +266,56 @@ write" is then acceptable. The owner should assign this to WP-1.5 or WP-1.7.
   the old file stays consistent.
 
 Approve after the blocker is fixed. The minors can be fixed in the same round.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Gates observed at `9711415`: `make lint` → `All checks passed!`, `51 files already formatted`;
+`make type` → `Success: no issues found in 30 source files`; `make test` → `295 passed`;
+`make cov` → every `src/sivin/storage/*.py` at 100 % (statements and branches),
+`TOTAL 1476 0 282 0 100%`. Scope is unchanged: only `src/sivin/storage/**`,
+`tests/storage/**`, `docs/storage.md` and this note.
+
+I re-probed with throwaway scripts in `/tmp/claude-0/review-1.4/` (`r2.py`, `r3.py`):
+
+- **Missing vs present, both directions, all three policies.** Seven cases of stored and
+  incoming rows (12.3/80 + NaN/80, 12.3/80 + NaN/NaN, NaN/70 + 11/NaN, NaN/NaN + 11/70,
+  12.3/NaN + 12.5/70, 12.3/80 + 12.5/NaN, 12.3/80 + NaN/81) under `prefer_newest`,
+  `prefer_existing` and `raise`.
+  - A present value is never replaced by NaN.
+  - Gaps are filled under every policy.
+  - Only two present, different values reach the policy.
+  - `raise` raises only on a real conflict, and then nothing is written. This also holds when
+    the same append fills a value in another partition.
+- **Conflict and fill in the same row.** 12.3/NaN + 12.5/70 gives 12.5/70 under
+  `prefer_newest` and 12.3/70 under `prefer_existing`, and the counts are correct.
+- **Re-import after a fill.** Re-importing either export changes nothing; the bytes are
+  identical.
+- **Crash between partitions, with fills.** The retry completes the append and the bytes
+  equal a clean append.
+- **Random fuzz.** 200 trials per policy, 4 overlapping imports each across a year boundary,
+  40 % NaN: no value that was ever present was lost (0/200 for `prefer_newest` and for
+  `prefer_existing`).
+- **QC warning.** `MANUAL_EXCLUDE` set on a series now gives a WARNING with the count per flag.
+- **Run-log repair.** A run log cut off mid-line is repaired on the next append, and `read`
+  skips the broken line with a warning.
+
+**Source attribution after a fill.** A row gets the incoming `source` as soon as any one of its
+values comes from the import. A row can therefore mix values from two exports and name only the
+last one. Example under `prefer_existing`: stored 12.3/NaN from `A`, plus 12.5/70 from `B`,
+gives 12.3/70 with `source=B`, although `B` measured 12.5. This loses provenance, not data. The
+rule is documented in `docs/storage.md:97-98` and the replaced values are in the
+`ConflictDecision` records, so it is acceptable as a nit.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| blocker | merge.py (round 1) | A missing value overwrote a real one. | verified fixed |
+| minor | conflicts.py `PreferNewest` | "Newest" means import order; documented, back-fills use `prefer_existing`, tested. | verified fixed (export-time policy left as a proposal) |
+| minor | store.py QC drop | WARNING with the count per flag; docs corrected. | verified fixed |
+| minor | tests, crash between partitions | Test added; retry counts documented. | verified fixed |
+| minor | conflicts not persisted | `ConflictDecision` in `AppendResult` and `RunRecord`, capped per append. | verified fixed |
+| nit | registry name given twice | The name now comes only from the `name` class variable. | verified fixed |
+| nit | registry.py location | Proposal to move it to core, under Out of scope. | accepted |
+| nit | runlog.py partial line | Repaired on append; bad lines skipped on read. | verified fixed |
+| nit | docs/storage.md:46 | New: the `source` column is described as "the export file the row came from", but after a fill or replace it is "the last export that contributed a value to the row" (see above). Reword the table cell. | open |
