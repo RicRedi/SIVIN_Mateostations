@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -20,13 +19,16 @@ LEGACY_SHEETS = {"8271": "77678271", "0921": "77680921"}
 
 
 def load_fixture_module() -> ModuleType:
-    """Import ``tests/fixtures/exports/make_fixtures.py`` (it is not a package)."""
-    spec = importlib.util.spec_from_file_location("make_fixtures", EXPORTS / "make_fixtures.py")
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # dataclasses look their module up there
-    spec.loader.exec_module(module)
+    """Import ``tests/fixtures/exports/make_fixtures.py`` (it is not a package).
+
+    The source is executed directly, so no ``__pycache__`` is written into the fixture
+    directory (``.gitignore`` re-includes everything below ``tests/fixtures/``).
+    """
+    path = EXPORTS / "make_fixtures.py"
+    module = ModuleType("make_fixtures")
+    module.__file__ = str(path)
+    sys.modules[module.__name__] = module  # dataclasses look their module up there
+    exec(compile(path.read_text(encoding="utf-8"), path, "exec"), module.__dict__)
     return module
 
 
