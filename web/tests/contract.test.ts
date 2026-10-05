@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   ContractError,
+  eventInWindow,
+  isOffSiteEvent,
   parseDailyFile,
   parseEventsFile,
   parseIndicesFile,
@@ -9,7 +11,7 @@ import {
   parseRawMonthFile,
   parseSensorsGeoJSON,
 } from '../src/contract';
-import { fixtureJson } from './helpers';
+import { OFF_SITE_DETAIL, OFF_SITE_END, OFF_SITE_START, fixtureJson } from './helpers';
 
 const SENSOR = '77678271';
 
@@ -36,9 +38,61 @@ describe('the committed synthetic fixture', () => {
     }
   });
 
-  it('contains the deployment event of the office sensor', () => {
+  it('contains the off-site period of the service sensor', () => {
     const events = parseEventsFile(fixtureJson('events/77799986.json'), 'events.json');
-    expect(events.events.map((event) => event.type)).toEqual(['deployment']);
+    expect(events.events).toEqual([
+      { type: 'off_site', t: OFF_SITE_START, t_end: OFF_SITE_END, source: 'log', confidence: null, detail: OFF_SITE_DETAIL },
+    ]);
+  });
+});
+
+describe('off_site events (MIGRATION_PLAN §2.8)', () => {
+  const parse = (event: Record<string, unknown>) => parseEventsFile({ sensor_id: SENSOR, events: [event] }, 'e.json').events[0];
+
+  it('accepts a closed and an open period', () => {
+    const closed = parse({ type: 'off_site', t: 100, t_end: 200, source: 'log', detail: 'office: winter' });
+    expect(closed).toEqual({ type: 'off_site', t: 100, t_end: 200, source: 'log', confidence: null, detail: 'office: winter' });
+    const open = parse({ type: 'off_site', t: 100, t_end: null, source: 'log' });
+    expect(open).toEqual({ type: 'off_site', t: 100, t_end: null, source: 'log', confidence: null, detail: null });
+    expect(open !== undefined && isOffSiteEvent(open)).toBe(true);
+  });
+
+  it('requires t_end for off_site and checks it', () => {
+    expect(() => parse({ type: 'off_site', t: 100, source: 'log' })).toThrow(
+      'e.json: $.events[0].t_end is required for "off_site" (a number, or null while still off site)',
+    );
+    expect(() => parse({ type: 'off_site', t: 100, t_end: 100, source: 'log' })).toThrow(
+      '$.events[0].t_end must be greater than t (100), got 100',
+    );
+    expect(() => parse({ type: 'off_site', t: 100, t_end: 150.5, source: 'log' })).toThrow(
+      '$.events[0].t_end must be an integer, got 150.5',
+    );
+    expect(() => parse({ type: 'off_site', t: 100, t_end: '200', source: 'log' })).toThrow('$.events[0].t_end must be a finite number');
+  });
+
+  it('rejects t_end on point events', () => {
+    expect(() => parse({ type: 'deployment', t: 100, t_end: 200, source: 'detected' })).toThrow(
+      '$.events[0].t_end is only allowed for "off_site" events, not "deployment"',
+    );
+    expect(() => parse({ type: 'step', t: 100, t_end: null, source: 'detected' })).toThrow('$.events[0].t_end is only allowed');
+  });
+
+  it('tells whether an event belongs to a window', () => {
+    const point = parse({ type: 'step', t: 100, source: 'detected' });
+    const closed = parse({ type: 'off_site', t: 100, t_end: 200, source: 'log' });
+    const open = parse({ type: 'off_site', t: 100, t_end: null, source: 'log' });
+    if (point === undefined || closed === undefined || open === undefined) {
+      throw new Error('events missing');
+    }
+    expect([eventInWindow(point, 100, 101), eventInWindow(point, 50, 100), eventInWindow(point, 101, 200)]).toEqual([true, false, false]);
+    expect([eventInWindow(closed, 0, 101), eventInWindow(closed, 199, 300), eventInWindow(closed, 200, 300), eventInWindow(closed, 0, 100)]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(eventInWindow(open, 10_000, 20_000)).toBe(true);
+    expect(isOffSiteEvent(point)).toBe(false);
   });
 });
 

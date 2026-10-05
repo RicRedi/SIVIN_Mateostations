@@ -1,4 +1,4 @@
-import type { SensorEvent } from '../contract';
+import { eventInWindow, type SensorEvent } from '../contract';
 import type { DataClient } from '../data/DataClient';
 import { dailyColumnSeries } from '../domain/dailyColumnSeries';
 import type { RawVariable } from '../domain/RawSeries';
@@ -16,7 +16,7 @@ export interface SensorChartData {
   readonly sensorId: string;
   readonly temp_c: TimeSeries;
   readonly rh_pct: TimeSeries;
-  /** Events with `t` inside the window. */
+  /** Events inside the window; `off_site` periods that overlap it. */
   readonly events: readonly SensorEvent[];
 }
 
@@ -86,7 +86,7 @@ export class ChartDataLoader {
   private async loadEvents(sensorId: string, window: TimeWindow): Promise<readonly SensorEvent[]> {
     try {
       const file = await this.client.getEvents(sensorId);
-      return file.events.filter((event) => window.contains(event.t));
+      return file.events.filter((event) => eventInWindow(event, window.startT, window.endT));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.warnings.warn(`Events of sensor ${sensorId} ignored: ${message}`);

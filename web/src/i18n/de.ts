@@ -39,6 +39,8 @@ export const de: Dictionary = {
   eventDeployment: 'Aufstellung im Weinberg',
   eventRetrieval: 'Abholung aus dem Weinberg',
   eventStep: 'Niveausprung',
+  eventOffSite: 'Nicht im Weinberg',
+  eventOngoing: 'bis heute',
   eventConfidence: 'Konfidenz {pct} %',
   legendTitle: 'Letzte Temperatur',
   legendStale: 'veraltet / kein Wert',

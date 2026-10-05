@@ -36,6 +36,8 @@ export const cs = {
   eventDeployment: 'Nasazení ve vinici',
   eventRetrieval: 'Odvoz z vinice',
   eventStep: 'Skok úrovně',
+  eventOffSite: 'Mimo vinici',
+  eventOngoing: 'dosud',
   eventConfidence: 'jistota {pct} %',
   legendTitle: 'Poslední teplota',
   legendStale: 'neaktuální / bez hodnoty',

@@ -13,8 +13,9 @@
  *   rh_pct = daily base (anti-correlated with the anomaly) − 3 %/°C × (temp − daily mean) + noise,
  *            clipped to 25–100 %
  * Plus: a few nulls (qc MISSING), spikes (qc SPIKE), a stuck run (qc STUCK), a 7-hour gap,
- * one sensor indoors (office, ≈22 °C) for its first two days (qc PRE_DEPLOYMENT) followed by a
- * `deployment` event, and one sensor that stops reporting early (`stale` in latest.json).
+ * one sensor taken to the office for service for about a day and a half (an `off_site` event
+ * from the off-site log, MIGRATION_PLAN.md §2.8; indoor values ≈22 °C flagged PRE_DEPLOYMENT),
+ * and one sensor that stops reporting early (`stale` in latest.json).
  *
  * Usage: `npm run fixture` (from `web/`).
  */
@@ -46,7 +47,9 @@ const SENSORS = [
 const PORTAL_PREFIX = '8615620';
 
 const OFFICE_SENSOR = '77799986';
-const DEPLOYMENT_T = Date.UTC(2026, 5, 3, 8, 0) / 1000;
+/** Synthetic off-site period of OFFICE_SENSOR, [start, end) in Unix seconds (UTC). */
+const OFF_SITE = [Date.UTC(2026, 5, 4, 6, 0) / 1000, Date.UTC(2026, 5, 5, 14, 0) / 1000];
+const OFF_SITE_DETAIL = 'service: synthetic example, battery replacement in the office';
 const OFFICE_TEMP_C = 22;
 const OFFICE_AMPLITUDE_C = 0.6;
 const OFFICE_RH_PCT = 42;
@@ -181,7 +184,7 @@ function sensorSamples(sensor, weather) {
     if (isInGap(sensor, t)) {
       continue;
     }
-    const indoors = sensor.id === OFFICE_SENSOR && t < DEPLOYMENT_T;
+    const indoors = sensor.id === OFFICE_SENSOR && t >= OFF_SITE[0] && t < OFF_SITE[1];
     const { tempC, rhPct } = indoors ? officeSample(t) : outdoorSample(sensor, t, weather);
     const row = { t, temp_c: round1(tempC), rh_pct: round1(rhPct), qc: indoors ? QC.PRE_DEPLOYMENT : 0 };
     if (random() < NULL_PROBABILITY) {
@@ -329,7 +332,7 @@ function placeholderIndices(daily) {
 }
 
 function registryFeature(sensor) {
-  const from = sensor.id === OFFICE_SENSOR ? new Date(DEPLOYMENT_T * 1000) : new Date(START_T * 1000);
+  const from = new Date(START_T * 1000);
   return {
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [sensor.lon, sensor.lat] },
@@ -358,8 +361,7 @@ function registryFeature(sensor) {
 function eventsFile(sensorId, rows) {
   const events = [];
   if (sensorId === OFFICE_SENSOR) {
-    const first = rows.find((row) => row.t >= DEPLOYMENT_T);
-    events.push({ type: 'deployment', t: first.t, source: 'detected', confidence: 0.93, detail: 'synthetic example: office ≈22 °C → vineyard' });
+    events.push({ type: 'off_site', t: OFF_SITE[0], t_end: OFF_SITE[1], source: 'log', detail: OFF_SITE_DETAIL });
   }
   if (sensorId === GAP_SENSOR) {
     const row = rows.find((candidate) => candidate.t >= STEP_EVENT_T);

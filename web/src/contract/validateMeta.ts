@@ -1,5 +1,6 @@
 import { FieldReader } from './FieldReader';
 import {
+  OFF_SITE_EVENT_TYPE,
   SENSOR_EVENT_TYPES,
   SUPPORTED_SCHEMA_VERSION,
   type EventsFile,
@@ -9,6 +10,7 @@ import {
   type LocalizedLabel,
   type Manifest,
   type ManifestSensor,
+  type SensorEvent,
 } from './types';
 
 const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -88,22 +90,39 @@ export function parseLatestFile(value: unknown, file = 'latest.json'): LatestFil
   };
 }
 
+function readEvent(reader: FieldReader, value: unknown, path: string): SensorEvent {
+  const event = reader.object(value, path);
+  const type = reader.literal(event.type, SENSOR_EVENT_TYPES, `${path}.type`);
+  const t = reader.integer(event.t, `${path}.t`);
+  const common = {
+    t,
+    source: reader.string(event.source, `${path}.source`),
+    confidence: reader.nullableNumber(event.confidence ?? null, `${path}.confidence`),
+    detail: reader.nullableString(event.detail ?? null, `${path}.detail`),
+  };
+  if (type !== OFF_SITE_EVENT_TYPE) {
+    if ('t_end' in event) {
+      reader.fail(`${path}.t_end`, `is only allowed for "${OFF_SITE_EVENT_TYPE}" events, not "${type}"`);
+    }
+    return { type, ...common };
+  }
+  if (!('t_end' in event)) {
+    reader.fail(`${path}.t_end`, `is required for "${OFF_SITE_EVENT_TYPE}" (a number, or null while still off site)`);
+  }
+  const tEnd = event.t_end === null ? null : reader.integer(event.t_end, `${path}.t_end`);
+  if (tEnd !== null && tEnd <= t) {
+    reader.fail(`${path}.t_end`, `must be greater than t (${t}), got ${tEnd}`);
+  }
+  return { type, ...common, t_end: tEnd };
+}
+
 /** Validate `events/<sensor_id>.json`. @throws ContractError on mismatch. */
 export function parseEventsFile(value: unknown, file: string): EventsFile {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   return {
     sensor_id: reader.string(root.sensor_id, '$.sensor_id'),
-    events: reader.list(root.events, '$.events', (item, path) => {
-      const event = reader.object(item, path);
-      return {
-        type: reader.literal(event.type, SENSOR_EVENT_TYPES, `${path}.type`),
-        t: reader.integer(event.t, `${path}.t`),
-        source: reader.string(event.source, `${path}.source`),
-        confidence: reader.nullableNumber(event.confidence ?? null, `${path}.confidence`),
-        detail: reader.nullableString(event.detail ?? null, `${path}.detail`),
-      };
-    }),
+    events: reader.list(root.events, '$.events', (item, path) => readEvent(reader, item, path)),
   };
 }
 
