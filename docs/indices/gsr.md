@@ -25,12 +25,24 @@ $$
 
 - April 1 – October 31 (the end is a project default); April 1 is used in every year.
 - Only complete days are accumulated; incomplete days delay the prediction.
-- `value` = day of year of the **last** configured target; per-target `<label>_date`,
+- `value` = day of year of the **last** configured target (local date in `details["date"]`);
+  per-target `<label>_date`,
   `<label>_doy`, `<label>_f_star_c_d` and `thermal_sum_c_d` in `details`.
 - `coverage`/`complete` refer to the days from April 1 to the last target, or the whole period
   if it is not reached.
 - **Without targets** (the default) the result is `value = None` with
   `details["status"] = "not configured"`.
+- **Missing days delay the date.** An incomplete day contributes nothing (no gap filling), so
+  the sum lags behind and the predicted date is late. `details["n_missing_days"]` = incomplete
+  days from the period start to the predicted stage (or to the period end); `complete` follows
+  the plan's coverage rule and does not mean unbiased.
+- **Accumulation start not covered.** If more than `max_missing_days_at_start` (default 0)
+  days are missing before the first complete day of the period (e.g. a sensor deployed after
+  the start), the result is `value = None` with `details["status"] = "accumulation start not
+  covered"` and `details["n_missing_days_at_start"]`.
+- **DOY and leap years.** `value` is the day of year of the local date, which is also given as
+  `details["date"]` (ISO). In leap years every date after February has a DOY one higher than
+  in common years, so compare dates, not DOY values, across years.
 
 ## Parameters
 
@@ -39,6 +51,7 @@ $$
 | `base_temp_c` | 0.0 | °C | Parker et al. (2020) |
 | `period` | April 1 – October 31 | local month-day | start: Parker et al. (2020); end: project default |
 | `targets` | none | list of `{label, f_star_c_d}` (°C·d) | user-supplied from Parker et al. (2020) |
+| `max_missing_days_at_start` | 0 | d | project default, to be tuned |
 | `daily_mean` | `minmax` | — | project default |
 
 Targets must have unique lower-case labels (e.g. `sugar_200_g_l`) and increasing critical sums.

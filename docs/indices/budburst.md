@@ -30,12 +30,24 @@ Chilling (dormancy release) is not modelled.
 
 - January 1 – June 30 by default (project default, not from literature).
 - Only complete days accumulate; incomplete days delay the prediction.
-- `value` = day of year of the predicted budburst; `details`: `budburst_date`, `budburst_doy`,
+- `value` = day of year of the predicted budburst (local date in `details["date"]`);
+  `details`: `budburst_date`, `budburst_doy`,
   `budburst_f_star_c_d`, `thermal_sum_c_d`.
 - `coverage`/`complete` refer to the days from the start to budburst (or the whole period).
 - **Without `f_star_c_d`** (the default): `value = None`, `details["status"] = "not
   configured"`.
 - Always `estimated = True`.
+- **Missing days delay the date.** An incomplete day contributes nothing (no gap filling), so
+  the sum lags behind and the predicted date is late. `details["n_missing_days"]` = incomplete
+  days from the period start to the predicted stage (or to the period end); `complete` follows
+  the plan's coverage rule and does not mean unbiased.
+- **Accumulation start not covered.** If more than `max_missing_days_at_start` (default 0)
+  days are missing before the first complete day of the period (e.g. a sensor deployed after
+  the start), the result is `value = None` with `details["status"] = "accumulation start not
+  covered"` and `details["n_missing_days_at_start"]`.
+- **DOY and leap years.** `value` is the day of year of the local date, which is also given as
+  `details["date"]` (ISO). In leap years every date after February has a DOY one higher than
+  in common years, so compare dates, not DOY values, across years.
 
 ## Parameters
 
@@ -44,6 +56,7 @@ Chilling (dormancy release) is not modelled.
 | `base_temp_c` | 5.0 | °C | project default [to be verified] |
 | `period` | January 1 – June 30 | local month-day | project default |
 | `f_star_c_d` | none | °C·d | must be calibrated locally |
+| `max_missing_days_at_start` | 0 | d | project default, to be tuned |
 | `daily_mean` | `minmax` | — | project default |
 
 ## Interpretation
@@ -57,7 +70,8 @@ data.
 - Base temperature and critical sum are not taken from a verified source; they need
   calibration on local BBCH 05/07 observations (proposed phenology log, outside this plan).
 - The sensors must be deployed outdoors from the start date on; office records are excluded by
-  QC (`PRE_DEPLOYMENT`), which leaves the days incomplete and the season incomplete.
+  QC (`PRE_DEPLOYMENT`), which leaves those days incomplete; if they are at the start of the
+  period the result is "accumulation start not covered".
 
 ## Implementation
 

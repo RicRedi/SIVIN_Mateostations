@@ -33,8 +33,20 @@ $$
 | BEDD | biologically effective degree-days | °C·d |
 
 This is the form in which the index is commonly quoted from Gladstones (1992) (for example by
-Jones et al., 2010) **[to be verified]**: the cap, the DTR band 10–13 °C, the factor 0.25 and
-the order of operations (adjustment added before the cap) are not checked against the book.
+Jones et al., 2010) **[to be verified]**: the cap, the DTR band 10–13 °C and the factor 0.25 are
+not checked against the book.
+
+**Order of cap and adjustments** (`cap_order`). Both variants circulate and the book was not
+available to decide [to be verified]:
+
+- `after_adjustment` (default, the formula above): the adjusted contribution is capped at $c$.
+- `before_adjustment`: the mean excess is capped first (mean capped at 19 °C, as Gladstones'
+  monthly formulation is reported), then adjusted; the daily contribution can exceed $c$:
+
+$$
+\mathrm{BEDD}_d = \max\left(0,\; k \cdot \min\left(c, \max(0, T_{mean,d} - T_{base})\right) + A_d\right)
+$$
+
 The final floor at 0 is an implementation choice so that a cold day with a small DTR cannot
 subtract heat [to be verified]. Consequence of the formula as written: a day with
 $T_{mean} \le 10$ °C but $\mathrm{DTR} > 13$ °C gets a small positive contribution.
@@ -44,6 +56,11 @@ $T_{mean} \le 10$ °C but $\mathrm{DTR} > 13$ °C gets a small positive contribu
 - April 1 – October 31, local calendar days; only complete days are summed.
 - `coverage` = complete days / 214; `complete` = `coverage >= analytics.min_season_coverage`.
 - `daily` = cumulative curve. No classes are defined.
+- **Missing days bias the sum low.** An incomplete day contributes nothing (no gap filling),
+  so the sum over the available days underestimates the true seasonal sum.
+  `details["n_missing_days"]` = days of the period that are not complete. `complete` follows
+  the plan's coverage rule (`coverage >= analytics.min_season_coverage`) and therefore does
+  **not** mean unbiased: up to 10 % of the days may be missing in a complete season.
 - No complete day → `value = None` (`status`).
 
 ## Parameters
@@ -56,6 +73,7 @@ $T_{mean} \le 10$ °C but $\mathrm{DTR} > 13$ °C gets a small positive contribu
 | `dtr_upper_c` | 13.0 | °C | Gladstones (1992) [to be verified] |
 | `dtr_factor` | 0.25 | °C·d/°C | Gladstones (1992) [to be verified]; 0 disables |
 | `day_length_coefficient` | 1.0 | — | off; Gladstones gives latitude-dependent values, not shipped [to be verified] |
+| `cap_order` | `after_adjustment` | — | see above [to be verified] |
 | `daily_mean` | `minmax` | — | project default |
 | `period` | April 1 – October 31 | local month-day | northern-hemisphere growing season |
 
@@ -73,8 +91,8 @@ groups, but I cannot quote the numbers with certainty. Use BEDD to compare senso
 
 ## Implementation
 
-- Class `BeddIndex` with `BeddParams` in `src/sivin/analytics/thermal/bedd.py`; daily formula
-  `bedd_daily` and `dtr_adjustment` in `formulas.py`.
+- Class `BeddIndex` with `BeddParams` in `src/sivin/analytics/thermal/bedd.py`; daily formulas
+  `bedd_daily`, `bedd_daily_cap_before_adjustment` and `dtr_adjustment` in `formulas.py`.
 - Tests: `tests/analytics/thermal/test_gst_bedd.py` (hand example with cap, both DTR
   adjustments and floor), `test_formulas.py`.
 

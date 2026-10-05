@@ -35,7 +35,13 @@ all samples (`sample_mean`).
 - Period: April 1 – September 30 (Huglin, 1978; northern hemisphere), local calendar days.
 - Only complete days (`coverage >= analytics.min_daily_coverage`) contribute.
 - `coverage` = complete days / 183; `complete` = `coverage >= analytics.min_season_coverage`.
-- The class is assigned only to a complete season.
+- **Missing days bias the sum low.** An incomplete day contributes nothing (no gap filling),
+  so the sum over the available days underestimates the true seasonal sum.
+  `details["n_missing_days"]` = days of the period that are not complete. `complete` follows
+  the plan's coverage rule (`coverage >= analytics.min_season_coverage`) and therefore does
+  **not** mean unbiased: up to 10 % of the days may be missing in a complete season.
+- The class is assigned only when the season is complete and
+  `n_missing_days <= max_missing_days` (default 0).
 - No complete day → `value = None` (`status`). No K (see below) → `value = None` (`status`).
 
 ## Parameters
@@ -48,26 +54,37 @@ all samples (`sample_mean`).
 | `k_bands` | table below | °N, — | Tonietto & Carbonneau (2004) [to be verified] |
 | `k_override` | none | — | fixed K instead of the lookup; legacy used 1.05 |
 | `classes` | table below | °C·d | Tonietto & Carbonneau (2004) |
+| `max_missing_days` | 0 | d | project default, to be tuned on real data |
 
-Latitude bands (lower bound inclusive, upper exclusive) [to be verified]:
+Latitude bands, upper-inclusive as the table is commonly tabulated (40°01'–42° → 1.02, …,
+48°01'–50° → 1.06) [to be verified]:
 
 | Latitude | K |
 |---|---|
-| 40° – 42° N | 1.02 |
-| 42° – 44° N | 1.03 |
-| 44° – 46° N | 1.04 |
-| 46° – 48° N | 1.05 |
-| 48° – 50° N | 1.06 |
+| > 40° – 42° N | 1.02 |
+| > 42° – 44° N | 1.03 |
+| > 44° – 46° N | 1.04 |
+| > 46° – 48° N | 1.05 |
+| > 48° – 50° N | 1.06 |
 
-Tonietto & Carbonneau (2004) give K from 1.02 to 1.06 between 40° and 50° latitude; the split
-into 2° bands follows that range but the exact band edges are **[to be verified]** against the
-paper. Outside 40–50° N (and for a missing latitude) no K is defined: the result is `None`
-unless `k_override` is set.
+Tonietto & Carbonneau (2004) give K from 1.02 to 1.06 between 40° and 50° latitude; the 2°
+bands follow that range but the exact band edges are **[to be verified]** against the papers.
+At or below 40° N, above 50° N and for a missing latitude no K is defined: the result is
+`None` unless `k_override` is set. Some authors interpolate K linearly between 1.02 (40°) and
+1.06 (50°), which gives K ≈ 1.056 at 48.88° N; interpolation is not implemented (out of
+scope; set `k_override` to use such a value).
 
-**K for our sensors.** The sensors are at about 48.88° N, so the lookup gives **K = 1.06**. The
-legacy script used a fixed **1.05** ("typical for the Czech Republic"). Values computed by this
-package are therefore about 1 % higher than legacy values on the same data
-(1.06 / 1.05 = 1.0095). Set `k_override: 1.05` to reproduce legacy numbers.
+**Differences from the legacy script.** Two defaults differ from
+`vineyard_analyst.calculate_huglin_index`, and both change the value on the same data:
+
+1. **K.** The sensors are at about 48.88° N, so the lookup gives **K = 1.06**; legacy used a
+   fixed **1.05** (the 46–48° value). This alone raises the index by 1.06 / 1.05 − 1 ≈ 0.95 %.
+2. **Daily mean.** The default here is `minmax` = $(T_{max}+T_{min})/2$; legacy used the mean of
+   all samples (`sample_mean`). The two differ every day depending on the shape of the diurnal
+   curve, so the seasonal index can move by tens of °C·d in either direction.
+
+Set `k_override: 1.05` and `daily_mean: sample_mean` to reproduce legacy numbers (on complete
+in-season days; see the parity test).
 
 ## Interpretation
 
@@ -92,7 +109,7 @@ The label `temperate_warm` follows the example of the site data contract
 - Only temperature is used; ~1825 s sampling slightly underestimates $T_{max}$.
 - In-canopy sensors measure vineyard microclimate, not the screen temperature of the stations
   the classes were derived from.
-- Incomplete days are skipped, which lowers the sum; check `coverage`/`complete`.
+- Incomplete days are skipped, which lowers the sum; check `n_missing_days`.
 - Legacy difference: legacy selected months 4–9 of all data and summed every day regardless of
   completeness, with K = 1.05 and the sample mean. With `daily_mean: sample_mean`,
   `k_override: 1.05` and complete days both give the same value (parity test).

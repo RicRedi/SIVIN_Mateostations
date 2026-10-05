@@ -12,6 +12,20 @@ used by GDD and the three phenology models. `gdd_winkler` and `huglin` agree wit
 `vineyard_analyst.py` formulas on synthetic data (parity tests). Values that I could not check
 against the source are configurable and marked `[to be verified]`.
 
+**Round 2** addressed the round-1 review following the orchestrator's decisions:
+- `gfv` ships no critical sums. It is "not configured" until both are set; 1282/2528 °C·d are
+  listed in `gfv.md` only as unverified candidates.
+- Every result carries `n_missing_days`. `gdd_winkler` and `huglin` are classified only when
+  `n_missing_days <= max_missing_days` (default 0). The low bias of sums with missing days is
+  documented.
+- The phenology models return `value = None` with status "accumulation start not covered"
+  when more than `max_missing_days_at_start` (default 0) days are missing at the start. They
+  give `details["date"]` beside the DOY.
+- Huglin K bands are upper-inclusive.
+- BEDD has a `cap_order` parameter.
+- The docs were corrected (Huglin legacy differences, GST scheme and wording, leap-year DOY).
+- `wp/0.1-foundation` (8f354c0) was merged.
+
 ## Changed files
 
 - `src/sivin/analytics/thermal/__init__.py`: re-exports; importing it registers the indices.
@@ -19,10 +33,11 @@ against the source are configurable and marked `[to be verified]`.
   `MinMaxMean`, `SampleMean`, `daily_mean_registry`.
 - `src/sivin/analytics/thermal/classification.py`: `ClassBound`, `IntervalClassification`.
 - `src/sivin/analytics/thermal/formulas.py`: `degree_days`, `huglin_daily`, `dtr_adjustment`,
-  `bedd_daily`, `fahrenheit_to_celsius_degree_days`.
+  `bedd_daily`, `bedd_daily_cap_before_adjustment`, `fahrenheit_to_celsius_degree_days`.
 - `src/sivin/analytics/thermal/thermal_time.py`: `ThermalTimeModel`, `ThermalTimeCurve`.
 - `src/sivin/analytics/thermal/base.py`: `ThermalParams` (validated `daily_mean`),
-  `ThermalIndex` (daily means, uniform `IndexResult` building).
+  `ClassifiedSumParams` (`max_missing_days`, `sum_class`), `missing_days`, `ThermalIndex`
+  (daily means, uniform `IndexResult` building incl. `n_missing_days`).
 - `src/sivin/analytics/thermal/{gdd,huglin,gst,bedd,phenology}.py`: the indices.
 - `tests/analytics/thermal/`: `conftest.py` (synthetic daily data and contexts),
   `test_formulas.py`, `test_building_blocks.py`, `test_gdd_huglin.py`, `test_gst_bedd.py`,
@@ -38,7 +53,7 @@ HuglinIndex(HuglinParams)           # "huglin", °C·d, class, cumulative daily,
 GstIndex(GstParams)                 # "gst", °C, Jones group, daily means
 BeddIndex(BeddParams)               # "bedd", °C·d, cumulative daily
 BudburstIndex(BudburstParams)       # "budburst", DOY, estimated=True, needs f_star_c_d
-GfvIndex(GfvParams)                 # "gfv", DOY of véraison; flowering/véraison in details
+GfvIndex(GfvParams)                 # "gfv", DOY of véraison; needs both F*; stages in details
 GsrIndex(GsrParams)                 # "gsr", DOY of last target; needs targets
 ThermalTimePhenologyIndex[P]        # ABC: subclasses implement stages()
 PhenologyStage(label, f_star_c_d)
@@ -49,14 +64,44 @@ DailyMeanDefinition (ABC), MinMaxMean, SampleMean, daily_mean_registry
 HuglinParams.coefficient(latitude_deg) -> float | None; LatitudeBand
 ```
 
-Result conventions: a value is `None` with `details["status"]` when the period has no complete
-day, Huglin has no K, a phenology model is not configured or its last stage is not reached.
-Classes are assigned only when the season is `complete`. `details["n_days"]` is always the
-number of complete days used.
+Result conventions:
+- A value is `None` with `details["status"]` when:
+  - the period has no complete day;
+  - Huglin has no K;
+  - a phenology model is not configured;
+  - its accumulation start is not covered;
+  - its last stage is not reached.
+- `details["n_days"]` (complete days used) and `details["n_missing_days"]` (incomplete days of
+  the evaluated period) are always present.
+- Sum classes (`gdd_winkler`, `huglin`) are assigned only when the season is `complete` and
+  `n_missing_days <= max_missing_days`. GST is classified when `complete`.
+- Phenology results also have `details["date"]` (ISO local date of the value) and
+  `details["n_missing_days_at_start"]`.
 
 ## How it was verified
 
-All commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, mypy 2.4.0):
+Round 2, after merging `wp/0.1-foundation` (8f354c0), same venv:
+
+- `make lint` → `All checks passed!`, `49 files already formatted`.
+- `make type` → `Success: no issues found in 31 source files`.
+- `make test` → `267 passed` (77 of them in `tests/analytics/thermal/`).
+- `make cov` → `TOTAL 1361 0 236 0 100%`, `Required test coverage of 85% reached. Total
+  coverage: 100.00%`. Every module of `sivin.analytics.thermal` is at 100 % line and branch
+  coverage.
+- New tests:
+  - The reviewer's gap probe as a test (`test_reviewer_probe_gap_is_not_classified`): a
+    synthetic 2025 year with a May 1–19 gap gives `n_missing_days = 19`, coverage 195/214,
+    `complete = True`, no region, and a lower sum than without the gap.
+  - `max_missing_days` gating for GDD and Huglin (hand-computed: 211 × 8 = 1688 °C·d;
+    182 × 11.66 = 2122.12 °C·d).
+  - Late deployment (data from June 1: 92 days missing at the start → `None`; tolerated → the
+    flowering date is computed by hand).
+  - Leap year: DOY 271 vs. 270 for the same date.
+  - BEDD `before_adjustment` (hand-computed 28.0 °C·d).
+  - Upper-inclusive K bands.
+  - GFV not configured by default.
+
+Round 1, all commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, mypy 2.4.0):
 
 - `make lint` → `All checks passed!`, `49 files already formatted`.
 - `make type` → `Success: no issues found in 31 source files`.
@@ -83,7 +128,10 @@ All commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, 
   - All BEDD constants (cap 9 °C·d, DTR band 10–13 °C, factor 0.25, order of operations, floor
     at 0) and the day-length coefficient (not shipped, default 1.0 = off).
   - GFV general-model critical sums 1282 °C·d (flowering) and 2528 °C·d (véraison) of Parker
-    et al. (2011).
+    et al. (2011). Since round 2 they are no longer defaults, only candidates in `gfv.md`.
+  - Whether Gladstones caps before or after the DTR adjustment (`cap_order`; the default is
+    after).
+  - The finer GST scheme of Jones et al. (2010), with hot 19–21 °C and very hot 21–24 °C.
   - Budburst base temperature 5 °C (project default); no critical sum is shipped.
   - Whether Huglin (1978) / Tonietto & Carbonneau (2004) mean $(T_{max}+T_{min})/2$ or another
     daily mean.
@@ -106,6 +154,9 @@ All commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, 
   complete days count. Parity holds on complete in-season data.
 - **Phenology value** is a day of year (unit `"DOY"`); for `gfv` it is the véraison date, for
   `gsr` the last configured target; all stage dates are in `details`.
+- **`complete` still follows the plan's coverage rule** (≥ `min_season_coverage`) and therefore
+  does not mean unbiased for sums. Classification of sums additionally requires
+  `n_missing_days <= max_missing_days` (orchestrator decision, round 2).
 - **Phenology coverage** is measured from the period start to the predicted (last) stage, not
   over the whole period, so a season with an early stage is complete without data until
   October 31.
@@ -113,6 +164,16 @@ All commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, 
 
 ## Out of scope
 
+- **Gap filling** (e.g. interpolating daily T_min/T_max over short gaps and marking the result
+  `estimated`) would remove the low bias of sums with missing days. It is not done in this WP
+  and is a future option.
+- **Huglin K interpolation** (linear between 1.02 at 40° and 1.06 at 50°, ≈ 1.056 at 48.88° N)
+  is used by some authors. It is not implemented; `k_override` can emulate it per sensor.
+- **`exclude_mask` consistency** (reviewer nit): the thermal indices use only `ctx.daily`, and
+  nothing checks that `ctx.daily` was built with `ctx.exclude_mask`. A reviewer probe with
+  flagged 60 °C spikes gave GDD 1394 with the mask and 3351 without it. The check belongs in
+  `sivin.analytics.base.IndexContext` or in the factory that builds contexts (core /
+  integration WP).
 - `SampleDurations`-style duration logic will exist in WP-2.2/2.3 packages; when two copies exist
   they should move to `sivin.core` (proposal for the integration WP).
 - `daily_mean_registry` (min/max vs. sample mean) could be useful to WP-2.2 (`dtr_ripening`,
@@ -164,16 +225,16 @@ Reviewer: independent reviewer session, 2026-10-05. Reviewed `git diff bcde7d9..
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/analytics/thermal/phenology.py:262-268`, `:451-462`, `:474` | GFV general-model critical sums 1282 / 2528 °C·d are shipped as active defaults. The `[to be verified]` marker exists only in docstrings and docs. Results carry no runtime marker (`estimated=False`, no detail), so the site would publish flowering and véraison dates from unverified constants. | open |
-| major | `gdd.py:104`, `huglin.py:303`, `phenology.py:367` (design shared with `bedd.py`) | Sum-type indices skip incomplete days (they contribute 0), but they are still `complete=True` and get a class when coverage ≥ 0.9. Up to 10 % of the heat sum can be missing while the result is labelled complete and classified. Phenology dates are delayed by the same mechanism. | open |
-| minor | `phenology.py:363-369` | Phenology returns a date `value` even when days at the start of accumulation are missing, for example a sensor deployed after March 1. The sum then lacks the spring, so the predicted date is systematically late, and only `complete=False` signals it. | open |
-| minor | `docs/indices/huglin.md:66-70` | The note says package values are "about 1 % higher than legacy". That explains only the K change. The default daily mean also changed (`minmax` vs. the legacy sample mean), and that can move HI by tens of °C·d per season in either direction. | open |
-| minor | `gst.py:17-26`, `docs/indices/gst.md` | Jones et al. (2010), which is cited on the page, splits the hot range into hot 19–21 °C and very hot 21–24 °C. As far as I know this is a 7-class scheme: too cool < 13, cool, intermediate, warm, hot, very hot, too hot > 24. The shipped 6 classes follow Jones (2006). Say which scheme is used, and make the Jones (2010) split available or mention it. Not certain, so verify. | open |
-| nit | `docs/indices/gst.md:22-24` | "averaging the daily values directly gives the same mean" is not exact. A mean of 7 monthly means weights 30-day and 31-day months equally per month, so it differs from the daily mean, by hundredths of a °C. Say "nearly the same". | open |
-| nit | `huglin.py:170`, `huglin.md` band table | The band table as it is commonly reproduced from Huglin (1978) reads 40°01'–42° → 1.02, …, 48°01'–50° → 1.06, i.e. lower-exclusive and upper-inclusive. The code uses `[min, max)`. This only matters at exact integer latitudes and has no effect at 48.88° N. Both are fine while marked `[to be verified]`. Mention that some authors interpolate K linearly between 1.02 (40°) and 1.06 (50°), which gives ≈ 1.056 at 48.88° N. | open |
-| nit | `phenology.py:385-386` | The value is a DOY. In leap years every date after February is +1 DOY, so comparing DOY values across years has a 1-day artefact. The ISO dates in `details` are unaffected. Document it or add the date offset from the period start. | open |
-| nit | `bedd.py` / `bedd.md` | The documented consequence that a day with T_mean ≤ 10 °C and DTR > 13 °C contributes > 0 follows from the cap-after-adjustment form. Gladstones' own monthly formulation caps the mean at 19 °C before the adjustment. Consider making the order a parameter (`cap_before_adjustment`) since both variants circulate. | open |
-| nit | out of scope (`sivin.analytics.base.IndexContext`) | The thermal indices use `ctx.daily` only. Nothing checks that `ctx.daily` was built with `ctx.exclude_mask`. A probe with spikes (60 °C, flagged `SPIKE`) gave GDD 1394 with the mask and 3351 without it. This is a contract matter for the integration WP, not a defect of this WP. | open |
+| major | `src/sivin/analytics/thermal/phenology.py:262-268`, `:451-462`, `:474` | GFV general-model critical sums 1282 / 2528 °C·d are shipped as active defaults. The `[to be verified]` marker exists only in docstrings and docs. Results carry no runtime marker (`estimated=False`, no detail), so the site would publish flowering and véraison dates from unverified constants. | fixed (round 2): `gfv` F* fields default to `None`, both or neither; default result is "not configured". 1282/2528 are only unverified candidates in `gfv.md`. Test `test_gfv_not_configured_by_default`. |
+| major | `gdd.py:104`, `huglin.py:303`, `phenology.py:367` (design shared with `bedd.py`) | Sum-type indices skip incomplete days (they contribute 0), but they are still `complete=True` and get a class when coverage ≥ 0.9. Up to 10 % of the heat sum can be missing while the result is labelled complete and classified. Phenology dates are delayed by the same mechanism. | fixed (round 2): `n_missing_days` in all details; `gdd_winkler`/`huglin` classify only if `n_missing_days <= max_missing_days` (default 0); `complete` unchanged per plan; bias documented in all sum/phenology pages; gap filling under Out of scope. Probe added as `test_reviewer_probe_gap_is_not_classified`. |
+| minor | `phenology.py:363-369` | Phenology returns a date `value` even when days at the start of accumulation are missing, for example a sensor deployed after March 1. The sum then lacks the spring, so the predicted date is systematically late, and only `complete=False` signals it. | fixed (round 2): `max_missing_days_at_start` (default 0); otherwise `value=None`, status "accumulation start not covered". Test `test_late_deployment_start_not_covered`. |
+| minor | `docs/indices/huglin.md:66-70` | The note says package values are "about 1 % higher than legacy". That explains only the K change. The default daily mean also changed (`minmax` vs. the legacy sample mean), and that can move HI by tens of °C·d per season in either direction. | fixed (round 2): `huglin.md` now lists both legacy differences (K 1.05→1.06 ≈ +0.95 %, daily mean `sample_mean`→`minmax`, tens of °C·d either way) and how to reproduce legacy. |
+| minor | `gst.py:17-26`, `docs/indices/gst.md` | Jones et al. (2010), which is cited on the page, splits the hot range into hot 19–21 °C and very hot 21–24 °C. As far as I know this is a 7-class scheme: too cool < 13, cool, intermediate, warm, hot, very hot, too hot > 24. The shipped 6 classes follow Jones (2006). Say which scheme is used, and make the Jones (2010) split available or mention it. Not certain, so verify. | fixed (round 2): `gst.md` states that the 6-class scheme of Jones (2006) is used and mentions the finer Jones et al. (2010) split [to be verified]; classes unchanged. |
+| nit | `docs/indices/gst.md:22-24` | "averaging the daily values directly gives the same mean" is not exact. A mean of 7 monthly means weights 30-day and 31-day months equally per month, so it differs from the daily mean, by hundredths of a °C. Say "nearly the same". | fixed (round 2): wording changed to "nearly the same" with the reason. |
+| nit | `huglin.py:170`, `huglin.md` band table | The band table as it is commonly reproduced from Huglin (1978) reads 40°01'–42° → 1.02, …, 48°01'–50° → 1.06, i.e. lower-exclusive and upper-inclusive. The code uses `[min, max)`. This only matters at exact integer latitudes and has no effect at 48.88° N. Both are fine while marked `[to be verified]`. Mention that some authors interpolate K linearly between 1.02 (40°) and 1.06 (50°), which gives ≈ 1.056 at 48.88° N. | fixed (round 2): bands upper-inclusive `(min, max]`; interpolation (≈ 1.056 at 48.88° N) mentioned and listed under Out of scope. |
+| nit | `phenology.py:385-386` | The value is a DOY. In leap years every date after February is +1 DOY, so comparing DOY values across years has a 1-day artefact. The ISO dates in `details` are unaffected. Document it or add the date offset from the period start. | fixed (round 2): leap-year shift documented in all phenology pages and the class docstring; `details["date"]` added; test `test_gfv_leap_year_shifts_doy_not_date`. |
+| nit | `bedd.py` / `bedd.md` | The documented consequence that a day with T_mean ≤ 10 °C and DTR > 13 °C contributes > 0 follows from the cap-after-adjustment form. Gladstones' own monthly formulation caps the mean at 19 °C before the adjustment. Consider making the order a parameter (`cap_before_adjustment`) since both variants circulate. | fixed (round 2): `cap_order` parameter (`after_adjustment` default, `before_adjustment`), documented in `bedd.md`; tests in `test_formulas.py` and `test_gst_bedd.py`. |
+| nit | out of scope (`sivin.analytics.base.IndexContext`) | The thermal indices use `ctx.daily` only. Nothing checks that `ctx.daily` was built with `ctx.exclude_mask`. A probe with spikes (60 °C, flagged `SPIKE`) gave GDD 1394 with the mask and 3351 without it. This is a contract matter for the integration WP, not a defect of this WP. | deferred: recorded under Out of scope (belongs to `IndexContext` / context factory). |
 
 #### Details and suggested fixes
 

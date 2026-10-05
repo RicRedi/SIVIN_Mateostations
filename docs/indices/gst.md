@@ -20,8 +20,9 @@ $$
 | GST | growing season temperature | °C |
 
 Jones (2006) and Jones et al. (2010) compute GST from monthly means of daily
-$(T_{max}+T_{min})/2$ station data; averaging the daily values directly gives the same mean when
-all days are present. `IndexResult.daily` holds the daily means used.
+$(T_{max}+T_{min})/2$ station data; averaging the daily values directly gives **nearly** the
+same mean when all days are present (a mean of seven monthly means weights 30- and 31-day
+months equally per month, so it differs from the mean of all days by hundredths of a °C). `IndexResult.daily` holds the daily means used.
 
 ## Period and aggregation
 
@@ -41,8 +42,8 @@ all days are present. `IndexResult.daily` holds the daily means used.
 
 ## Interpretation
 
-Climate-maturity groups after Jones (2006) **[to be verified]** (bounds inclusive upper; a
-value equal to a bound belongs to the lower group):
+This index uses the **6-class scheme of Jones (2006)** **[to be verified]** (bounds inclusive
+upper; a value equal to a bound belongs to the lower group):
 
 | Label | GST (°C) |
 |---|---|
@@ -58,12 +59,17 @@ from Jones (2006); below 13 °C and above 24 °C are outside the range considere
 quality wine grapes. Both the bounds and their inclusive/exclusive handling are
 **[to be verified]** against the source; they are configurable.
 
+Jones et al. (2010) may use a finer scheme that splits the hot range into hot (19–21 °C) and
+very hot (21–24 °C) [to be verified]. It is not shipped; it can be configured through
+`classes` once verified.
+
 ## Assumptions and limitations
 
 - In-canopy sensors, ~1825 s sampling; $(T_{max}+T_{min})/2$ from samples is close to but not
   identical with screen-station values.
 - Missing days in a part of the season bias the mean towards the other part (e.g. missing July
-  days lower GST); check `coverage`.
+  days lower GST); check `coverage` and `details["n_missing_days"]` (incomplete days of the
+  period). Unlike the sums, the mean is not biased low by the mere number of missing days.
 
 ## Implementation
 

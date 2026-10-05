@@ -33,8 +33,14 @@ returned as `IndexResult.daily`.
 - Only days with `coverage >= analytics.min_daily_coverage` are summed; incomplete days are
   skipped (contribute nothing).
 - `coverage` = complete days / 214 days; `complete` = `coverage >= analytics.min_season_coverage`.
-- The Winkler region is assigned **only to a complete season**; a partial sum would always fall
-  into a too cool region.
+- **Missing days bias the sum low.** An incomplete day contributes nothing (no gap filling),
+  so the sum over the available days underestimates the true seasonal sum.
+  `details["n_missing_days"]` = days of the period that are not complete. `complete` follows
+  the plan's coverage rule (`coverage >= analytics.min_season_coverage`) and therefore does
+  **not** mean unbiased: up to 10 % of the days may be missing in a complete season.
+- The Winkler region is assigned only when the season is complete **and**
+  `n_missing_days <= max_missing_days` (default 0); a partial sum would fall into a too cool
+  region.
 - No complete day in the period → `value = None` with detail `status`.
 
 ## Parameters
@@ -45,6 +51,7 @@ returned as `IndexResult.daily`.
 | `daily_mean` | `minmax` | — | Winkler convention $(T_{max}+T_{min})/2$; `sample_mean` = mean of all valid samples |
 | `period` | `{start: {month: 4, day: 1}, end: {month: 10, day: 31}}` | local month-day | Amerine & Winkler (1944), northern hemisphere |
 | `regions` | bounds below | °C·d | Amerine & Winkler (1944), converted from °F·d |
+| `max_missing_days` | 0 | d | project default, to be tuned on real data |
 
 ## Interpretation
 
@@ -73,8 +80,8 @@ were given in whole °F·d (e.g. region II "2501–3000"); the implementation tr
 - The sensors are inside the canopy zone of a few vineyards, not standard screens at 2 m; the
   values describe the vineyard microclimate, not the regional climate the Winkler regions were
   calibrated on.
-- Skipped incomplete days make the sum smaller; check `coverage`/`complete` before comparing
-  seasons.
+- Skipped incomplete days make the sum smaller; check `n_missing_days` before comparing
+  seasons or sensors.
 - Legacy difference: `vineyard_analyst.calculate_gdd` summed over the whole selected period
   (not April–October) and used every day regardless of completeness. On complete in-season
   data both give the same value (parity test).
@@ -83,10 +90,12 @@ were given in whole °F·d (e.g. region II "2501–3000"); the implementation tr
 
 - Class `GddWinklerIndex` with `GddWinklerParams` in `src/sivin/analytics/thermal/gdd.py`.
 - Accumulation by `ThermalTimeModel` (`thermal_time.py`), daily mean by `daily_mean.py`,
-  regions by `IntervalClassification` (`classification.py`), °F·d → °C·d by
+  regions by `IntervalClassification` (`classification.py`) via
+  `ClassifiedSumParams.sum_class` (`base.py`), °F·d → °C·d by
   `fahrenheit_to_celsius_degree_days` (`formulas.py`).
 - Tests: `tests/analytics/thermal/test_gdd_huglin.py` (hand-computed example, full season,
-  incomplete and empty season, legacy parity), `test_formulas.py` (bound conversion).
+  missing days and `max_missing_days`, the round-1 review probe with a 19-day gap, incomplete
+  and empty season, legacy parity), `test_formulas.py` (bound conversion).
 
 ## References
 

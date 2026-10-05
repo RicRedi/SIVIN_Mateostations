@@ -33,10 +33,24 @@ nothing (they do not subtract).
   defined as **March 1 in every year** (in leap years DOY 60 would be February 29).
 - Only complete days (`coverage >= analytics.min_daily_coverage`) are accumulated; an incomplete
   day is skipped, which **delays** the predicted date.
-- `value` = day of year of **véraison** (local date); `None` if not reached.
+- **Not configured by default:** without both critical sums the result is `value = None` with
+  `details["status"] = "not configured"` (see Parameters).
+- `value` = day of year of **véraison** (local date in `details["date"]`); `None` if not
+  reached.
 - `details`: `flowering_date`, `flowering_doy`, `veraison_date`, `veraison_doy` (ISO dates or
   `"not reached"`), the critical sums and `thermal_sum_c_d` (sum over the whole available
   period); `status` when véraison is not reached.
+- **Missing days delay the date.** An incomplete day contributes nothing (no gap filling), so
+  the sum lags behind and the predicted date is late. `details["n_missing_days"]` = incomplete
+  days from the period start to the predicted stage (or to the period end); `complete` follows
+  the plan's coverage rule and does not mean unbiased.
+- **Accumulation start not covered.** If more than `max_missing_days_at_start` (default 0)
+  days are missing before the first complete day of the period (e.g. a sensor deployed after
+  the start), the result is `value = None` with `details["status"] = "accumulation start not
+  covered"` and `details["n_missing_days_at_start"]`.
+- **DOY and leap years.** `value` is the day of year of the local date, which is also given as
+  `details["date"]` (ISO). In leap years every date after February has a DOY one higher than
+  in common years, so compare dates, not DOY values, across years.
 - `coverage`/`complete` refer to the days from March 1 to véraison, or to the whole period if
   véraison is not reached (so a running season is incomplete until véraison).
 - `daily` = cumulative thermal sum.
@@ -47,13 +61,18 @@ nothing (they do not subtract).
 |---|---|---|---|
 | `base_temp_c` | 0.0 | °C | Parker et al. (2011) |
 | `period` | March 1 – October 31 | local month-day | start: Parker et al. (2011); end: project default |
-| `flowering_f_star_c_d` | 1282 | °C·d | general model, Parker et al. (2011) [to be verified] |
-| `veraison_f_star_c_d` | 2528 | °C·d | general model, Parker et al. (2011) [to be verified] |
+| `flowering_f_star_c_d` | none | °C·d | to be supplied (general model: Parker et al., 2011; cultivars: Parker et al., 2013) |
+| `veraison_f_star_c_d` | none | °C·d | to be supplied, as above |
+| `max_missing_days_at_start` | 0 | d | project default, to be tuned |
 | `daily_mean` | `minmax` | — | project default |
 
-The two critical sums are the values of the general GFV model as I recall them from Parker et
-al. (2011); they are **[to be verified]** against the paper. Cultivar-specific values are in
-Parker et al. (2013); none are shipped. Set them per sensor once the cultivar is known
+Both critical sums must be set together and increase (flowering < véraison).
+
+**Candidate values for the owner to check (unverified, not active):** 1282 °C·d for flowering
+and 2528 °C·d for véraison are values recalled for the general GFV model of Parker et al.
+(2011). Neither the worker nor the reviewer could confirm them against the paper, so they are
+**not** shipped as defaults. Once verified, set them in the configuration. Cultivar-specific
+values are in Parker et al. (2013); set them per sensor once the cultivar is known
 (MIGRATION_PLAN §0.6, Q4).
 
 ## Interpretation
@@ -73,8 +92,9 @@ between sensors is meaningful only if both have complete data.
 
 - Class `GfvIndex` with `GfvParams` in `src/sivin/analytics/thermal/phenology.py`, a subclass
   of `ThermalTimePhenologyIndex`; accumulation by `ThermalTimeModel` (`thermal_time.py`).
-- Tests: `tests/analytics/thermal/test_phenology.py` (both stages reached, véraison not
-  reached, running season, empty season, parameter validation).
+- Tests: `tests/analytics/thermal/test_phenology.py` (not configured by default, both stages
+  reached, véraison not reached, running season, empty season, leap year, late deployment,
+  parameter validation).
 
 ## References
 
