@@ -43,7 +43,10 @@ class OffSiteLogError(ValueError):
 
 
 def unknown_sensor_message(name: str, registry: SensorRegistry) -> str:
-    """Explain that a sensor is not in the registry and list the known serials.
+    """Explain that the off-site log names a sensor that is not in the registry.
+
+    Lists the known serials and says how a sensor leaves service: it stays in the registry
+    with ``status: retired`` (its data and log entries stay valid), it is never deleted.
 
     Parameters
     ----------
@@ -59,8 +62,10 @@ def unknown_sensor_message(name: str, registry: SensorRegistry) -> str:
     """
     known = ", ".join(str(sensor_id) for sensor_id in registry.ids()) or "none"
     return (
-        f"sensor {name!r} is not in {REGISTRY_FILE_NAME} (known sensors: {known}); check the "
-        "serial, or add the sensor to the registry first"
+        f"the off-site log names sensor {name!r}, which is not in the sensor registry "
+        f"{REGISTRY_FILE_NAME} (known sensors: {known}); check the serial, or add the sensor "
+        "to the registry. A sensor that left service stays in the registry with status "
+        "'retired' instead of being deleted"
     )
 
 

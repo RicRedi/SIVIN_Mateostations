@@ -6,6 +6,11 @@ One :class:`SecretRedactor`, built from the loaded credentials, is applied to th
 The values of ``SIVIN_USER`` and ``SIVIN_PASSWORD`` are replaced by ``***`` wherever they
 occur, also inside exception messages (WP-1.7 review rounds 1 and 2).
 
+Besides the literal value, the forms a secret takes when an exception or a log quotes it are
+redacted (:func:`secret_forms`): ``repr``/JSON escaping, backslash-escaped quotes, the
+character list of a WebDriver ``send_keys`` body and URL encoding. They are generated once,
+when the redactor is built.
+
 Values shorter than :data:`MIN_SECRET_LENGTH` are **not** redacted: replacing every
 occurrence of e.g. ``vut`` would mangle file names and messages and reveal the value by its
 pattern. Such a credential is reported once (by name, never by value) through
@@ -14,10 +19,12 @@ pattern. Such a credential is reported once (by name, never by value) through
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Self
+from urllib.parse import quote, quote_plus
 
 SECRET_ENV_VARS: Final = ("SIVIN_PASSWORD", "SIVIN_USER")
 """Environment variables whose values never leave the process."""
@@ -29,6 +36,44 @@ MIN_SECRET_LENGTH: Final = 4
 """Shortest value (characters) that is redacted; shorter ones are reported instead."""
 
 
+def secret_forms(value: str) -> tuple[str, ...]:
+    """Return the texts under which ``value`` may appear in an exception message or a log.
+
+    Parameters
+    ----------
+    value : str
+        The secret.
+
+    Returns
+    -------
+    tuple of str
+        Distinct forms, longest first: the value; its ``repr``, ``ascii`` and JSON escapes
+        (with and without ``ensure_ascii``) and the JSON escape of its ``repr`` (a repr written
+        into a JSON file); ``unicode_escape``; the value with backslash-escaped double or single
+        quotes; the character list as Python (``'P', 'a'``) and JSON (``"P", "a"``) prints it;
+        URL encoding (``%XX`` and ``+`` for spaces).
+    """
+    chars = list(value)
+    escaped = repr(value)[1:-1]
+    forms = {
+        value,
+        escaped,
+        ascii(value)[1:-1],
+        json.dumps(value)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+        json.dumps(escaped)[1:-1],
+        value.encode("unicode_escape").decode("ascii"),
+        value.replace("\\", "\\\\").replace('"', '\\"'),
+        value.replace("\\", "\\\\").replace("'", "\\'"),
+        str(chars)[1:-1],
+        json.dumps(chars)[1:-1],
+        json.dumps(chars, ensure_ascii=False)[1:-1],
+        quote(value, safe=""),
+        quote_plus(value, safe=""),
+    }
+    return tuple(sorted(forms, key=lambda form: (-len(form), form)))
+
+
 @dataclass(frozen=True, slots=True)
 class SecretRedactor:
     """Replace secret values by ``***`` in texts and JSON-like data.
@@ -36,7 +81,8 @@ class SecretRedactor:
     Attributes
     ----------
     secrets : tuple of str
-        Values to redact (at least :data:`MIN_SECRET_LENGTH` characters), longest first.
+        Texts to redact, longest first: every :func:`secret_forms` of each value with at least
+        :data:`MIN_SECRET_LENGTH` characters.
     unredactable : tuple of str
         Names (never values) of credentials too short to be redacted safely.
     """
@@ -59,9 +105,14 @@ class SecretRedactor:
             Redacts the values with at least :data:`MIN_SECRET_LENGTH` characters.
         """
         values = {name: value for name, value in named.items() if value}
-        long_enough = {v for v in values.values() if len(v) >= MIN_SECRET_LENGTH}
+        forms = {
+            form
+            for value in values.values()
+            if len(value) >= MIN_SECRET_LENGTH
+            for form in secret_forms(value)
+        }
         short = tuple(sorted(n for n, v in values.items() if len(v) < MIN_SECRET_LENGTH))
-        return cls(tuple(sorted(long_enough, key=len, reverse=True)), short)
+        return cls(tuple(sorted(forms, key=lambda form: (-len(form), form))), short)
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -94,7 +145,9 @@ class SecretRedactor:
             The combined redactor.
         """
         extra = SecretRedactor.of(named)
-        secrets = sorted(set(self.secrets) | set(extra.secrets), key=len, reverse=True)
+        secrets = sorted(
+            set(self.secrets) | set(extra.secrets), key=lambda form: (-len(form), form)
+        )
         names = tuple(sorted(set(self.unredactable) | set(extra.unredactable)))
         return SecretRedactor(tuple(secrets), names)
 

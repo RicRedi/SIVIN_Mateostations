@@ -331,9 +331,10 @@ class TestLogRules:
         with pytest.raises(OffSiteLogError) as error:
             OffSiteLog([stranger], registry)
         assert (
-            "entry #1, 'sensor': sensor '12345678' is not in sensors/sensors.geojson (known "
-            "sensors: 77799986, 77678271); check the serial, or add the sensor to the registry "
-            "first"
+            "entry #1, 'sensor': the off-site log names sensor '12345678', which is not in the "
+            "sensor registry sensors/sensors.geojson (known sensors: 77799986, 77678271); check "
+            "the serial, or add the sensor to the registry. A sensor that left service stays in "
+            "the registry with status 'retired' instead of being deleted"
         ) in str(error.value)
 
     def test_overlap(self, registry: SensorRegistry) -> None:
@@ -453,7 +454,9 @@ class TestStore:
         lines = str(error.value).splitlines()
         assert lines[0] == "Invalid off-site log:"
         # Entries start on lines 2, 6, 10, 14, 18; 'from' is the line after 'sensor'.
-        assert lines[1].startswith("  entry #2, 'sensor' (line 6): sensor '12345678' is not in")
+        assert lines[1].startswith(
+            "  entry #2, 'sensor' (line 6): the off-site log names sensor '12345678', which is not"
+        )
         assert lines[2].startswith("  entry #3, 'from' (line 11): local time '2026-10-25 02:30'")
         assert lines[3] == (
             "  entry #4 (line 14): 'from' (2026-05-01 08:00 CEST (06:00 UTC)) must be before "
@@ -486,7 +489,7 @@ class TestStore:
         (period,) = store.loads(text + "    reason: office\n", registry)
         assert period.sensor == OFFICE
         # YAML would read 01234567 as an octal number; the loader keeps the written digits.
-        with pytest.raises(OffSiteLogError, match="sensor '01234567' is not in"):
+        with pytest.raises(OffSiteLogError, match="names sensor '01234567', which is not in"):
             store.loads(text.replace("77799986", "01234567") + "    reason: office\n", registry)
 
     def test_entry_that_is_not_a_mapping(

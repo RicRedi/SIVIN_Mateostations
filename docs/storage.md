@@ -281,11 +281,12 @@ nothing. Every entry carries `status` (`"ok"` / `"failed"`), `computed_at` (time
 (`data/raw/77680921/2026.csv: …`) and the portal credentials are replaced by `***` (see
 [cli.md](cli.md#exit-codes), *Logging and secrets*); the same holds for `failures` in the run
 log. **Pruning:** entries of sensors that are neither in the registry nor in the store are
-removed on the next write: their index entries when a season file is written, their events
-files after a `sivin qc` / `sivin run` that writes. Entries of indices that are no longer
-registered are removed when a season file is written. Each pruning is logged (INFO). A
-sensor removed from the registry whose measurements stay in the store is still checked and
-keeps its entries; delete its data to retire it.
+removed on the next write: their index entries in **every** season file whenever a season
+file is written, their events files (only files named `<8 digits>.json`; other files are left
+alone) after a `sivin qc` / `sivin run` that writes. Entries of indices that are no longer
+registered are removed from every season file the same way. Each pruning is logged (INFO). A
+sensor is retired with `status: "retired"` in the registry, not by deleting it or its data
+([sensors.md](sensors.md#retire-a-sensor)); it keeps its stored data and derived entries.
 
 `derived/events/<sensor_id>.json` — result of the QC pipeline over the stored record
 (`EventsWriter`):

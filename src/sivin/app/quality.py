@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +27,9 @@ from sivin.storage.store import MeasurementStore
 logger = logging.getLogger(__name__)
 
 EVENTS_SUFFIX: Final = ".json"
+
+EVENTS_FILE: Final = re.compile(r"[0-9]{8}\.json")
+"""Name of an events file (a sensor id); :meth:`EventsWriter.prune` touches nothing else."""
 """File suffix of a derived events file, ``<sensor_id>.json``."""
 
 SENSOR_ERRORS: Final = (ValueError, LookupError, ArithmeticError, OSError)
@@ -152,6 +156,9 @@ class EventsWriter:
     def prune(self) -> list[Path]:
         """Delete the events files of sensors that are no longer known.
 
+        Only files named like a sensor (``<8 digits>.json``) are considered; any other file in
+        the directory is left alone.
+
         Returns
         -------
         list of pathlib.Path
@@ -163,7 +170,7 @@ class EventsWriter:
         stale = [
             path
             for path in sorted(self._directory.glob(f"*{EVENTS_SUFFIX}"))
-            if path.stem not in known
+            if EVENTS_FILE.fullmatch(path.name) is not None and path.stem not in known
         ]
         for path in stale:
             path.unlink(missing_ok=True)

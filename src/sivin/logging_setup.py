@@ -8,6 +8,8 @@ Two safeguards keep the portal credentials out of every log (WP-1.7 review, majo
 2. **Secrets are redacted** in every record by :class:`RedactingFilter` on the root handler,
    with the process's one :class:`~sivin.redaction.SecretRedactor` (the same one the CLI
    applies to its output, the run record and the derived files).
+3. **Warnings are logged** (:func:`logging.captureWarnings`), so a ``warnings.warn`` message
+   passes the same filter instead of going straight to standard error.
 """
 
 from __future__ import annotations
@@ -36,7 +38,9 @@ class RedactingFilter(logging.Filter):
     """Pass every record through the process's :class:`~sivin.redaction.SecretRedactor`.
 
     The message is formatted (``msg % args``) before redaction and the record then keeps the
-    redacted text without arguments; the traceback text is redacted too.
+    redacted text without arguments; the traceback text is redacted too. A record whose
+    arguments do not fit its format (a bug in a log call) never stops the run: the redacted
+    ``str(msg)`` and ``repr(args)`` are logged instead, with a note.
 
     Parameters
     ----------
@@ -63,10 +67,15 @@ class RedactingFilter(logging.Filter):
         """
         if not self.redactor.secrets:
             return True
-        message = record.getMessage()
-        redacted = self.redactor.redact(message)
-        if redacted != message:
-            record.msg, record.args = redacted, None
+        try:
+            message = record.getMessage()
+        except Exception:  # any formatting error of a foreign log call
+            message = f"{record.msg!s} {record.args!r} (log message could not be formatted)"
+            record.msg, record.args = self.redactor.redact(message), None
+        else:
+            redacted = self.redactor.redact(message)
+            if redacted != message:
+                record.msg, record.args = redacted, None
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
         if record.exc_text:
@@ -120,3 +129,4 @@ def setup_logging(
         )
     for name in CAPPED_LOGGERS:
         logging.getLogger(name).setLevel(max(CAPPED_LEVEL, numeric_level))
+    logging.captureWarnings(True)

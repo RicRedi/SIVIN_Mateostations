@@ -214,12 +214,16 @@ class TestPruning:
         assert events is not None
         stale = events.with_name(f"{GONE_SENSOR}.json")
         stale.write_text("{}", encoding="utf-8")
+        foreign = [events.with_name(name) for name in ("notes.json", "1234567.json")]
+        for path in foreign:
+            path.write_text("{}", encoding="utf-8")
         services.quality_service(dry_run=True).run([OTHER])
         assert stale.exists()  # a dry run deletes nothing
         with caplog.at_level("INFO", logger="sivin.app.quality"):
             services.quality_service().run([OUTDOOR])
         assert not stale.exists()
         assert events.exists()
+        assert all(path.exists() for path in foreign)  # not named like a sensor
         assert f"no longer in the registry or the store: {GONE_SENSOR}." in caplog.text
 
 
@@ -254,3 +258,33 @@ class TestRedaction:
         assert self.SECRET not in log
         assert str(project.root) not in log
         assert f"fetch x: *** in data/raw/{OTHER_SENSOR}/2026.csv" in log
+
+
+def test_every_season_file_is_pruned(
+    services: ServiceFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    file = services.indices_service().run(2026).file
+    assert file is not None
+    older = file.with_name("2025.json")
+    document = read(file)
+    document["season"] = 2025
+    document["sensors"][GONE_SENSOR] = {"gst": {"value": 1.0}}
+    document["sensors"][OTHER_SENSOR]["removed_index"] = {"value": 1.0}
+    older.write_text(json.dumps(document), encoding="utf-8")
+    clean = file.with_name("2024.json")
+    clean.write_text(json.dumps({"season": 2024, "sensors": {OTHER_SENSOR: {}}}), "utf-8")
+    foreign = file.with_name("summary.json")
+    foreign.write_text(json.dumps({"sensors": {GONE_SENSOR: {}}}), encoding="utf-8")
+    unreadable = file.with_name("2023.json")
+    unreadable.write_text("[]", encoding="utf-8")
+    clean_before = clean.read_text(encoding="utf-8")
+    with caplog.at_level("INFO", logger="sivin.app.indices"):
+        services.indices_service().run(2026, sensors=[OUTDOOR])
+    pruned = read(older)
+    assert GONE_SENSOR not in pruned["sensors"]
+    assert "removed_index" not in pruned["sensors"][OTHER_SENSOR]
+    assert pruned["season"] == 2025
+    assert clean.read_text(encoding="utf-8") == clean_before  # nothing to prune: not rewritten
+    assert GONE_SENSOR in read(foreign)["sensors"]  # not a season file
+    assert unreadable.read_text(encoding="utf-8") == "[]"
+    assert "Pruned the season 2025 indices of sensor(s)" in caplog.text

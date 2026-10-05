@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import warnings
 from collections.abc import Iterator
 
 import pytest
@@ -27,7 +28,9 @@ def log_stream(monkeypatch: pytest.MonkeyPatch) -> Iterator[io.StringIO]:
     saved = root.handlers[:], root.level
     capped = {name: logging.getLogger(name).level for name in CAPPED_LOGGERS}
     stream = io.StringIO()
+    logging.captureWarnings(False)
     yield stream
+    logging.captureWarnings(False)
     root.handlers[:], level = saved[0], saved[1]
     root.setLevel(level)
     for name, previous in capped.items():
@@ -98,3 +101,27 @@ def test_install_redactor_replaces_the_secrets_of_the_handlers(log_stream: io.St
     logging.getLogger("sivin.test").info("value loaded-from-dotenv")
     assert "loaded-from-dotenv" not in log_stream.getvalue()
     assert f"value {REDACTED}" in log_stream.getvalue()
+
+
+def test_warnings_pass_the_redacting_filter(log_stream: io.StringIO) -> None:
+    setup_logging("INFO", log_stream)
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn(f"login {USER} with {PASSWORD} looks odd", UserWarning, stacklevel=1)
+    output = log_stream.getvalue()
+    assert "py.warnings" in output
+    assert f"login {REDACTED} with {REDACTED} looks odd" in output
+    assert PASSWORD not in output
+    assert USER not in output
+
+
+def test_a_record_that_cannot_be_formatted_does_not_stop_the_run(
+    log_stream: io.StringIO,
+) -> None:
+    setup_logging("INFO", log_stream)
+    logging.getLogger("sivin.test").error("count %d", f"not a number {PASSWORD}")
+    logging.getLogger("sivin.test").info("still logging")
+    output = log_stream.getvalue()
+    assert f"count %d ('not a number {REDACTED}',) (log message could not be formatted)" in (output)
+    assert PASSWORD not in output
+    assert "still logging" in output

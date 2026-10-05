@@ -527,12 +527,12 @@ console script calls `entry_point`.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | src/sivin/redaction.py:105-118 (`redact`) | Only the literal value is replaced. A password containing `\`, both quote kinds or non-printable characters appears differently in `repr`/JSON-escaped text, and Selenium's `send_keys` body carries it as a character list. Both forms passed unredacted to stderr and into the run record (public `data` branch) in the probe above. It still needs an exception that quotes the typed text, which no known chromedriver error does. **Recommended before WP-4.1:** also redact `repr(s)[1:-1]`, `json.dumps(s)[1:-1]`, `s.encode("unicode_escape")` and the list form, with a test that uses a password containing `\` and `"`. | open |
-| minor | src/sivin/logging_setup.py (`setup_logging`) | `warnings.warn` messages go straight to stderr and skip the redacting handler (probe: both credentials printed). **Recommended before WP-4.1:** `logging.captureWarnings(True)` in `setup_logging`, so warnings pass through `RedactingFilter`. | open |
-| minor | src/sivin/logging_setup.py (`RedactingFilter.filter`) | The filter calls `record.getMessage()` outside logging's error handling. A log call with mismatched arguments anywhere (a latent bug in a rarely hit branch) now raises from `logger.x()` and aborts the whole unattended run with exit 5. Standard logging would print "--- Logging error ---" and continue. Fix: catch exceptions from `getMessage()` in the filter and fall back to the redacted `str(record.msg)` plus redacted `args` reprs. | open |
-| nit | src/sivin/app/indices.py:399 (`_prune`) | Pruning touches only the season file being written. The daily run writes only the current season, so earlier `indices/<year>.json` keep retired sensors and removed indices until that season is recomputed. Document it, or prune every season file. | open |
-| nit | src/sivin/app/quality.py:152-175 (`EventsWriter.prune`) | Every `*.json` in `derived/events/` whose stem is not a known sensor is deleted, including files that sivin did not write. Restrict pruning to names that parse as a `SensorId`. | open |
-| nit | docs/cli.md (Exit codes) | Ctrl-C ends with Click's exit code 130 ("Aborted!"), which is not in the table. `src/sivin/__main__.py` is not covered by a test. | open |
+| minor | src/sivin/redaction.py:105-118 (`redact`) | Only the literal value is replaced. A password containing `\`, both quote kinds or non-printable characters appears differently in `repr`/JSON-escaped text, and Selenium's `send_keys` body carries it as a character list. Both forms passed unredacted to stderr and into the run record (public `data` branch) in the probe above. It still needs an exception that quotes the typed text, which no known chromedriver error does. **Recommended before WP-4.1:** also redact `repr(s)[1:-1]`, `json.dumps(s)[1:-1]`, `s.encode("unicode_escape")` and the list form, with a test that uses a password containing `\` and `"`. | fixed (follow-up): `secret_forms` generates once per secret the literal, `repr`/`ascii`/JSON escapes (also JSON of a repr), `unicode_escape`, backslash-escaped quotes, the Python and JSON character lists and URL encoding (`%XX`, `+`); tests with a password containing `\`, `"`, `'`, non-ASCII and a space, every form through `sivin run`: stdout, stderr, run record, derived files (mutation check: 16 of 18 fail without the forms) |
+| minor | src/sivin/logging_setup.py (`setup_logging`) | `warnings.warn` messages go straight to stderr and skip the redacting handler (probe: both credentials printed). **Recommended before WP-4.1:** `logging.captureWarnings(True)` in `setup_logging`, so warnings pass through `RedactingFilter`. | fixed (follow-up): `logging.captureWarnings(True)` in `setup_logging`; test |
+| minor | src/sivin/logging_setup.py (`RedactingFilter.filter`) | The filter calls `record.getMessage()` outside logging's error handling. A log call with mismatched arguments anywhere (a latent bug in a rarely hit branch) now raises from `logger.x()` and aborts the whole unattended run with exit 5. Standard logging would print "--- Logging error ---" and continue. Fix: catch exceptions from `getMessage()` in the filter and fall back to the redacted `str(record.msg)` plus redacted `args` reprs. | fixed (follow-up): a formatting error falls back to the redacted `str(msg)` + `repr(args)` with a note; logging continues; test |
+| nit | src/sivin/app/indices.py:399 (`_prune`) | Pruning touches only the season file being written. The daily run writes only the current season, so earlier `indices/<year>.json` keep retired sensors and removed indices until that season is recomputed. Document it, or prune every season file. | fixed (follow-up): every `<4 digits>.json` season file is pruned when a season file is written (rewritten only when changed); other files untouched; test |
+| nit | src/sivin/app/quality.py:152-175 (`EventsWriter.prune`) | Every `*.json` in `derived/events/` whose stem is not a known sensor is deleted, including files that sivin did not write. Restrict pruning to names that parse as a `SensorId`. | fixed (follow-up): only `<8 digits>.json` files are considered; test |
+| nit | docs/cli.md (Exit codes) | Ctrl-C ends with Click's exit code 130 ("Aborted!"), which is not in the table. `src/sivin/__main__.py` is not covered by a test. | fixed (follow-up): 130 in the exit-code table; tests for Ctrl-C (130, no traceback, no secret) and `python -m sivin` via `runpy` |
 
 Round-2 findings:
 - **Major (credentials in exception messages):** fixed for the plain value at every boundary I
@@ -557,3 +557,23 @@ is irreversible apart from git history, and it throws away historical seasons. I
 In that model pruning matters only for typos and test sensors, and deleting their data is
 appropriate. Note also: removing a sensor from the registry while the off-site log still names
 it makes the off-site log invalid, and every command then stops with exit 3.
+
+## Follow-up after review round 3 (before WP-4.1)
+
+- **Escaped forms:** `sivin.redaction.secret_forms` (see the round-3 table); the redactor
+  holds every form, longest first, built once.
+- **Warnings / robust filter / pruning / exit 130 / `__main__.py`:** see the round-3 table.
+- **Retiring a sensor (orchestrator decision, owner to confirm):** a sensor leaves service
+  with `status: retired` in the registry; it is never deleted from the registry and its data
+  stays, so its stored data and derived entries stay (pruning only drops sensors in neither
+  the registry nor the store, unchanged). Documented in `docs/cli.md` and
+  `docs/sensors.md` (*Retire a sensor*). The off-site log error for an unknown sensor now
+  says that the off-site log names a sensor missing from the sensor registry and suggests
+  keeping it with status `retired`. **Scope:** this touched the WP-1.8 file
+  `src/sivin/registry/offsite/messages.py` and `tests/registry/test_offsite.py` (message text
+  only), at the orchestrator's request.
+
+Gates after the follow-up (in `/home/user/wt/wp-1.7`): `make lint` → all checks passed;
+`make type` → `Success: no issues found in 161 source files`; `make test` → **1756 passed**;
+`make cov` → total 99.82 % (`redaction.py`, `app/quality.py`, `offsite/messages.py` 100 %,
+`logging_setup.py`, `app/indices.py` 99 %).

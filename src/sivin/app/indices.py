@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -26,6 +28,9 @@ from sivin.registry.model import Placement
 from sivin.registry.registry import SensorRegistry
 
 logger = logging.getLogger(__name__)
+
+SEASON_FILE: Final = re.compile(r"[0-9]{4}\.json")
+"""Name of a season file of the indices directory; other files are never touched."""
 
 PREVIOUS_YEARS_LOADED: Final = 1
 """Calendar years before the season year loaded into the index context (count).
@@ -388,6 +393,7 @@ class IndicesWriter:
                 entries[index_id] = entry
             sensors[str(sensor)] = entries
         self._prune(sensors, report.window.season)
+        self._prune_other_seasons(report.window.season)
         updated = {
             "season": report.window.season,
             "data_from": report.window.first.isoformat(),
@@ -395,6 +401,22 @@ class IndicesWriter:
             "sensors": dict(sorted(sensors.items())),
         }
         return self._writer.write(path, updated)
+
+    def _prune_other_seasons(self, current: int) -> None:
+        """Prune the season files other than ``current`` (rewritten only when changed)."""
+        if not self._directory.is_dir():
+            return
+        for path in sorted(self._directory.glob(f"*{INDICES_SUFFIX}")):
+            if SEASON_FILE.fullmatch(path.name) is None or int(path.stem) == current:
+                continue
+            document = read_document(path)
+            sensors_doc = None if document is None else document.get("sensors")
+            if document is None or not isinstance(sensors_doc, dict):
+                continue
+            sensors = copy.deepcopy(sensors_doc)
+            self._prune(sensors, int(path.stem))
+            if sensors != sensors_doc:
+                self._writer.write(path, {**document, "sensors": sensors})
 
     def _prune(self, sensors: dict[str, Any], season: int) -> None:
         if self._known is not None:

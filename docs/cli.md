@@ -41,6 +41,7 @@ are `SIVIN_USER` and `SIVIN_PASSWORD`; they are never printed or logged.
 | 3 | `SETUP_ERROR` | Nothing could be done: not inside a project, invalid configuration, invalid sensor registry or off-site log (MIGRATION_PLAN §2.8: an invalid log stops the run). |
 | 4 | `DATA_SOURCE_UNAVAILABLE` | The portal could not be used: missing credentials, failed login, portal or browser unreachable, device list unreadable. `sivin fetch` stops; `sivin run` goes on with the stored data (QC, indices, run record) and still ends with 4. |
 | 5 | `INTERNAL_ERROR` | An unexpected exception (a bug). The full traceback is printed to standard error with the credentials replaced by `***` (Typer's pretty tracebacks are off), so it is safe in a public Actions log. Please report it. |
+| 130 | — (Click) | Interrupted with Ctrl-C (`KeyboardInterrupt`): Click prints `Aborted!` and exits with 130 (128 + SIGINT), no traceback. Files are written atomically, so an interrupted run leaves complete files; the run record of that run is missing. |
 
 `sivin run` exits with the most severe code of its steps (4 > 3 > 1 > 0; 5 ends any command at once); the scheduled
 workflow (WP-4.1) can therefore tell a broken portal or missing secrets (4) from a routine
@@ -60,6 +61,11 @@ replaces their values by `***` wherever text leaves the process:
 
 The portal error messages are redacted with the credentials the fetch actually used, even when
 they did not come from the environment (Selenium may quote the typed text in an exception).
+Besides the literal value, the forms an exception or a log may quote it in are redacted too:
+`repr`/JSON escaping, backslash-escaped quotes, the character list of a WebDriver `send_keys`
+body (`'P', 'a', …` and `"P", "a", …`) and URL encoding. `warnings.warn` messages are routed
+through logging, so they pass the same filter. A log call whose arguments do not fit its
+format is logged as its redacted raw message and arguments instead of stopping the run.
 A value shorter than 4 characters is **not** redacted: replacing such a short string would
 mangle unrelated text and still reveal its length and position. A single WARNING at start-up
 names the variable (never its value); use credentials of at least 4 characters.
@@ -82,6 +88,13 @@ $ sivin --config /tmp/try.yaml config show
 Prints the JSON schema of `config/sivin.yaml`, including the settings models of all registered
 quality checks, alignment strategies and indices. With `--markdown` it prints the key
 reference tables that are part of [configuration.md](configuration.md#reference).
+
+**Retiring a sensor.** A sensor that leaves service stays in `sensors/sensors.geojson` with
+`status: "retired"` (and a closed last placement); do not delete it from the registry and do
+not delete its data. Its stored data and derived entries stay; derived entries are pruned only
+for a sensor in neither the registry nor the store. An off-site log entry that names a sensor
+missing from the registry makes the log invalid (exit 3), with a message suggesting exactly
+this. See [sensors.md](sensors.md#retire-a-sensor).
 
 ## `sivin sensors check`
 

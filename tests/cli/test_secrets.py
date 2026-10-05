@@ -6,11 +6,15 @@ driver error message might. Everything here is SYNTHETIC; no portal is contacted
 
 from __future__ import annotations
 
+import json
 import logging
+import runpy
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 import pytest
 from selenium.common.exceptions import WebDriverException
@@ -24,6 +28,7 @@ from sivin.app.outcome import Outcome
 from sivin.cli import main as cli
 from sivin.cli.main import entry_point
 from sivin.cli.state import CliOverrides
+from sivin.ingest.portal.credentials import PortalCredentials, Secret
 from sivin.redaction import MIN_SECRET_LENGTH, REDACTED
 
 RUN_TIME = datetime(2026, 10, 5, 4, 0, tzinfo=UTC)
@@ -172,3 +177,90 @@ def test_python_dash_m_runs_the_entry_point() -> None:
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.startswith("sivin ")
+
+
+TRICKY_PASSWORD = "pw\\\"q'é€ x-42"
+"""SYNTHETIC password with a backslash, both quote kinds, non-ASCII characters and a space."""
+
+TRICKY_USER = 'op"\\é-user'
+"""SYNTHETIC user name with a double quote, a backslash and a non-ASCII character."""
+
+LEAK_FORMS: dict[str, Callable[[str], str]] = {
+    "plain": lambda text: text,
+    "repr": repr,
+    "json": json.dumps,
+    "json-unicode": lambda text: json.dumps(text, ensure_ascii=False),
+    "char-list": lambda text: str({"value": list(text)}),
+    "json-char-list": lambda text: json.dumps({"value": list(text)}),
+    "url": lambda text: quote(text, safe=""),
+    "url-plus": lambda text: quote_plus(text, safe=""),
+    "escaped-quotes": lambda text: text.replace("\\", "\\\\").replace('"', '\\"'),
+}
+
+
+def probe_forms(secret: str) -> set[str]:
+    """Every form of ``secret`` that must not appear anywhere (quotes stripped)."""
+    forms = {LEAK_FORMS[name](secret) for name in LEAK_FORMS}
+    forms |= {repr(secret)[1:-1], json.dumps(secret)[1:-1], str(list(secret))[1:-1]}
+    return forms
+
+
+@pytest.mark.parametrize("form", sorted(LEAK_FORMS))
+@pytest.mark.parametrize("field", ["username", "password"])
+def test_escaped_forms_of_the_credentials_are_redacted(
+    project: Project, monkeypatch: pytest.MonkeyPatch, form: str, field: str
+) -> None:
+    monkeypatch.setenv("SIVIN_USER", TRICKY_USER)
+    monkeypatch.setenv("SIVIN_PASSWORD", TRICKY_PASSWORD)
+    original = fake.FakeElement.send_keys
+
+    def send_keys(self: fake.FakeElement, text: str) -> None:
+        if self.key == field:
+            raise WebDriverException(f"cannot type {LEAK_FORMS[form](text)} into <{field}>")
+        original(self, text)
+
+    monkeypatch.setattr(fake.FakeElement, "send_keys", send_keys)
+    obj = CliOverrides(
+        drivers=drivers(),
+        credentials=lambda: PortalCredentials(TRICKY_USER, Secret(TRICKY_PASSWORD)),
+        clock=lambda: RUN_TIME,
+    )
+    result = runner.invoke(cli.app, ["run", "--season", "2026"], obj=obj)
+    assert result.exit_code == 4, result.output
+    assert "Portal session failed: WebDriverException: Message: cannot type" in result.stderr
+    files = written_texts(project.root)
+    assert any(name.startswith("data/runs/") for name in files)
+    assert any(name.startswith("data/derived/") for name in files)
+    for secret in (TRICKY_USER, TRICKY_PASSWORD):
+        for leaked in probe_forms(secret):
+            assert leaked not in result.stdout
+            assert leaked not in result.stderr
+            for name, text in files.items():
+                assert leaked not in text, name
+
+
+def test_ctrl_c_exits_with_130_without_a_traceback(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SIVIN_PASSWORD", fake.PASSWORD)
+
+    def interrupted(self: ServiceFactory) -> None:
+        raise KeyboardInterrupt(fake.PASSWORD)
+
+    monkeypatch.setattr(ServiceFactory, "sensors_check", interrupted)
+    with pytest.raises(SystemExit) as raised:
+        entry_point(["sensors", "check"])
+    assert raised.value.code == 130
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert fake.PASSWORD not in captured.err + captured.out
+
+
+def test_dunder_main_calls_the_entry_point(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["sivin", "sensors", "check"])
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_module("sivin", run_name="__main__", alter_sys=True)
+    assert raised.value.code == 0
+    assert "Sensor registry:" in capsys.readouterr().out

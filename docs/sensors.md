@@ -170,9 +170,14 @@ samples out of the indices.
 
 ### Retire a sensor
 
-Set `to` of the last placement and `status: "retired"`. Keep the feature: its placement
-history is needed to interpret the data it recorded. Delete a feature only if it was added by
-mistake.
+Set `to` of the last placement and `status: "retired"`. **Do not delete the feature** and do
+not delete its data: its placement history is needed to interpret the data it recorded, its
+off-site log entries must still name a registered sensor (otherwise the log is invalid and QC
+stops), and its stored data and derived entries (events, indices of past seasons) stay
+published. A retired sensor is still quality-controlled from its stored data; only the
+download stops. Derived entries are pruned only for a sensor that is in neither the registry
+nor the store ([storage.md](storage.md#derived-data-wp-17)). Delete a feature only if it was
+added by mistake.
 
 ## Off-site log
 
@@ -296,7 +301,7 @@ reported at once. Examples (shortened):
 | Message | Cause |
 |---|---|
 | `line 31: the key 'entries' appears a second time (first on line 25); keep only one - YAML would silently use the last (put all entries as '- sensor: ...' items under one 'entries:')` | A second `entries:` (or any key twice in one entry). |
-| `entry #2, 'sensor' (line 31): sensor '12345678' is not in sensors/sensors.geojson (known sensors: 77678271, …); check the serial, or add the sensor to the registry first` | Unknown sensor, typo in the serial. |
+| `entry #2, 'sensor' (line 31): the off-site log names sensor '12345678', which is not in the sensor registry sensors/sensors.geojson (known sensors: 77678271, …); check the serial, or add the sensor to the registry. A sensor that left service stays in the registry with status 'retired' instead of being deleted` | Unknown sensor: a typo in the serial, or a sensor deleted from the registry (restore it with `status: "retired"`). |
 | `entry #1, 'sensor' (line 2): Legacy short name '9986' is ambiguous … Use the full 8-digit serial.` | A 4-digit short name that fits several sensors. |
 | `entry #2, 'to' (line 33): is empty - write a date/time, or 'open' if the sensor is still off site` | `to:` with nothing after it. |
 | `entry #2 (line 31): the key 'to' is missing - add a line like to: "2026-03-05 16:00"   (or  to: open  if the sensor is still off site)` | A required key is missing (each key has its own example). |
