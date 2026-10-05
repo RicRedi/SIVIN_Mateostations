@@ -63,16 +63,40 @@ changing one is a plan change approved by the owner.
 ### Row validity (owner decision 2026-10-05)
 
 A measurement is one row: a timestamp with a temperature and a humidity. **If one variable is
-missing at a given time, the whole measurement is invalid** (plan §0.5, §2.7). Every layer
-applies the same rule:
+missing at a given time, the whole measurement is invalid** (plan §0.5, §2.7). The layers apply
+the rule in two different ways:
+
+*Checked on the values* (correct for any input, flagged or not):
+
+| Layer | Rule |
+|---|---|
+| core (`MeasurementSeries.complete_mask`) | `True` only if both values are present and no flag of the exclusion mask is set |
+| core (`DailyWeather`) | uses `complete_mask`: a sample counts only with both values, regardless of the `MISSING` flag |
+| input validation (`values-present`) | a table in which one variable has no value at all is an ERROR (every row would be invalid) |
+
+*Sets the `MISSING` flag* (the producers of the flag):
 
 | Layer | Rule |
 |---|---|
 | parsers (`TabularExportReader.assemble`) | a row with `temp_c` **or** `rh_pct` missing gets `QcFlag.MISSING` |
-| input validation (`values-present`) | a table in which one variable has no value at all is an ERROR (every row would be `MISSING`) |
 | quality control (`MissingValueCheck`) | default rule `any`: `MISSING` when one variable is `NaN` |
-| core (`MeasurementSeries.complete_mask`, `DailyWeather`) | a sample counts only if both values are present and no excluding flag is set, independent of the `MISSING` flag |
-| web (`DISPLAY_EXCLUDE_MASK`) | the full `DEFAULT_EXCLUDE` (311): `MISSING` hides the whole row |
+
+*Relies on the `MISSING` flag* (correct only if the flag is set and the exclusion mask contains
+`MISSING`):
+
+| Layer | Location | What happens on unflagged data |
+|---|---|---|
+| analytics | `analytics/disease/botrytis.py:289-309` | a humidity-only row counts as wet and extends a wetness period |
+| analytics | `analytics/disease/powdery_mildew.py:72` | per-sample hours use temperature-only rows |
+| analytics | `analytics/ripening/durations.py:60,140,270` | values masked by flags only, `NaN` handled per variable |
+| alignment | `alignment/strategies.py:104` | grid points valid for one variable and not the other |
+| web | `DISPLAY_EXCLUDE_MASK` (= `DEFAULT_EXCLUDE`, 311) | a `null` without `MISSING` keeps the other value (see `docs/web.md`) |
+
+**Data read from the measurement store come back with `qc = 0`** (the store keeps no flags,
+§2.5). The QC pipeline (`QualityPipeline`, with `MissingValueCheck`) must therefore run on store
+data **before** analytics, alignment and the site export, or the locations above see unflagged
+half-rows. WP-1.7 (integration) wires this order and switches the analytics and alignment
+locations above to `MeasurementSeries.complete_mask`, so that they no longer depend on the flag.
 
 The `qc` field stays one flag set per row; the `NaN` of the other variable is not replaced.
 

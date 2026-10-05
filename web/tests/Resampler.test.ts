@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDE_MASK, DISPLAY_EXCLUDE_MASK, QcFlag, QcMask } from '../src/domain/QcFlags';
 import { RawSeries } from '../src/domain/RawSeries';
-import { RAW_GAP_THRESHOLD_S, Resampler } from '../src/domain/Resampler';
+import { NOMINAL_STEP_S, RAW_GAP_THRESHOLD_S, Resampler } from '../src/domain/Resampler';
 import { utc } from './helpers';
 
 const ID = '11111111';
@@ -88,12 +88,25 @@ describe('Resampler.raw', () => {
     const resampler = new Resampler(new QcMask());
     const raw = series([
       [H0, 10, 0],
-      [H0 + 1825, 11, QcFlag.PRE_DEPLOYMENT],
-      [H0 + 1825 + RAW_GAP_THRESHOLD_S + 1, 12, 0],
+      [H0 + 1830, 11, QcFlag.PRE_DEPLOYMENT],
+      [H0 + 1830 + RAW_GAP_THRESHOLD_S + 1, 12, 0],
     ]);
     const result = resampler.raw(raw, 'temp_c');
-    const gapT = Math.round((2 * H0 + 2 * 1825 + RAW_GAP_THRESHOLD_S + 1) / 2);
-    expect(result.t).toEqual([H0, H0 + 1825, gapT, H0 + 1825 + RAW_GAP_THRESHOLD_S + 1]);
+    const gapT = Math.round((2 * H0 + 2 * 1830 + RAW_GAP_THRESHOLD_S + 1) / 2);
+    expect(result.t).toEqual([H0, H0 + 1830, gapT, H0 + 1830 + RAW_GAP_THRESHOLD_S + 1]);
     expect(result.values).toEqual([10, null, null, 12]);
+  });
+
+  it('pins the gap threshold: 3 x 1830 s = 5490 s, a longer step breaks the line', () => {
+    expect(NOMINAL_STEP_S).toBe(1830);
+    expect(RAW_GAP_THRESHOLD_S).toBe(5490);
+    const resampler = new Resampler(new QcMask());
+    // Steps of exactly 5490 s (two missed samples) stay connected; 5491 s gets a break.
+    const connected = resampler.raw(series([[H0, 10, 0], [H0 + 5490, 11, 0]]), 'temp_c');
+    expect(connected.t).toEqual([H0, H0 + 5490]);
+    const broken = resampler.raw(series([[H0, 10, 0], [H0 + 5491, 11, 0]]), 'temp_c');
+    // break stamped at the midpoint, rounded: H0 + 2745.5 -> H0 + 2746
+    expect(broken.t).toEqual([H0, H0 + 2746, H0 + 5491]);
+    expect(broken.values).toEqual([10, null, 11]);
   });
 });

@@ -186,6 +186,13 @@ though:
   matching `docs/indices/*.md` and `docs/quality-control.md`, `docs/alignment.md`. Proposal:
   switch them to `DEFAULT_SAMPLING_INTERVAL_S`, or better, pass `time.expected_interval_s`
   from the configuration (planned in WP-1.7).
+- Prose mentions of 1825 s (docstrings and comments, no behaviour), found in review:
+  `src/sivin/alignment/grid.py:32-37` (default grid step and `MIN_GRID_STEP_S` docstrings),
+  `src/sivin/alignment/aligner.py:3`, `src/sivin/analytics/ripening/durations.py:3`,
+  `src/sivin/quality/checks/sampling.py:3`, `src/sivin/analytics/disease/sampling.py:3`.
+- `docs/alignment.md:99` says the aligner's `params.expected_interval_s` default of 1825 s is
+  "same as `time.expected_interval_s`". Since this WP that is wrong: the time default is
+  1830 s. It should be fixed together with the aligner default (WP-1.7).
 - `src/sivin/config.py:58-64`: the `source_timezone` description still says "Not yet confirmed
   by a real export (owner question Q2)". Only `expected_interval_s` was in scope.
 - `config/one_variable_plot.yaml`, `config/two_variable_plot.yaml`: legacy `T_s: 1825`
@@ -204,7 +211,13 @@ though:
    in-repo code satisfies it.
 3. **Should the analytics and the aligner enforce whole-row validity themselves** (e.g. use
    `complete_mask`)? Today they rely on the `MISSING` flag (see *Out of scope*).
-4. Q8, Q9, Q10, Q11 from the plan remain open; nothing in this WP depends on their answers.
+4. **`values-present` quarantines the whole file** when one variable has no value at all (for
+   example a failed humidity channel). Under the whole-row rule that file holds no valid
+   measurement, so the valid values of the other variable never reach the store. They stay in
+   quarantine and could be re-imported if the rule ever changes. Is that consequence
+   acceptable, or should such files be imported with every row `MISSING`, which keeps the raw
+   values in the store?
+5. Q8, Q9, Q10, Q11 from the plan remain open; nothing in this WP depends on their answers.
 
 ## Review
 
@@ -285,12 +298,12 @@ orchestrator should schedule it (hand-off open question 3).
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | docs/architecture.md:66-77 | "Every layer applies the same rule": the table leaves out analytics and alignment, which do **not** apply it on their own (see the classification). It also does not say that store data come back with `qc = 0`, so QC must run before them. Input: store → aligner → 20 half-valid grid points. Fix: add a row "analytics, alignment, web: rely on `MISSING`; run `QualityPipeline` on store data first" (or reword "every layer"). | open |
-| minor | src/sivin/core/ids.py:61 | The underscore label is `[A-Za-z][A-Za-z0-9-]*`, while the spaced variant accepts any label. If spaces were replaced by `_`, a multi-word label (`VUT Brno` → `VUT_Brno`) or one with diacritics (`VÚT`) is rejected. Today all four labels are `VUT` (sensors.geojson), and a mismatch fails loudly (`sensor-id` error), never resolving to a wrong sensor. Fix if Q8 shows such names: allow non-digit-leading Unicode letters and document it. | open |
-| nit | src/sivin/core/ids.py:60 | The device number in the underscore variant is limited to 1–7 digits (deliberate, for disambiguation). If the portal ever issues 8-digit device numbers, those names fail loudly. Worth one line in `docs/data-format.md`. | open |
-| nit | tests/fixtures/exports/README.md:9-12 | Still says the layouts are "not verified on a real export (owner questions Q1 and Q2)", two paragraphs after the new exception note. The worker already touched this file. | open |
-| nit | docs/wp_log/WP-0.2.md (*Out of scope*) | The 1825 s list leaves out prose mentions in `alignment/grid.py:32-37`, `alignment/aligner.py:3`, `analytics/ripening/durations.py:3`, `quality/checks/sampling.py:3` and `analytics/disease/sampling.py:3`. `docs/alignment.md:99` now wrongly says its 1825 default is "same as `time.expected_interval_s`". | open |
-| nit | web/tests/Resampler.test.ts:91-96 | The gap test still uses 1825 s offsets, and no test pins `RAW_GAP_THRESHOLD_S` = 5490 s numerically. Harmless, because the test uses the symbol. | open |
+| minor | docs/architecture.md:66-77 | "Every layer applies the same rule": the table leaves out analytics and alignment, which do **not** apply it on their own (see the classification). It also does not say that store data come back with `qc = 0`, so QC must run before them. Input: store → aligner → 20 half-valid grid points. Fix: add a row "analytics, alignment, web: rely on `MISSING`; run `QualityPipeline` on store data first" (or reword "every layer"). | fixed: the section now separates value-checked layers (core, `values-present`), flag producers (parsers, QC) and flag-dependent locations (the five risk locations), states that store reads return `qc = 0` so QC must run first, and notes that WP-1.7 switches them to `complete_mask` |
+| minor | src/sivin/core/ids.py:61 | The underscore label is `[A-Za-z][A-Za-z0-9-]*`, while the spaced variant accepts any label. If spaces were replaced by `_`, a multi-word label (`VUT Brno` → `VUT_Brno`) or one with diacritics (`VÚT`) is rejected. Today all four labels are `VUT` (sensors.geojson), and a mismatch fails loudly (`sensor-id` error), never resolving to a wrong sensor. Fix if Q8 shows such names: allow non-digit-leading Unicode letters and document it. | fixed: a label is one or more `_`-separated words, each starting with a Unicode letter (`VÚT`, `VUT_Brno`, `Vinice_Žabčice-2`). The trailing export time stays unambiguous because no word starts with a digit. New tests: accepted and rejected cases, plus 300 seeded generated names. A throwaway fuzz against `11f71ef` and `c09eddf` (500 and 100 000 names) found 0 names that resolve differently from before; all newly accepted names resolve to their generated serial |
+| nit | src/sivin/core/ids.py:60 | The device number in the underscore variant is limited to 1–7 digits (deliberate, for disambiguation). If the portal ever issues 8-digit device numbers, those names fail loudly. Worth one line in `docs/data-format.md`. | fixed: the 1–7 digit limit and the label and timestamp rules are documented in `docs/data-format.md` (portal CSV section) |
+| nit | tests/fixtures/exports/README.md:9-12 | Still says the layouts are "not verified on a real export (owner questions Q1 and Q2)", two paragraphs after the new exception note. The worker already touched this file. | fixed: the paragraph now says the CSV layout is confirmed by `real/` and only XLSX is unverified (Q11) |
+| nit | docs/wp_log/WP-0.2.md (*Out of scope*) | The 1825 s list leaves out prose mentions in `alignment/grid.py:32-37`, `alignment/aligner.py:3`, `analytics/ripening/durations.py:3`, `quality/checks/sampling.py:3` and `analytics/disease/sampling.py:3`. `docs/alignment.md:99` now wrongly says its 1825 default is "same as `time.expected_interval_s`". | fixed: the prose mentions and `docs/alignment.md:99` were added under *Out of scope* |
+| nit | web/tests/Resampler.test.ts:91-96 | The gap test still uses 1825 s offsets, and no test pins `RAW_GAP_THRESHOLD_S` = 5490 s numerically. Harmless, because the test uses the symbol. | fixed: the gap test uses 1830 s offsets; a new test pins `NOMINAL_STEP_S` = 1830 and `RAW_GAP_THRESHOLD_S` = 5490, with 5490 s connected and 5491 s broken |
 
 No blocker or major finding.
 

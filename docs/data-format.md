@@ -68,6 +68,18 @@ the first three columns.)
 - File name examples: `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv` (legacy
   scripts) and `MeteoData_8615620_77799986_VUT_20260301_223842.csv` (the real export, with
   underscores; owner question Q8). `SensorId.parse` accepts both.
+- Rules of the underscore spelling (`UNDERSCORE_FILE_NAME_PATTERN`), which keep it unambiguous:
+  - the `MeteoData_` prefix is required;
+  - the portal device number is optional and has **1–7 digits** (the portal's is `8615620`).
+    An 8-digit run after the prefix is always the serial, so a name with an 8-digit device
+    number (or none) is never misread. If the portal ever issues 8-digit device numbers, such
+    names are rejected with a `sensor-id` ERROR, never assigned to a wrong sensor;
+  - the label is optional, one or more `_`-separated words, each starting with a Unicode
+    letter and continuing with letters, digits or `-` (`VUT`, `VÚT`, `VUT_Brno`). A word never
+    starts with a digit, so the label cannot absorb the export time;
+  - the export time `_YYYYMMDD_HHMMSS` (8 and 6 digits) is optional and comes last, before a
+    browser copy suffix such as ` (1)` and the extension. `MeteoData_77799986_20260301.csv`
+    is rejected instead of being read as sensor `20260301`.
 
 ### Portal XLSX (downloaded by legacy `chrome_driver.py`)
 

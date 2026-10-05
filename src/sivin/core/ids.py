@@ -25,6 +25,9 @@ _LEGACY_SUFFIX_PATTERN: Final = re.compile(rf"[0-9]{{{LEGACY_SUFFIX_DIGITS}}}")
 _EXPORT_TIMESTAMP: Final = r"[0-9]{8}_[0-9]{6}"
 """Export time stamp appended by the portal, e.g. ``20260301_223857`` (date and time of day)."""
 
+_LABEL_WORD: Final = r"[^\W\d_](?:[^\W_]|-)*"
+"""One word of a label: a Unicode letter, then letters, digits or hyphens (e.g. ``VÚT``, ``V2``)."""
+
 _COPY_AND_EXTENSION: Final = r"""
     (?:\s*\((?P<copy>[0-9]+)\))?            # browser copy suffix, e.g. " (1)"
     (?:\.[A-Za-z0-9]+)?                     # file extension, e.g. ".csv" or ".xlsx"
@@ -59,7 +62,7 @@ UNDERSCORE_FILE_NAME_PATTERN: Final = re.compile(
     MeteoData_                                     # export file prefix (required)
     (?:(?P<device>[0-9]{{1,{SERIAL_DIGITS - 1}}})_)?  # portal device number, e.g. "8615620_"
     (?P<serial>[0-9]{{{SERIAL_DIGITS}}})              # canonical serial number
-    (?:_(?P<label>[A-Za-z][A-Za-z0-9-]*))?          # label without parentheses, e.g. "_VUT"
+    (?:_(?P<label>{_LABEL_WORD}(?:_{_LABEL_WORD})*))?  # label, e.g. "_VUT", "_VÚT", "_VUT_Brno"
     (?:_(?P<exported>{_EXPORT_TIMESTAMP}))?           # export timestamp
     {_COPY_AND_EXTENSION}
     """,
@@ -73,7 +76,9 @@ The spelling is accepted only with the ``MeteoData_`` prefix, and it stays unamb
 
 * the device number is shorter than a serial (the portal's is 7 digits), so a run of
   eight digits after the prefix or after the device number is always the serial,
-* a label must start with a letter, so it never swallows the digits of the export time, and
+* a label is one or more ``_``-separated words, each starting with a (Unicode) letter, e.g.
+  ``VUT``, ``VÚT`` or ``VUT_Brno``; a word never starts with a digit, so the label never
+  swallows the digit groups of the export time, and
 * the export time is two digit groups of fixed length (8 and 6) at the end.
 
 So ``MeteoData_77799986_20260301.csv`` is rejected rather than read as sensor ``20260301``.
