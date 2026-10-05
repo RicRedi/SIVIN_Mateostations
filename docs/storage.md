@@ -65,35 +65,61 @@ file's year raise `StoreFormatError` naming the file and line. A malformed file 
 overwritten by the store; repair it by hand (or restore it from git) and re-run.
 
 **QC flags are not stored.** The `qc` column of `MeasurementSeries` is dropped on write and
-`read` returns `qc = 0`: quality control is recomputed from the raw values at build time, so a
-change of a QC threshold never requires rewriting the raw data, and the raw files hold only what
-the sensors measured.
+`read` returns `qc = 0`. The automatic checks (range, spike, step, persistence, deployment,
+neighbours, timestamps) are recomputed from the raw values at build time, so a change of a QC
+threshold never requires rewriting the raw data, and the raw files hold only what the sensors
+measured. `MANUAL_EXCLUDE` cannot be recomputed from raw values: it is an owner decision. It
+will come from a human-edited exclusions file that the QC pipeline applies at build time (a
+later workpackage); it is never stored in the raw files. If a series passed to `append`
+carries any QC bits, the store logs a **warning** with the number of rows per flag, so a
+caller that set flags (in particular `MANUAL_EXCLUDE`) by mistake notices that they are not
+kept.
 
 ## Appending, deduplication and conflicts
 
 `MeasurementStore.append(series)` merges a series into the store, partition by partition. Rows
-are identified by `timestamp_utc` (the sensor is given by the directory):
+are identified by `timestamp_utc` (the sensor is given by the directory). A timestamp that is
+not stored yet adds a row (`new_rows`). For a stored timestamp, `temp_c` and `rh_pct` are merged
+**column by column**:
 
-| Incoming row | Result | Counted as |
-|---|---|---|
-| timestamp not stored yet | added | `new_rows` |
-| same timestamp, same `temp_c` and `rh_pct` (missing equals missing) | stored row kept unchanged, including its `source` | `identical_skipped` |
-| same timestamp, different values | decided by the conflict policy, logged with both values | `conflicting_rows` (and `replaced_rows` when the incoming row wins) |
+| Stored value | Incoming value | Result | Counted as |
+|---|---|---|---|
+| equal to the incoming one, or both missing | | unchanged | — |
+| missing | present | the incoming value is filled in | `filled_values` |
+| present | missing | the stored value is kept | `ignored_missing_values` |
+| present | present, different | decided by the conflict policy, logged and recorded | `conflicting_values` (and `replaced_values` when the incoming value wins) |
 
-`source` is not compared: the same data downloaded again under another file name are identical
-rows and change nothing. A missing value against a present value is a conflict.
+A missing value therefore **never overwrites a measurement**, whatever the policy. This matters
+because a truncated last row of an export typically has missing values. An incoming row whose
+values all equal the stored row counts as `identical_skipped`. Example: stored
+`(temp_c, rh_pct) = (NaN, 70.0)` and incoming `(11.0, NaN)` give `(11.0, 70.0)`.
+
+`source` is not compared. A row keeps its stored `source` unless at least one of its values is
+taken from the import (filled or replaced); then it gets the incoming `source`. The same data
+downloaded again under another file name are identical rows and change nothing.
 
 Conflict policies (extension point `ConflictPolicy`, registry `conflict_policy_registry`,
 configuration key proposed as `storage.conflict_policy`):
 
-- `prefer_newest` (**default**, `PreferNewest`): the incoming row, i.e. the newer import, wins.
-- `prefer_existing` (`PreferExisting`): the stored row is kept.
-- `raise` (`RaiseOnConflict`): the append fails with `MeasurementConflictError`.
+- `prefer_newest` (**default**, `PreferNewest`): the value **appended last** wins. "Newest"
+  means import order, not the age of the export: the pipeline appends exports in download
+  order, so the latest download wins. **A back-fill of older exports** (e.g. the legacy
+  hand-merged `data.xlsx`) **must use `prefer_existing`**; under `prefer_newest` its older
+  values would replace those of newer exports.
+- `prefer_existing` (`PreferExisting`): the stored value is kept.
+- `raise` (`RaiseOnConflict`): the append fails with `MeasurementConflictError` and writes
+  nothing.
 
-Each conflict is logged as a warning with the stored and the incoming values and sources; after
-20 conflicts in one partition only a summary line is logged.
+Every conflict is logged as a warning with both values and sources, and recorded as a
+`ConflictDecision` (sensor, timestamp, column, stored and incoming value and source, kept
+`incoming`/`stored`, policy). `AppendResult.conflicts` holds the first
+`max_recorded_conflicts` decisions of an append (configuration key proposed as
+`storage.max_recorded_conflicts`, default 100), in time order. The pipeline copies them into
+`RunRecord.conflicts`, so the `data` branch records which stored values were replaced. Beyond
+the cap, conflicts are only counted (`conflicting_values`) and summarised in one log line per
+partition file.
 
-A file is rewritten only when it gains or replaces a row. Hence:
+A file is rewritten only when it gains a row or a value changes (fill or replacement). Hence:
 
 - importing the same export twice leaves every file byte-identical (tested with SHA-256);
 - overlapping exports merge into one gap-free series;
@@ -108,18 +134,29 @@ Each file is replaced atomically (`AtomicFileWriter`): the new content is writte
 temporary file in the same directory, flushed and `fsync`-ed, then renamed over the target with
 `os.replace`. A failure before the rename (exception, full disk) removes the temporary file and
 leaves the old file intact; a reader sees either the complete old or the complete new file.
-An append touching two years writes two files, each atomically but not as one transaction; if
-the second write fails, repeating the append completes it (appends are idempotent). The store
-assumes a single writer at a time (one pipeline run), which the scheduled workflow guarantees.
+An append touching two years writes two files, each atomically but not as one transaction. If
+the second write fails, the first file keeps its new content. Repeating the append completes the
+rest and gives the same bytes as one clean append (tested). However, its counts report the rows
+already written as `identical_skipped` instead of `new_rows`, so **the pipeline must record the
+failed attempt** (e.g. in `RunRecord.failures`); otherwise the run log under-reports new data.
+The store assumes a single writer at a time (one pipeline run), which the scheduled workflow
+guarantees.
 
 ## Run log
 
 `RunLog` appends one `RunRecord` per pipeline run as one JSON line to
 `runs/<YYYY-MM-DD>.jsonl`, the UTC date of the run start. Fields: `started_at`,
 `finished_at` (ISO 8601 UTC with `Z`), `files` (processed export files), `appends` (per sensor:
-`new_rows`, `identical_skipped`, `conflicting_rows`, `replaced_rows`), `validation_issues`
-(number of input-validation findings per category, filled from the WP-1.2 report) and
-`failures` (one message per failure). Keys are sorted. Lines are only ever appended.
+`new_rows`, `identical_skipped`, `filled_values`, `ignored_missing_values`,
+`conflicting_values`, `replaced_values`), `validation_issues`
+(number of input-validation findings per category, filled from the WP-1.2 report),
+`failures` (one message per failure) and `conflicts` (the recorded conflict decisions, see
+above). Keys are sorted. Lines are only ever appended.
+
+A write interrupted mid-line leaves an incomplete last line. The next append notices that the
+file does not end with a line break and starts a new line first (with a warning), so only the
+broken line is lost. `RunLog.read` skips lines that are not valid records, with a warning naming
+the file and line.
 
 ## Reading
 

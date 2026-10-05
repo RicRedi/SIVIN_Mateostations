@@ -4,12 +4,16 @@
 
 `sivin.storage` stores canonical measurements as flat files without a database:
 `<root>/raw/<sensor_id>/<YYYY>.csv` (UTC-year partitions) and `<root>/runs/<YYYY-MM-DD>.jsonl`
-run logs. `MeasurementStore.append` merges imports on `timestamp_utc`. Identical rows are
-skipped and conflicting rows are decided by a registered `ConflictPolicy` (`PreferNewest`
-default, `PreferExisting`, `RaiseOnConflict`) and logged with both values. A file is rewritten
+run logs. `MeasurementStore.append` merges imports on `timestamp_utc` and, for stored
+timestamps, column by column. A missing value never overwrites a present one; stored gaps are
+filled in. Two present, different values are a conflict, decided by a registered
+`ConflictPolicy` (`PreferNewest` = last appended wins, the default; `PreferExisting`;
+`RaiseOnConflict`). Each conflict is logged with both values and recorded, up to a configurable
+cap, in `AppendResult.conflicts` and `RunRecord.conflicts`. A file is rewritten
 only when its data change, and always atomically (temporary file + `os.replace`).
 `CsvSeriesCodec` writes an exactly specified, byte-stable CSV with lossless shortest-round-trip
-decimals. QC flags are not stored. `RunLog` appends frozen `RunRecord`s as JSON Lines.
+decimals. QC flags are not stored; if a series carries any, a warning gives the count per
+flag. `RunLog` appends frozen `RunRecord`s as JSON Lines and survives an interrupted line.
 `docs/storage.md` documents the layout, format, merge semantics, growth and the Parquet path.
 
 ## Changed files
@@ -17,8 +21,8 @@ decimals. QC flags are not stored. `RunLog` appends frozen `RunRecord`s as JSON 
 - `src/sivin/storage/__init__.py` (re-exports), `store.py` (`MeasurementStore`,
   `AppendResult`), `codec.py` (`SeriesCodec` ABC, `CsvSeriesCodec`), `partitioning.py`
   (`Partitioning` ABC, `YearPartitioning`, `partitioning_registry`), `conflicts.py`
-  (`ConflictPolicy` ABC, `PreferNewest`, `PreferExisting`, `RaiseOnConflict`, `RowConflict`,
-  `StoredRow`, `conflict_policy_registry`), `merge.py` (`SeriesMerger`, `AppendCounts`,
+  (`ConflictPolicy` ABC, `PreferNewest`, `PreferExisting`, `RaiseOnConflict`, `ValueConflict`,
+  `ConflictDecision`, `conflict_policy_registry`), `merge.py` (`SeriesMerger`, `AppendCounts`,
   `MergeOutcome`), `atomic.py` (`AtomicFileWriter`), `runlog.py` (`RunLog`, `RunRecord`),
   `config.py` (`StorageConfig`, `build_store`), `registry.py` (`NamedRegistry`), `errors.py`
   (`StoreError`, `StoreFormatError`, `MeasurementConflictError`).
@@ -29,24 +33,32 @@ decimals. QC flags are not stored. `RunLog` appends frozen `RunRecord`s as JSON 
 
 ```python
 # sivin.storage
-MeasurementStore(root: Path, codec=None, partitioning=None, conflict_policy=None, writer=None)
+MeasurementStore(root: Path, codec=None, partitioning=None, conflict_policy=None, writer=None,
+                 max_recorded_conflicts=100)
     .append(series: MeasurementSeries) -> AppendResult
     .read(sensor_id, start_utc=None, end_utc=None) -> MeasurementSeries   # inclusive, aware
     .sensors() -> list[SensorId]
     .time_range(sensor_id) -> tuple[pd.Timestamp, pd.Timestamp] | None
     .coverage(sensor_id, expected_interval_s, start_utc=None, end_utc=None) -> float | None
     .root -> Path
-AppendResult(sensor_id, counts: AppendCounts, files_written: tuple[Path, ...])  # frozen
-AppendCounts(new_rows, identical_skipped, conflicting_rows, replaced_rows)       # frozen, +
-ConflictPolicy (ABC: keeps_incoming(RowConflict) -> bool); PreferNewest | PreferExisting |
+AppendResult(sensor_id, counts: AppendCounts, files_written: tuple[Path, ...],
+             conflicts: tuple[ConflictDecision, ...])                            # frozen
+AppendCounts(new_rows, identical_skipped, filled_values, ignored_missing_values,
+             conflicting_values, replaced_values)                                # frozen, +
+ValueConflict(sensor_id, timestamp_utc, column, stored_value, incoming_value,
+              stored_source, incoming_source)                                    # frozen
+ConflictDecision(conflict, kept_incoming, policy); to_dict() / from_dict()      # frozen
+ConflictPolicy (ABC: name ClassVar, keeps_incoming(ValueConflict) -> bool); PreferNewest | PreferExisting |
     RaiseOnConflict; conflict_policy_registry ("prefer_newest", "prefer_existing", "raise")
 Partitioning (ABC: keys_of, is_key, bounds, overlaps); YearPartitioning; partitioning_registry
 SeriesCodec (ABC: file_suffix, write(series, IO[bytes]), read(IO[bytes], sensor_id, origin))
 CsvSeriesCodec; AtomicFileWriter.open(target) -> context manager yielding IO[bytes]
 RunLog(root).append(RunRecord) -> Path; .read(day) -> list[RunRecord]; .path_for(day)
 RunRecord(started_at, finished_at, files=(), appends={SensorId: AppendCounts},
-          validation_issues={str: int}, failures=())                              # frozen
-StorageConfig(conflict_policy="prefer_newest", partitioning="year"); build_store(root, config)
+          validation_issues={str: int}, failures=(), conflicts=())                # frozen
+StorageConfig(conflict_policy="prefer_newest", partitioning="year",
+              max_recorded_conflicts=100); build_store(root, config)
+NamedRegistry.register(cls)   # class decorator; key = the class variable `name`
 StoreError > StoreFormatError, MeasurementConflictError
 ```
 
@@ -57,14 +69,16 @@ store with `build_store(paths.resolve(config.paths.data_dir), config.storage)`.
 
 ## How it was verified
 
-All commands in `/home/user/wt/wp-1.4` (ruff 0.16.10, mypy 2.4.0, Python 3.12, pandas 3.0.6,
-numpy 2.5.3):
+Round 2. All commands in `/home/user/wt/wp-1.4` (ruff 0.16.10, mypy 2.4.0, Python 3.12,
+pandas 3.0.6, numpy 2.5.3):
 
 - `make lint` → `All checks passed!`, `51 files already formatted`.
 - `make type` → `Success: no issues found in 30 source files`.
-- `make test` → `276 passed` (95 of them in `tests/storage`).
-- `make cov` → every `src/sivin/storage/*.py` at 100 % (statements and branches; 580 statements,
-  98 branches in the package); `TOTAL 1405 0 276 0 100%`.
+- `make test` → `295 passed` (114 of them in `tests/storage`).
+- `make cov` → every `src/sivin/storage/*.py` at 100 % (statements and branches; 651 statements,
+  104 branches in the package); `TOTAL 1476 0 282 0 100%`.
+- The reviewer's probe `/tmp/claude-0/review-1.4/t1.py` now keeps `temp_c=12.3` (counts
+  `ignored_missing_values=1`) and gives `(11.0, 70.0)` for the mixed case.
 
 Acceptance criteria → tests:
 
@@ -79,9 +93,21 @@ Acceptance criteria → tests:
 - Write survives interruption: `test_failed_write_leaves_old_file_intact` (codec writes half a
   row, then raises), `test_failed_first_write_creates_no_file`, `test_atomic.py` (exception in
   the body, failing `os.replace`).
-- Conflict policies, logging of both values and the log cap: `test_merge.py`, store-level
-  `test_conflict_*`, `test_raise_on_conflict_writes_no_partition` (nothing written in any
-  partition).
+- Conflict policies, logging of both values, recorded decisions and the cap: `test_merge.py`,
+  store-level `test_conflict_*`, `test_raise_on_conflict_writes_no_partition` (nothing written in
+  any partition), `test_recorded_conflicts_are_capped_per_append_across_partitions`.
+- Round 2: missing never overwrites present
+  (`test_missing_incoming_value_never_overwrites_a_stored_value` for all three policies,
+  `test_mixed_missing_values_merge_column_by_column`, store-level
+  `test_missing_value_in_a_reimport_keeps_the_stored_value` with unchanged hashes,
+  `test_missing_values_are_filled_column_by_column`), back-fill semantics
+  (`test_backfill_of_an_older_export_needs_prefer_existing`), QC warning
+  (`test_dropped_qc_flags_are_warned_with_counts_per_flag`), crash between partitions and retry
+  (`test_retry_after_crash_between_partitions_completes_the_append`: bytes equal a clean append,
+  retry counts `new_rows=2, identical_skipped=1`), run-log repair
+  (`test_append_after_interrupted_write_starts_a_new_line`,
+  `test_invalid_line_is_skipped_with_a_warning`), registry name from the class variable
+  (`test_registry.py`).
 - Empty store, unknown sensor, ascending order, QC not stored, codec round trip with NaN and
   sources containing commas, quotes, newlines and non-ASCII, lossless floats (200 values from
   a seeded RNG), exact file bytes, malformed-file rejection: `test_store.py`, `test_codec.py`.
@@ -103,11 +129,13 @@ Acceptance criteria → tests:
 
 ## Deviations
 
-- `MeasurementStore` is about 260 lines including docstrings (about 110 lines of code), above
+- `MeasurementStore` is about 270 lines including docstrings (about 115 lines of code), above
   the ~200-line signal of §1.2. Merging, encoding, partitioning and atomic writing are already
   separate classes; what is left is the public API plus three small private helpers.
 - Added `SeriesCodec` (ABC) next to `CsvSeriesCodec` and a small generic `NamedRegistry`, used
   by the two configurable extension points (conflict policy, partitioning).
+- `RunLog.read` skips invalid lines with a warning instead of raising `StoreFormatError`
+  (round 2, run-log robustness).
 - `read` always returns a `source` column (empty string where unknown) instead of omitting it.
 - The plan says "deduplicate on `sensor_id + timestamp_utc`"; the sensor is given by the
   directory, so deduplication is on `timestamp_utc` within the sensor's files, which is the
@@ -125,6 +153,16 @@ Acceptance criteria → tests:
   `docs/storage.md`). Proposal: update the estimate, or decide the question below.
 - MIGRATION_PLAN §4 says CLI and configuration wiring is done by WP-3.2; this WP's brief names
   WP-1.7. One of the two should be corrected.
+- Manual exclusions (`MANUAL_EXCLUDE`) cannot be recomputed from raw values and are not stored
+  in raw files. Proposal (from the review): a human-edited, PR-reviewed file on `main`, e.g.
+  `config/manual_exclusions.yaml` (`sensor_id`, `start_utc`, `end_utc`, `variables`, `reason`,
+  `decided_by`, `decided_on`), applied at build time by a registered `ManualExclusionCheck` in
+  the QC pipeline. To be assigned to WP-1.5 or WP-1.7 by the owner.
+- `sivin.storage.registry.NamedRegistry` is a generic registry; with the QC checks and
+  aligners needing the same, it should move to `sivin.core` and be unified with
+  `IndexRegistry` (accepted by the orchestrator as a later change).
+- A true "newer *source* wins" policy needs the export time in each row or in
+  `MeasurementSeries`; this depends on the answer to question 1 below.
 - `.gitignore` ignores `/data/` on `main`. The pipeline (WP-4.1) must commit `data/` on the
   `data` branch despite that rule (for example with `git add -f`, or with a branch-specific
   ignore). Mentioned in `docs/storage.md`; `.gitignore` is unchanged.
@@ -134,9 +172,10 @@ Acceptance criteria → tests:
 1. Should `source` hold the full export file name (about 1.45 MB per sensor-year, simple
    provenance) or something shorter, such as the export timestamp (about 0.8 MB)? The code
    stores whatever the parser puts in `MeasurementSeries.source`.
-2. Default conflict policy `prefer_newest` (the newer import wins), as in the plan. Should a
-   conflict also be listed in the run log, not only counted (`conflicting_rows`) and logged?
-   Today only the counts go into `RunRecord.appends`.
+   The reviewer recommends a short export id or timestamp per row, with the full file name in
+   `RunRecord.files` (about 0.8 MB per sensor-year).
+2. (Answered in round 2 by the orchestrator: conflicts are now persisted, bounded, in
+   `AppendResult.conflicts` and `RunRecord.conflicts`.)
 
 ## Review
 
@@ -181,14 +220,14 @@ changed. No `type: ignore`; `Any` is used only for the JSON mapping in `runlog.p
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| blocker | src/sivin/storage/merge.py:229, :175; src/sivin/storage/conflicts.py:114 | A missing value overwrites a real one. Stored `temp_c=12.3, rh_pct=80.0`, then an import with `temp_c=NaN, rh_pct=80.0` under the default `PreferNewest` leaves `temp_c=NaN` in the file (`conflicting_rows=1, replaced_rows=1`). Mixed case: stored `(NaN, 70.0)` and incoming `(11.0, NaN)` stores `(11.0, NaN)`, so the humidity 70.0 is lost. The store is the only copy of the history, so this is silent data loss: only a WARNING line in an ephemeral CI log remains, plus git history. It is also likely in practice, because a truncated or partial last row of a provider export is a NaN row. Fix: merge column by column. A NaN against a value is not a conflict: the present value is kept or filled in, and this is counted separately (e.g. `filled_values`). Only two *present*, different values are a `RowConflict` for the policy. Add tests for both cases at merger and store level, and correct `docs/storage.md:84` ("A missing value against a present value is a conflict"). | open |
-| minor | src/sivin/storage/conflicts.py:114-133; docs/storage.md:89 | `PreferNewest` means "the last *appended* row wins", not "the newer *source* wins" (MIGRATION_PLAN §4: "vyhrává novější zdroj"). A later back-fill of an older export, such as the legacy hand-merged `data.xlsx`, would overwrite values from newer exports. Fix: document that "newest" = import order and that back-fills must use `prefer_existing`. Better: give `RowConflict` an export time, so a policy can compare sources. | open |
-| minor | src/sivin/storage/store.py:128-129; docs/storage.md:67-70 | QC is dropped with only a DEBUG log, and the docs say QC "is recomputed from the raw values". That is false for `MANUAL_EXCLUDE` (bit 256), an owner decision that cannot be derived from raw values. A caller that sets it before `append` loses it silently. Fix: log at WARNING (or raise) when non-recomputable bits such as `MANUAL_EXCLUDE` are present, and correct the docs to say where manual exclusions live (see the proposal below). | open |
-| minor | tests/storage/test_store.py (missing) | The partial multi-partition append and its retry are only described in the docstring and docs, not tested. The reviewer verified the behaviour (see above). Add a test: the writer fails on the 2nd file, then a retry gives bytes identical to a clean append. Also note that the counts of a retry under-report (`identical_skipped` instead of `new_rows`), so the pipeline must record the failed first attempt in `RunRecord.failures`. | open |
-| minor | src/sivin/storage/merge.py:187-206; src/sivin/storage/runlog.py | Conflicts, and so overwritten values, are only in log lines; the run log has counts only. Answer to owner Q2: yes, persist them. Add a bounded `conflicts` list (sensor, timestamp, stored, incoming, decision) to `AppendResult` and `RunRecord`, so the durable `data` branch says which value was replaced. | open |
-| nit | src/sivin/storage/conflicts.py:114/118, src/sivin/storage/partitioning.py:189/197 | The registry name is given twice, in `register("…")` and in `name: ClassVar`, and nothing checks that the two are equal. Derive one from the other or assert equality in `register`. | open |
-| nit | src/sivin/storage/registry.py | `NamedRegistry` is a generic registry living in `storage`, next to the domain `IndexRegistry` in analytics. Propose moving it to `sivin.core` for the other extension points (QC checks, aligners). This is out of this WP's scope; mention it as a proposal. | open |
-| nit | src/sivin/storage/runlog.py:171-177 | A crash during a run-log line write leaves a partial line. The next append then continues that line, and `read(day)` raises for the whole day. Consider starting each append with a newline when the file does not end with `\n`, or skipping and reporting bad lines. | open |
+| blocker | src/sivin/storage/merge.py:229, :175; src/sivin/storage/conflicts.py:114 | A missing value overwrites a real one. Stored `temp_c=12.3, rh_pct=80.0`, then an import with `temp_c=NaN, rh_pct=80.0` under the default `PreferNewest` leaves `temp_c=NaN` in the file (`conflicting_rows=1, replaced_rows=1`). Mixed case: stored `(NaN, 70.0)` and incoming `(11.0, NaN)` stores `(11.0, NaN)`, so the humidity 70.0 is lost. The store is the only copy of the history, so this is silent data loss: only a WARNING line in an ephemeral CI log remains, plus git history. It is also likely in practice, because a truncated or partial last row of a provider export is a NaN row. Fix: merge column by column. A NaN against a value is not a conflict: the present value is kept or filled in, and this is counted separately (e.g. `filled_values`). Only two *present*, different values are a `RowConflict` for the policy. Add tests for both cases at merger and store level, and correct `docs/storage.md:84` ("A missing value against a present value is a conflict"). | fixed (round 2): merge is column by column; missing vs present is `filled_values` / `ignored_missing_values`, never a conflict; only two present, different values reach the policy. Tests for both examples at merger and store level; `docs/storage.md` corrected. |
+| minor | src/sivin/storage/conflicts.py:114-133; docs/storage.md:89 | `PreferNewest` means "the last *appended* row wins", not "the newer *source* wins" (MIGRATION_PLAN §4: "vyhrává novější zdroj"). A later back-fill of an older export, such as the legacy hand-merged `data.xlsx`, would overwrite values from newer exports. Fix: document that "newest" = import order and that back-fills must use `prefer_existing`. Better: give `RowConflict` an export time, so a policy can compare sources. | fixed (round 2): kept "last appended wins" (orchestrator decision); documented in `PreferNewest`, `StorageConfig` and `docs/storage.md`, back-fills must use `prefer_existing`; test `test_backfill_of_an_older_export_needs_prefer_existing`. Source-time policy left as an out-of-scope proposal. |
+| minor | src/sivin/storage/store.py:128-129; docs/storage.md:67-70 | QC is dropped with only a DEBUG log, and the docs say QC "is recomputed from the raw values". That is false for `MANUAL_EXCLUDE` (bit 256), an owner decision that cannot be derived from raw values. A caller that sets it before `append` loses it silently. Fix: log at WARNING (or raise) when non-recomputable bits such as `MANUAL_EXCLUDE` are present, and correct the docs to say where manual exclusions live (see the proposal below). | fixed (round 2): WARNING with counts per flag when any QC bit is set; docs say `MANUAL_EXCLUDE` comes from a future human-edited exclusions file applied by QC (Out of scope). |
+| minor | tests/storage/test_store.py (missing) | The partial multi-partition append and its retry are only described in the docstring and docs, not tested. The reviewer verified the behaviour (see above). Add a test: the writer fails on the 2nd file, then a retry gives bytes identical to a clean append. Also note that the counts of a retry under-report (`identical_skipped` instead of `new_rows`), so the pipeline must record the failed first attempt in `RunRecord.failures`. | fixed (round 2): `test_retry_after_crash_between_partitions_completes_the_append`; under-reporting of a retry and the need to record the failed attempt documented in `append` and `docs/storage.md`. |
+| minor | src/sivin/storage/merge.py:187-206; src/sivin/storage/runlog.py | Conflicts, and so overwritten values, are only in log lines; the run log has counts only. Answer to owner Q2: yes, persist them. Add a bounded `conflicts` list (sensor, timestamp, stored, incoming, decision) to `AppendResult` and `RunRecord`, so the durable `data` branch says which value was replaced. | fixed (round 2): `ConflictDecision` (sensor, timestamp, column, both values and sources, kept, policy) in `AppendResult.conflicts` and `RunRecord.conflicts`, capped by `max_recorded_conflicts` (default 100, config field). |
+| nit | src/sivin/storage/conflicts.py:114/118, src/sivin/storage/partitioning.py:189/197 | The registry name is given twice, in `register("…")` and in `name: ClassVar`, and nothing checks that the two are equal. Derive one from the other or assert equality in `register`. | fixed (round 2): `NamedRegistry.register` is a plain class decorator reading the `name` class variable, the only place the name is set. |
+| nit | src/sivin/storage/registry.py | `NamedRegistry` is a generic registry living in `storage`, next to the domain `IndexRegistry` in analytics. Propose moving it to `sivin.core` for the other extension points (QC checks, aligners). This is out of this WP's scope; mention it as a proposal. | accepted by the orchestrator; proposal under Out of scope. |
+| nit | src/sivin/storage/runlog.py:171-177 | A crash during a run-log line write leaves a partial line. The next append then continues that line, and `read(day)` raises for the whole day. Consider starting each append with a newline when the file does not end with `\n`, or skipping and reporting bad lines. | fixed (round 2): `append` starts a new line when the file lacks a final line end; `read` skips invalid lines with a warning. Tests added. |
 
 ### Owner question 1 (`source` column), reviewer recommendation
 
@@ -218,6 +257,8 @@ write" is then acceptable. The owner should assign this to WP-1.5 or WP-1.7.
   (codec, partitioning, merger, writer), and what is left is readable.
 - `SeriesCodec` ABC and `NamedRegistry`: acceptable and in line with §1.2 (extension through
   registered classes). See the nit on where the registry belongs.
+- `RunLog.read` skips invalid lines with a warning instead of raising `StoreFormatError`
+  (round 2, run-log robustness).
 - `read` always returns a `source` column: acceptable and simpler for callers.
 - Deduplication on `timestamp_utc` per sensor directory: equivalent to `sensor_id +
   timestamp_utc`. Acceptable.
