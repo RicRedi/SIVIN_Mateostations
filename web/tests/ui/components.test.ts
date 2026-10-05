@@ -12,7 +12,6 @@ import { Store } from '../../src/state/Store';
 import { el } from '../../src/ui/dom';
 import { HashSync } from '../../src/ui/HashSync';
 import { HeaderView } from '../../src/ui/HeaderView';
-import { SensorList } from '../../src/ui/SensorList';
 import { SensorColors } from '../../src/ui/SensorColors';
 import { SensorPanel } from '../../src/ui/SensorPanel';
 import { fixtureJson } from '../helpers';
@@ -67,26 +66,6 @@ describe('HeaderView', () => {
   });
 });
 
-describe('SensorList', () => {
-  it('lists all sensors with checkboxes reflecting the selection', () => {
-    const root = document.createElement('div');
-    const onToggle = vi.fn();
-    const colors = new SensorColors();
-    colors.update(['77680921']);
-    const list = new SensorList(root, catalog, i18n(), colors, onToggle);
-    list.render(['77680921']);
-    const swatches = [...root.querySelectorAll<HTMLElement>('.swatch')];
-    expect(swatches[1]?.style.background).toBe('rgb(42, 120, 214)');
-    expect(swatches[0]?.classList.contains('swatch--empty')).toBe(true);
-    const boxes = [...root.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
-    expect(boxes.map((box) => box.value)).toEqual(['77678271', '77680921', '77800065', '77799986']);
-    expect(boxes.map((box) => box.checked)).toEqual([false, true, false, false]);
-    boxes[0]?.dispatchEvent(new Event('change'));
-    expect(onToggle).toHaveBeenCalledWith('77678271');
-    expect(root.querySelector('label')?.textContent).toBe('77678271 (VUT)');
-  });
-});
-
 describe('SensorPanel', () => {
   it('shows the hint without a selection and hides controls', () => {
     const root = document.createElement('aside');
@@ -108,7 +87,8 @@ describe('SensorPanel', () => {
     expect(text).toContain('219 m');
     expect(text).toContain('1. 6. 2026');
     expect(text).toContain('11,2 °C');
-    expect(text).not.toContain('Vinice');
+    expect(text).not.toContain('Obec');
+    expect(text).not.toContain('Viniční trať');
     expect(cards[1]?.querySelector('.is-stale')).not.toBeNull();
     expect(cards[1]?.textContent).toContain('neaktuální');
     expect(panel.chartSlot.hidden).toBe(false);
@@ -132,12 +112,13 @@ describe('SensorPanel', () => {
   it('renders a sensor without latest values or placement', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    const bare: SensorInfo = { ...sensor('77678271'), latest: null, elevation_m: null, placedSince: 'unknown', site: 'Test', variety: null };
+    const bare: SensorInfo = { ...sensor('77678271'), latest: null, elevation_m: null, placedSince: 'unknown', municipality: 'Obec X', track: null, variety: null };
     panel.render([bare], false);
     const text = root.querySelector('.sensor-card')?.textContent ?? '';
     expect(text).toContain('bez hodnoty');
     expect(text).toContain('unknown');
-    expect(text).toContain('Vinice');
+    expect(text).toContain('ObecObec X');
+    expect(text).not.toContain('Viniční trať');
   });
 });
 

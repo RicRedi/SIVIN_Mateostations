@@ -47,8 +47,13 @@ describe('SensorCatalog', () => {
   );
 
   it('joins registry, manifest and latest values in registry order', () => {
-    expect(catalog.sensors.map((s) => s.id)).toEqual(['77678271', '77680921', '77800065', '77799986']);
+    expect(catalog.sensors.slice(0, 4).map((s) => s.id)).toEqual(['77678271', '77680921', '77800065', '77799986']);
+    expect(catalog.size).toBe(20);
     const sensor = catalog.get('77680921');
+    expect(sensor?.municipality).toBe('Obec A');
+    expect(sensor?.track).toBe('Trať 1');
+    expect(sensor?.status).toBe('active');
+    expect(catalog.get('90000302')?.status).toBe('retired');
     expect(sensor?.elevation_m).toBe(201.6);
     expect(sensor?.lat).toBe(48.879593);
     expect(sensor?.hasData).toBe(true);

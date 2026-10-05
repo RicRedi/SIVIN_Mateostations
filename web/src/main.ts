@@ -23,8 +23,8 @@ import { HashSync } from './ui/HashSync';
 import { HeaderView } from './ui/HeaderView';
 import { MapView } from './ui/MapView';
 import { TemperatureScale } from './ui/palette';
+import { SensorPicker } from './ui/picker/SensorPicker';
 import { SensorColors } from './ui/SensorColors';
-import { SensorList } from './ui/SensorList';
 import { SensorPanel } from './ui/SensorPanel';
 import { SeriesChart } from './ui/SeriesChart';
 import { TimeWindowControl } from './ui/TimeWindowControl';
@@ -84,11 +84,14 @@ async function start(): Promise<void> {
   const map = new MapView(requireElement('map'), catalog, i18n, new TemperatureScale(), zone.name, legendCollapsed, (id, compare) =>
     app?.onSensorClick(id, compare),
   );
-  const list = new SensorList(panel.listSlot, catalog, i18n, colors, (id) => app?.onSensorToggle(id));
+  const picker = new SensorPicker(panel.pickerSlot, catalog, i18n, colors, {
+    onSensorToggle: (id) => app?.onSensorToggle(id),
+    onGroupToggle: (ids) => app?.onGroupToggle(ids),
+  });
   const windowControl = new TimeWindowControl(panel.windowSlot, i18n, zone, manifest.seasons, (change) =>
     app?.onWindowChange(change),
   );
-  app = new App(store, catalog, i18n, preference, colors, presenter, { header, map, panel, list, windowControl, chart });
+  app = new App(store, catalog, i18n, preference, colors, presenter, { header, map, panel, picker, windowControl, chart });
   new HashSync(store, codec, window.location, window.history, window).write();
   app.start();
 }

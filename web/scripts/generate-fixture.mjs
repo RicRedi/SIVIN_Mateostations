@@ -16,6 +16,8 @@
  * one sensor taken to the office for service for about a day and a half (an `off_site` event
  * from the off-site log, MIGRATION_PLAN.md §2.8; indoor values ≈22 °C flagged PRE_DEPLOYMENT),
  * and one sensor that stops reporting early (`stale` in latest.json).
+ * Scale (WP-3.5): 16 more SYNTHETIC sensors with fictional ids, names and groups and only one
+ * month of data (SCALE_SENSORS), so the fixture has 20 sensors in three municipalities.
  *
  * Usage: `npm run fixture` (from `web/`).
  */
@@ -37,13 +39,45 @@ const DAY_S = 86_400;
 const START_T = Date.UTC(2026, 5, 1) / 1000;
 const END_T = Date.UTC(2026, 9, 1) / 1000;
 
-/** Sensor positions from the repository's sensor_location.gpx (elevation rounded to 0.1 m). */
+/**
+ * Sensors with a full season of data: ids and positions from the repository's
+ * sensor_location.gpx (elevation rounded to 0.1 m). Municipality and track are FICTIONAL.
+ */
 const SENSORS = [
-  { id: '77678271', lat: 48.880215, lon: 16.673002, elevation_m: 183.9, phaseS: 0 },
-  { id: '77680921', lat: 48.879593, lon: 16.672016, elevation_m: 201.6, phaseS: 437 },
-  { id: '77800065', lat: 48.878895, lon: 16.6709, elevation_m: 222.4, phaseS: 911 },
-  { id: '77799986', lat: 48.883827, lon: 16.648304, elevation_m: 219.2, phaseS: 1303 },
+  { id: '77678271', lat: 48.880215, lon: 16.673002, elevation_m: 183.9, phaseS: 0, municipality: 'Obec A', track: 'Trať 1', variety: 'Ryzlink rýnský' },
+  { id: '77680921', lat: 48.879593, lon: 16.672016, elevation_m: 201.6, phaseS: 437, municipality: 'Obec A', track: 'Trať 1', variety: 'Veltlínské zelené' },
+  { id: '77800065', lat: 48.878895, lon: 16.6709, elevation_m: 222.4, phaseS: 911, municipality: 'Obec A', track: 'Trať 1', variety: null },
+  { id: '77799986', lat: 48.883827, lon: 16.648304, elevation_m: 219.2, phaseS: 1303, municipality: null, track: null, variety: null },
 ];
+
+/**
+ * SYNTHETIC sensors that exercise the sensor picker and marker clustering at a larger network
+ * size: invented ids (9xxxxxxx), positions, names and data, three fictional municipalities with
+ * several tracks, one sensor without a track, one without any grouping, one inactive and one
+ * retired sensor. They have data only for SHORT_PERIOD, so the fixture stays small.
+ */
+const SCALE_SENSORS = [
+  { id: '90000101', lat: 48.8826, lon: 16.6761, elevation_m: 190.2, municipality: 'Obec A', track: 'Trať 1', variety: 'Pálava' },
+  { id: '90000111', lat: 48.8722, lon: 16.6598, elevation_m: 205.0, municipality: 'Obec A', track: 'Trať 2', variety: 'Müller Thurgau' },
+  { id: '90000112', lat: 48.8741, lon: 16.6627, elevation_m: 211.4, municipality: 'Obec A', track: 'Trať 2', variety: 'Müller Thurgau' },
+  { id: '90000113', lat: 48.8705, lon: 16.6571, elevation_m: 198.7, municipality: 'Obec A', track: 'Trať 2', variety: 'Frankovka' },
+  { id: '90000201', lat: 48.8512, lon: 16.7418, elevation_m: 176.3, municipality: 'Obec B', track: 'Trať 3', variety: 'Ryzlink vlašský' },
+  { id: '90000202', lat: 48.8534, lon: 16.7446, elevation_m: 181.9, municipality: 'Obec B', track: 'Trať 3', variety: 'Ryzlink vlašský' },
+  { id: '90000203', lat: 48.8497, lon: 16.7392, elevation_m: 173.5, municipality: 'Obec B', track: 'Trať 3', variety: 'Sauvignon', status: 'inactive', endT: Date.UTC(2026, 8, 20, 8) / 1000 },
+  { id: '90000301', lat: 48.8431, lon: 16.7512, elevation_m: 230.8, municipality: 'Obec B', track: 'Trať 4', variety: 'Zweigeltrebe' },
+  { id: '90000302', lat: 48.8452, lon: 16.7547, elevation_m: 241.2, municipality: 'Obec B', track: 'Trať 4', variety: 'Zweigeltrebe', status: 'retired', endT: Date.UTC(2026, 8, 15, 10) / 1000 },
+  { id: '90000303', lat: 48.8418, lon: 16.7486, elevation_m: 226.0, municipality: 'Obec B', track: 'Trať 4', variety: 'Modrý Portugal' },
+  { id: '90000401', lat: 48.9213, lon: 16.5982, elevation_m: 258.4, municipality: 'Obec C', track: 'Trať 5', variety: 'Tramín červený' },
+  { id: '90000402', lat: 48.9236, lon: 16.6011, elevation_m: 262.9, municipality: 'Obec C', track: 'Trať 5', variety: null },
+  { id: '90000411', lat: 48.9164, lon: 16.5915, elevation_m: 247.1, municipality: 'Obec C', track: 'Trať 6', variety: 'Chardonnay' },
+  { id: '90000412', lat: 48.9147, lon: 16.5943, elevation_m: 244.6, municipality: 'Obec C', track: 'Trať 6', variety: 'Chardonnay' },
+  { id: '90000421', lat: 48.9258, lon: 16.6074, elevation_m: 266.0, municipality: 'Obec C', track: null, variety: null },
+  { id: '90000501', lat: 48.9003, lon: 16.7005, elevation_m: 195.5, municipality: null, track: null, variety: 'Neuburské' },
+];
+/** Period of the SCALE_SENSORS data, [start, end) in Unix seconds (UTC). */
+const SHORT_PERIOD = [Date.UTC(2026, 8, 1) / 1000, Date.UTC(2026, 9, 1) / 1000];
+/** Clock phase spacing of the SCALE_SENSORS, seconds (co-prime with STEP_S). */
+const SCALE_PHASE_STEP_S = 389;
 const PORTAL_PREFIX = '8615620';
 
 const OFFICE_SENSOR = '77799986';
@@ -177,10 +211,11 @@ function isInGap(sensor, t) {
 }
 
 function sensorSamples(sensor, weather) {
-  const endT = sensor.id === STALE_SENSOR ? STALE_END_T : END_T;
+  const startT = sensor.startT ?? START_T;
+  const endT = sensor.id === STALE_SENSOR ? STALE_END_T : (sensor.endT ?? END_T);
   const rows = [];
-  for (let nominalT = START_T + sensor.phaseS; nominalT < endT; nominalT += STEP_S) {
-    const t = Math.max(START_T, nominalT + Math.round(CLOCK_JITTER_S * gaussian()));
+  for (let nominalT = startT + sensor.phaseS; nominalT < endT; nominalT += STEP_S) {
+    const t = Math.max(startT, nominalT + Math.round(CLOCK_JITTER_S * gaussian()));
     if (isInGap(sensor, t)) {
       continue;
     }
@@ -331,31 +366,52 @@ function placeholderIndices(daily) {
   };
 }
 
+const isoSeconds = (t) => new Date(t * 1000).toISOString().replace('.000Z', 'Z');
+
+/**
+ * Registry feature as the site publishes it: the public projection with `notes` and every
+ * placement's `note` set to null (owner decision 2026-10-05).
+ */
 function registryFeature(sensor) {
-  const from = new Date(START_T * 1000);
+  const closed = sensor.status === 'inactive' || sensor.status === 'retired';
   return {
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [sensor.lon, sensor.lat] },
     properties: {
       id: sensor.id,
       portal_name: `${PORTAL_PREFIX} ${sensor.id}`,
-      label: `${sensor.id} (VUT)`,
-      site: null,
-      variety: null,
-      status: 'active',
+      label: sensor.label,
+      municipality: sensor.municipality,
+      track: sensor.track,
+      variety: sensor.variety,
+      status: sensor.status,
       placements: [
         {
-          from: from.toISOString().replace('.000Z', 'Z'),
-          to: null,
+          from: isoSeconds(sensor.startT),
+          to: closed ? isoSeconds(sensor.endT) : null,
           lon: sensor.lon,
           lat: sensor.lat,
           elevation_m: sensor.elevation_m,
-          note: 'position from sensor_location.gpx; date is a synthetic placeholder',
+          note: null,
         },
       ],
       notes: null,
     },
   };
+}
+
+/** Every sensor of the fixture with its defaults filled in, the full-season sensors first. */
+function allSensors() {
+  const full = SENSORS.map((sensor) => ({ ...sensor, label: `${sensor.id} (VUT)`, status: 'active', startT: START_T }));
+  const scale = SCALE_SENSORS.map((sensor, index) => ({
+    status: 'active',
+    endT: SHORT_PERIOD[1],
+    ...sensor,
+    label: `${sensor.id} (demo)`,
+    startT: SHORT_PERIOD[0],
+    phaseS: ((index + 1) * SCALE_PHASE_STEP_S) % STEP_S,
+  }));
+  return [...full, ...scale];
 }
 
 function eventsFile(sensorId, rows) {
@@ -377,9 +433,13 @@ Every file in this directory was generated by \`web/scripts/generate-fixture.mjs
 exercise the web portal; they are **not measurements** from the SIVIN sensors and
 must not be used for any analysis.
 
-Only the sensor ids and positions (from \`sensor_location.gpx\`) are real. Placement
-dates, events and index values are placeholders. The placeholder indices use simplified
-formulas (Huglin without the latitude coefficient) and are marked \`complete: false\`.
+Only the ids and positions of the first four sensors (from \`sensor_location.gpx\`) are
+real. The other 16 sensors (ids 9xxxxxxx, \`(demo)\` in the label), all municipality and
+vineyard-track names ("Obec A", "Trať 1", …) and all varieties assigned here are **fictional**;
+they exist to exercise the sensor picker and marker clustering at a larger network size and
+have data only for September 2026. Placement dates, events and index values are
+placeholders. The placeholder indices use simplified formulas (Huglin without the latitude
+coefficient) and are marked \`complete: false\`.
 
 The layout follows the static site data contract, MIGRATION_PLAN.md §2.6
 (\`schema_version: 1\`). Regenerate with \`npm run fixture\` in \`web/\`.
@@ -397,7 +457,8 @@ function main() {
   const manifestSensors = {};
   const latest = {};
   const indices = {};
-  for (const sensor of SENSORS) {
+  const sensors = allSensors();
+  for (const sensor of sensors) {
     const rows = sensorSamples(sensor, weather);
     const months = rawMonthFiles(sensor.id, rows);
     for (const [key, file] of months) {
@@ -407,8 +468,9 @@ function main() {
     writeJson(`series/${sensor.id}/daily.json`, daily);
     writeJson(`events/${sensor.id}.json`, eventsFile(sensor.id, rows));
     const last = rows.at(-1);
-    manifestSensors[sensor.id] = { first_t: rows[0].t, last_t: last.t, raw_months: [...months.keys()] };
-    latest[sensor.id] = { t: last.t, temp_c: last.temp_c, rh_pct: last.rh_pct, qc: last.qc, stale: sensor.id === STALE_SENSOR };
+    manifestSensors[sensor.id] = { first_t: rows[0].t, last_t: last.t, raw_months: [...months.keys()], status: sensor.status };
+    const stale = sensor.id === STALE_SENSOR || sensor.status !== 'active';
+    latest[sensor.id] = { t: last.t, temp_c: last.temp_c, rh_pct: last.rh_pct, qc: last.qc, stale };
     indices[sensor.id] = placeholderIndices(daily);
   }
   writeJson('manifest.json', {
@@ -427,7 +489,7 @@ function main() {
     ],
   });
   writeJson('latest.json', { generated_at: GENERATED_AT, sensors: latest });
-  writeJson('sensors.geojson', { type: 'FeatureCollection', features: SENSORS.map(registryFeature) });
+  writeJson('sensors.geojson', { type: 'FeatureCollection', features: sensors.map(registryFeature) });
   writeJson(`indices/${SEASON}.json`, { season: SEASON, computed_at: GENERATED_AT, sensors: indices });
   writeFileSync(join(OUT_DIR, 'README.md'), README);
 }

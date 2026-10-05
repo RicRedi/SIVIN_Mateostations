@@ -3,6 +3,7 @@ import type { SensorCatalog, SensorInfo } from '../app/SensorCatalog';
 import type { I18n } from '../i18n/I18n';
 import type { LanguagePreference } from '../i18n/LanguagePreference';
 import { selectOnly, toggleInSelection, type AppState, type AppStore } from '../state/AppState';
+import { toggleGroupInSelection, type LimitNotice } from '../state/GroupSelection';
 import type { SensorColors } from './SensorColors';
 import type { WindowChange, WindowControlState } from './TimeWindowControl';
 
@@ -11,7 +12,7 @@ export interface AppViews {
   readonly header: { render(): void };
   readonly map: { render(selectedIds: readonly string[]): void; invalidateSize(): void; fitToSensors(): void };
   readonly panel: { render(selected: readonly SensorInfo[], limitReached: boolean): void };
-  readonly list: { render(selectedIds: readonly string[]): void };
+  readonly picker: { render(selectedIds: readonly string[], notice: LimitNotice | null): void };
   readonly windowControl: { render(state: WindowControlState): void };
   readonly chart: { render(): void };
 }
@@ -21,7 +22,8 @@ export interface AppViews {
  * and reload the chart when the selection, window or resolution changed.
  */
 export class App {
-  private limitReached = false;
+  /** Set when the last selection change hit the comparison limit; shown by the next render. */
+  private notice: LimitNotice | null = null;
 
   constructor(
     private readonly store: AppStore,
@@ -51,9 +53,19 @@ export class App {
     this.select(compare ? this.toggled(sensorId) : selectOnly(sensorId));
   };
 
-  /** Checkbox in the sensor list: toggles the sensor in the comparison. */
+  /** Checkbox in the sensor picker or a chip's remove button: toggles the sensor. */
   readonly onSensorToggle = (sensorId: string): void => {
     this.select(this.toggled(sensorId));
+  };
+
+  /**
+   * "Select all" checkbox of a picker group: removes a fully selected group, otherwise adds its
+   * sensors up to the comparison limit (reported when not all fit).
+   */
+  readonly onGroupToggle = (sensorIds: readonly string[]): void => {
+    const result = toggleGroupInSelection(this.store.state.selectedSensorIds, sensorIds);
+    this.notice = result.truncated ? { kind: 'group', added: result.added } : null;
+    this.select(result.selection);
   };
 
   readonly onWindowChange = (change: WindowChange): void => {
@@ -67,7 +79,7 @@ export class App {
   private toggled(sensorId: string): readonly string[] {
     const current = this.store.state.selectedSensorIds;
     const next = toggleInSelection(current, sensorId);
-    this.limitReached = next === current;
+    this.notice = next === current ? { kind: 'sensor' } : null;
     return next;
   }
 
@@ -109,13 +121,13 @@ export class App {
       .map((id) => this.catalog.get(id))
       .filter((sensor): sensor is SensorInfo => sensor !== undefined);
     this.views.map.render(state.selectedSensorIds);
-    this.views.list.render(state.selectedSensorIds);
-    this.views.panel.render(selected, this.limitReached);
+    this.views.picker.render(state.selectedSensorIds, this.notice);
+    this.views.panel.render(selected, this.notice !== null);
     this.views.windowControl.render({
       spec: state.window,
       resolution: state.resolution,
       window: this.presenter.windowFor(state),
     });
-    this.limitReached = false;
+    this.notice = null;
   }
 }

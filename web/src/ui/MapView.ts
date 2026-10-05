@@ -1,7 +1,10 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
 import type { SensorCatalog, SensorInfo } from '../app/SensorCatalog';
 import type { I18n } from '../i18n/I18n';
+import { CLUSTER_ICON_SIZE_PX, ClusterIcon } from './ClusterIcon';
 import { el } from './dom';
 import { STALE_COLOR, TemperatureScale } from './palette';
 
@@ -22,6 +25,11 @@ const MARKER_OUTLINE = '#0b0b0b';
 const MARKER_OUTLINE_WIDTH_PX = 1.5;
 const SELECTED_OUTLINE_WIDTH_PX = 3;
 const STALE_DASH = '4 3';
+/**
+ * Markers closer than this on screen are merged into a cluster: about one marker diameter plus a
+ * small margin, so clusters form only where markers would overlap.
+ */
+const CLUSTER_RADIUS_PX = 2 * MARKER_RADIUS_PX + 8;
 const VALUE_DECIMALS = 1;
 
 /** Receives clicks on sensor markers; `compare` is true for ctrl/cmd-click. */
@@ -29,11 +37,17 @@ export type SensorClickHandler = (sensorId: string, compare: boolean) => void;
 
 /**
  * Leaflet map of the sensors: circle markers coloured by the latest temperature (grey with a
- * dashed outline when stale or missing), a legend, tooltips and click selection.
+ * dashed outline when stale or missing), a legend, tooltips and click selection. Markers that
+ * would overlap are merged into clusters (`leaflet.markercluster`); a click on a cluster, or
+ * Enter on a focused one, zooms in (or spreads the markers at the highest zoom).
  */
 export class MapView {
   private readonly map: L.Map;
   private readonly markers = new Map<string, L.CircleMarker>();
+  private readonly sensorIds = new Map<L.Layer, string>();
+  private readonly clusters: L.MarkerClusterGroup;
+  private readonly clusterIcon: ClusterIcon;
+  private selectedIds: readonly string[] = [];
   private readonly legend: L.Control;
   private readonly legendBody: HTMLDetailsElement;
   private readonly legendSummary = el('summary', { class: 'map-legend__title' });
@@ -64,14 +78,26 @@ export class MapView {
     const topo = L.tileLayer(TOPO_URL, { attribution: TOPO_ATTRIBUTION, maxZoom: TOPO_MAX_ZOOM });
     osm.addTo(this.map);
     L.control.layers({ OpenStreetMap: osm, OpenTopoMap: topo }, {}, { position: 'topright' }).addTo(this.map);
+    this.clusterIcon = new ClusterIcon(i18n);
+    this.clusters = L.markerClusterGroup({
+      maxClusterRadius: CLUSTER_RADIUS_PX,
+      showCoverageOnHover: false,
+      iconCreateFunction: (cluster) => this.createClusterIcon(cluster),
+    });
     for (const sensor of catalog.sensors) {
       const marker = L.circleMarker([sensor.lat, sensor.lon], this.style(sensor, false));
       marker.on('click', (event: L.LeafletMouseEvent) => {
         onClick(sensor.id, event.originalEvent.ctrlKey || event.originalEvent.metaKey);
       });
-      marker.addTo(this.map);
+      // Leaflet creates a new SVG element each time a marker enters the map (clusters split).
+      marker.on('add', () => {
+        this.decorate(sensor, marker);
+      });
       this.markers.set(sensor.id, marker);
+      this.sensorIds.set(marker, sensor.id);
+      this.clusters.addLayer(marker);
     }
+    this.clusters.addTo(this.map);
     this.legend = new L.Control({ position: 'bottomleft' });
     this.legend.onAdd = () => this.legendBody;
     this.legend.addTo(this.map);
@@ -81,23 +107,46 @@ export class MapView {
     }).observe(root);
   }
 
-  /** Update tooltips, legend and selection highlight. */
+  /** Update tooltips, legend, selection highlight and the cluster badges. */
   render(selectedIds: readonly string[]): void {
+    this.selectedIds = selectedIds;
     this.map.getContainer().setAttribute('aria-label', this.i18n.t('mapLabel'));
     for (const sensor of this.catalog.sensors) {
       const marker = this.markers.get(sensor.id);
-      const selected = selectedIds.includes(sensor.id);
-      marker?.setStyle(this.style(sensor, selected));
-      marker?.setRadius(selected ? SELECTED_MARKER_RADIUS_PX : MARKER_RADIUS_PX);
-      marker?.bindTooltip(this.tooltip(sensor), { direction: 'top' });
-      const element = marker?.getElement();
-      if (element !== undefined) {
-        this.makeKeyboardAccessible(element, sensor.id);
-        element.setAttribute('aria-label', this.accessibleName(sensor));
-        element.setAttribute('aria-pressed', String(selected));
+      if (marker !== undefined) {
+        const selected = selectedIds.includes(sensor.id);
+        marker.setStyle(this.style(sensor, selected));
+        marker.setRadius(selected ? SELECTED_MARKER_RADIUS_PX : MARKER_RADIUS_PX);
+        marker.bindTooltip(this.tooltip(sensor), { direction: 'top' });
+        this.decorate(sensor, marker);
       }
     }
+    this.clusters.refreshClusters();
     this.renderLegend();
+  }
+
+  /** Accessible name, pressed state and keyboard handling of a marker's element, if on the map. */
+  private decorate(sensor: SensorInfo, marker: L.CircleMarker): void {
+    const element = marker.getElement();
+    if (element !== undefined) {
+      this.makeKeyboardAccessible(element, sensor.id);
+      element.setAttribute('aria-label', this.accessibleName(sensor));
+      element.setAttribute('aria-pressed', String(this.selectedIds.includes(sensor.id)));
+    }
+  }
+
+  /** Badge of a cluster; highlighted when it hides a selected sensor. */
+  private createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
+    const members = cluster.getAllChildMarkers();
+    const selectedCount = members.filter((marker) => {
+      const id = this.sensorIds.get(marker);
+      return id !== undefined && this.selectedIds.includes(id);
+    }).length;
+    return L.divIcon({
+      html: this.clusterIcon.content(members.length),
+      className: this.clusterIcon.className(selectedCount),
+      iconSize: L.point(CLUSTER_ICON_SIZE_PX, CLUSTER_ICON_SIZE_PX),
+    });
   }
 
   /**

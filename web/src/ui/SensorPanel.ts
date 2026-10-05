@@ -9,12 +9,12 @@ const VALUE_DECIMALS = 1;
 const ELEVATION_DECIMALS = 0;
 
 /**
- * Side panel (a bottom sheet on phones): sensor list, metadata and latest values of the selected
- * sensors, time-window controls and the chart. The list, controls and chart are separate
+ * Side panel (a bottom sheet on phones): sensor picker, metadata and latest values of the selected
+ * sensors, time-window controls and the chart. The picker, controls and chart are separate
  * components rendered into the slots this panel exposes.
  */
 export class SensorPanel {
-  readonly listSlot = el('section', { class: 'panel__section' });
+  readonly pickerSlot = el('section', { class: 'panel__section' });
   readonly windowSlot = el('section', { class: 'panel__section' });
   readonly chartSlot = el('section', { class: 'panel__section chart' });
   private readonly toggle = el('button', {
@@ -48,7 +48,7 @@ export class SensorPanel {
       this.renderToggle();
       onToggle();
     });
-    this.body.append(this.listSlot, this.hint, this.details, this.windowSlot, this.chartSlot);
+    this.body.append(this.pickerSlot, this.hint, this.details, this.windowSlot, this.chartSlot);
     root.append(this.toggle, this.body);
   }
 
@@ -75,7 +75,8 @@ export class SensorPanel {
       ['sensorId', sensor.id],
       ['elevation', sensor.elevation_m === null ? null : `${this.i18n.formatNumber(sensor.elevation_m, ELEVATION_DECIMALS)} m`],
       ['placedSince', sensor.placedSince === null ? null : this.formatIsoDate(sensor.placedSince)],
-      ['site', sensor.site],
+      ['municipality', sensor.municipality],
+      ['track', sensor.track],
       ['variety', sensor.variety],
     ];
     const definitions = rows

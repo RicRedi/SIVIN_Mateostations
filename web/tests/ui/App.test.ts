@@ -10,6 +10,7 @@ import { en } from '../../src/i18n/en';
 import { I18n } from '../../src/i18n/I18n';
 import { LanguagePreference } from '../../src/i18n/LanguagePreference';
 import { DEFAULT_APP_STATE, type AppState } from '../../src/state/AppState';
+import type { LimitNotice } from '../../src/state/GroupSelection';
 import { HashStateCodec } from '../../src/state/HashStateCodec';
 import { Store } from '../../src/state/Store';
 import { App, type AppViews } from '../../src/ui/App';
@@ -36,12 +37,15 @@ class FakePresenter implements ChartController {
 }
 
 function fakeViews() {
-  const log = { map: [] as (readonly string[])[], panel: [] as [string[], boolean][], header: 0, chart: 0, fitted: 0 };
+  const log = {
+    map: [] as (readonly string[])[], panel: [] as [string[], boolean][], picker: [] as [readonly string[], LimitNotice | null][],
+    header: 0, chart: 0, fitted: 0,
+  };
   const views: AppViews = {
     header: { render: () => { log.header += 1; } },
     map: { render: (ids) => { log.map.push(ids); }, invalidateSize: () => undefined, fitToSensors: () => { log.fitted += 1; } },
     panel: { render: (selected: readonly SensorInfo[], limit) => { log.panel.push([selected.map((s) => s.id), limit]); } },
-    list: { render: () => undefined },
+    picker: { render: (ids, notice) => { log.picker.push([ids, notice]); } },
     windowControl: { render: () => undefined },
     chart: { render: () => { log.chart += 1; } },
   };
@@ -93,6 +97,26 @@ describe('App', () => {
     expect(store.state.selectedSensorIds).toEqual(['77678271']);
     app.onSensorClick('77680921', false);
     expect(window.location.hash).toBe('#s=77680921&w=7d&lang=cs');
+  });
+
+  it('toggles a whole group and reports when the comparison limit truncates it', () => {
+    app.onGroupToggle(['77678271', '77680921']);
+    expect(store.state.selectedSensorIds).toEqual(['77678271', '77680921']);
+    expect(log.picker.at(-1)).toEqual([['77678271', '77680921'], null]);
+    app.onGroupToggle(['77678271', '77680921']);
+    expect(store.state.selectedSensorIds).toEqual([]);
+    const many = ['90000101', '90000111', '90000112', '90000113', '90000201', '90000202', '90000203', '90000301', '90000303', '90000302'];
+    app.onGroupToggle(many);
+    expect(store.state.selectedSensorIds).toEqual(many.slice(0, 8));
+    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'group', added: 8 });
+    expect(log.panel.at(-1)?.[1]).toBe(true);
+    app.onGroupToggle(['90000401']);
+    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'group', added: 0 });
+    app.onSensorToggle('90000402');
+    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'sensor' });
+    app.onSensorToggle('90000101');
+    expect(log.picker.at(-1)?.[1]).toBeNull();
+    expect(store.state.selectedSensorIds).toHaveLength(7);
   });
 
   it('removes unknown sensor ids from state and URL after a hashchange', () => {
