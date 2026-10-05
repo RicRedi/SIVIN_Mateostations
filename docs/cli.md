@@ -266,7 +266,8 @@ written, R removed; seasons: ...`) and the failures. Exit code 1 if a sensor or 
 failed — its previously published files stay (also in a full build), the manifest marks it with
 `data_status: "error"`, and every later build retries it and exits 1 while it keeps failing —
 3 for an invalid configuration, registry or off-site log. The build state is kept in
-`<paths.derived_dir>/site-build-state.json`, never in the published directory.
+`<paths.derived_dir>/site-build-state.json` (one more file per other `--out` directory), never
+in the published directory.
 
 ```console
 $ sivin build-site                     # site/data, incremental

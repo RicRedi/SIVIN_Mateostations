@@ -44,7 +44,9 @@ site/data/indices/<season>.json
 ```
 
 The incremental build state is kept outside the published directory, in
-`<paths.derived_dir>/site-build-state.json` (`data/derived/`), so it is never deployed.
+`<paths.derived_dir>/site-build-state.json` (`data/derived/`), so it is never deployed. Every
+other output directory (`--out`) has its own state,
+`site-build-state-<12 hex digits of the SHA-256 of its resolved path>.json`.
 
 **Encoding.** UTF-8 JSON, compact (no spaces), one line plus a final line break. Keys are
 written in the order of the contract (§2.6), sensors sorted by id, so the same data always give
@@ -213,8 +215,10 @@ records `site: ...` and goes on.
 The state holds only fingerprints, relative paths, summaries and index entries — no paths of the
 machine, no credentials. For the incremental build to help, the scheduled workflow (WP-4.1) has
 to keep `site/data` and `data/derived/site-build-state.json` between runs; otherwise every run is
-a full build, which gives the same files. The state describes the last build; a build into
-another `--out` directory still checks every reused file there by its SHA-256.
+a full build, which gives the same files. Each output directory has its own state (above), so a
+build with `--out` never touches the state of `site/data`. A failed sensor's earlier files are
+reused only if all of them are present, with their SHA-256, in the current output; otherwise it
+is left out of the manifest with a warning (the manifest never lists files that do not exist).
 
 ## Cross-language contract test
 

@@ -23,6 +23,7 @@ from sivin.site.state import (
     STATE_FILE,
     BuildState,
     SensorState,
+    StateDirectory,
     StateFile,
     StoreFingerprints,
     fingerprint,
@@ -174,3 +175,15 @@ def test_unreadable_state_is_ignored(content: bytes) -> None:
 def test_state_of_another_format_is_ignored() -> None:
     assert BuildState.parse(b'{"format": 99}') is None
     assert BuildState.parse(None) is None
+
+
+def test_one_state_file_per_output(tmp_path: Path) -> None:
+    states = StateDirectory(tmp_path / "derived", tmp_path / "site" / "data")
+    default = states.for_output(tmp_path / "site" / "data" / ".." / "data")
+    other = states.for_output(tmp_path / "elsewhere")
+    assert default.path == tmp_path / "derived" / "site-build-state.json"
+    assert other.path.parent == tmp_path / "derived"
+    assert other.path.name.startswith("site-build-state-")
+    assert len(other.path.stem.removeprefix("site-build-state-")) == 12
+    assert states.for_output(tmp_path / "elsewhere").path == other.path
+    assert states.for_output(tmp_path / "third").path != other.path

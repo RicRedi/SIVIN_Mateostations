@@ -6,6 +6,7 @@ The QC source and the index source are fakes over SYNTHETIC series.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ from sivin.site.labels import IndexSpec
 from sivin.site.sensor_builder import DailyAggregation, SensorSiteBuilder, SummaryBuilder
 from sivin.site.sensor_files import default_sensor_writers
 from sivin.site.site_files import default_site_writers
-from sivin.site.state import STATE_FILE, StateFile, StoreFingerprints
+from sivin.site.state import STATE_FILE, StateDirectory, StoreFingerprints
 
 NOW = datetime(2026, 10, 5, 4, 0, tzinfo=UTC)
 PRAGUE = "Europe/Prague"
@@ -97,7 +98,7 @@ class Rig:
             ),
             default_site_writers(129_600.0),
             StoreFingerprints(self.raw),
-            StateFile(root / "derived" / STATE_FILE),
+            StateDirectory(root / "derived", root / "site" / "data"),
             lambda: self.now,
         )
         self.now = NOW
@@ -141,7 +142,7 @@ def test_first_build_is_full(rig: Rig) -> None:
     indices = json.loads(rig.files()["indices/2026.json"])
     assert indices["sensors"]["77678271"]["mean_t"]["value"] == 15.0
     assert STATE_FILE not in rig.files()  # the state is kept outside the published data
-    assert rig.builder._state_file.path.is_file()
+    assert (rig.output.root.parents[1] / "derived" / STATE_FILE).is_file()
 
 
 def test_unchanged_sensors_are_reused(rig: Rig) -> None:
@@ -249,6 +250,38 @@ def test_failed_sensor_survives_a_full_build(rig: Rig) -> None:
         assert "data_status" not in manifest["77678271"]
         indices = json.loads(files["indices/2026.json"])["sensors"]
         assert indices["77680921"]["mean_t"]["value"] == 15.0
+
+
+def test_failing_sensor_built_into_another_output(rig: Rig, tmp_path: Path) -> None:
+    """Reviewer's round-2 reproduction: ``--out other`` while a sensor is failing."""
+    rig.builder.build(rig.output, rig.inputs())
+    default_state = (tmp_path / "derived" / STATE_FILE).read_bytes()
+    rig.source.failing.add(OTHER)
+    other = SiteOutput(tmp_path / "other")
+    report = rig.builder.build(other, rig.inputs())
+    assert report.full  # the other output has its own (new) state, without earlier files
+    manifest = json.loads((other.root / "manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest["sensors"]) == ["77678271"]
+    assert not (other.root / "series" / "77680921").exists()
+    # The default output's state is untouched: its unchanged sensors are still reused there.
+    assert (tmp_path / "derived" / STATE_FILE).read_bytes() == default_state
+    again = rig.builder.build(rig.output, rig.inputs())
+    assert (again.full, again.reused) == (False, (SENSOR, OTHER))
+    assert len(list((tmp_path / "derived").glob("site-build-state*.json"))) == 2
+
+
+def test_failed_sensor_without_its_files_is_not_published(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.builder.build(rig.output, rig.inputs())
+    (rig.output.root / "series" / "77680921" / "daily.json").unlink()
+    rig.source.failing.add(OTHER)
+    with caplog.at_level(logging.WARNING):
+        report = rig.builder.build(rig.output, rig.inputs())
+    assert report.failures == ("site 77680921: synthetic failure of 77680921",)
+    assert "77680921 failed and its earlier files are not in" in caplog.text
+    assert list(json.loads(rig.files()["manifest.json"])["sensors"]) == ["77678271"]
+    assert not any(path.startswith("series/77680921") for path in rig.files())
 
 
 def test_failed_sensor_is_retried_until_it_succeeds(rig: Rig) -> None:

@@ -27,7 +27,10 @@ from sivin.storage.atomic import AtomicFileWriter
 logger = logging.getLogger(__name__)
 
 STATE_FILE: Final = "site-build-state.json"
-"""Name of the build state in ``paths.derived_dir``."""
+"""Name of the build state of the default output (``site/data``) in ``paths.derived_dir``."""
+
+OUTPUT_KEY_DIGITS: Final = 12
+"""Hex digits of the SHA-256 of an output path that name the state of another output."""
 
 STATE_FORMAT: Final = 2
 """Version of the state layout; a state of another version is ignored (full build)."""
@@ -298,8 +301,51 @@ class BuildState:
             return None
 
 
+class StateDirectory:
+    """One build state per output directory, all in ``paths.derived_dir``.
+
+    The default output (``<paths.site_dir>/data``) has ``site-build-state.json``; any other
+    output (``--out``) has ``site-build-state-<12 hex digits of the SHA-256 of its resolved
+    path>.json``, so building elsewhere never touches the state of the default output and a
+    state never describes files of another directory (WP-3.2 review round 2).
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Where the state files are kept (``paths.derived_dir``).
+    default_output : pathlib.Path
+        The default output directory.
+    """
+
+    __slots__ = ("_default_output", "_directory")
+
+    def __init__(self, directory: Path, default_output: Path) -> None:
+        self._directory = directory
+        self._default_output = default_output.resolve()
+
+    def for_output(self, output: Path) -> StateFile:
+        """Return the state file of one output directory.
+
+        Parameters
+        ----------
+        output : pathlib.Path
+            The output directory.
+
+        Returns
+        -------
+        StateFile
+            Its state file.
+        """
+        resolved = output.resolve()
+        if resolved == self._default_output:
+            return StateFile(self._directory / STATE_FILE)
+        key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:OUTPUT_KEY_DIGITS]
+        stem = STATE_FILE.removesuffix(".json")
+        return StateFile(self._directory / f"{stem}-{key}.json")
+
+
 class StateFile:
-    """Where the build state is kept (``<paths.derived_dir>/site-build-state.json``).
+    """Where the build state of one output is kept (see :class:`StateDirectory`).
 
     Parameters
     ----------

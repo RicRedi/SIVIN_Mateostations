@@ -37,7 +37,7 @@ from sivin.site.indices import IndexSource, index_entry
 from sivin.site.model import IndexEntries, PublishedSensor, SiteSnapshot
 from sivin.site.sensor_builder import BuiltSensor, SensorSiteBuilder
 from sivin.site.site_files import SiteFileWriter
-from sivin.site.state import BuildState, SensorState, StateFile, StoreFingerprints
+from sivin.site.state import BuildState, SensorState, StateDirectory, StoreFingerprints
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +139,8 @@ class SiteBuilder:
         The site-wide file kinds.
     fingerprints : StoreFingerprints
         Fingerprints of the stored files of each sensor.
-    state_file : StateFile
-        Where the build state is kept (outside the published directory).
+    states : StateDirectory
+        Where the build state of each output is kept (outside the published directory).
     clock : callable
         Current time (aware), ``generated_at``.
     error_text : callable, optional
@@ -155,7 +155,7 @@ class SiteBuilder:
         "_sensors",
         "_site_writers",
         "_source",
-        "_state_file",
+        "_states",
     )
 
     def __init__(
@@ -165,11 +165,11 @@ class SiteBuilder:
         sensors: SensorSiteBuilder,
         site_writers: Sequence[SiteFileWriter],
         fingerprints: StoreFingerprints,
-        state_file: StateFile,
+        states: StateDirectory,
         clock: Callable[[], datetime],
         error_text: Callable[[BaseException], str] = str,
     ) -> None:
-        self._state_file = state_file
+        self._states = states
         self._source = source
         self._indices = indices
         self._sensors = sensors
@@ -207,7 +207,8 @@ class SiteBuilder:
             What was built, reused, written and removed, and the failures.
         """
         generated_at = self._clock()
-        stored = self._state_file.read()
+        state_file = self._states.for_output(output.root)
+        stored = state_file.read()
         previous = None if full else stored
         if previous is not None and previous.settings != inputs.settings:
             logger.info("Configuration, registry or off-site log changed: full site build.")
@@ -243,7 +244,7 @@ class SiteBuilder:
         states = run.states()
         keep = {path for state in states.values() for path in state.outputs}
         removed = output.prune(keep | {file.path for file in site_files})
-        self._state_file.write(BuildState(inputs.settings, chosen, states))
+        state_file.write(BuildState(inputs.settings, chosen, states))
         logger.info(
             "Site data: %d sensor(s) built, %d reused, %d file(s) written, %d removed.",
             len(run.built),
@@ -291,6 +292,7 @@ class _BuildRun:
         self._fingerprints = fingerprints
         self._built_at = built_at
         self._failed: set[SensorId] = set()
+        self._warned: set[str] = set()
         self._index_failed: set[SensorId] = set()
         self._fresh: dict[SensorId, BuiltSensor] = {}
         self._indices: dict[SensorId, dict[int, IndexEntries]] = {}
@@ -366,8 +368,9 @@ class _BuildRun:
                     retry=sensor_id in self._index_failed,
                 )
             elif sensor_id in self._failed:
-                if key in self._fallback:
-                    states[key] = self._fallback[key].as_failed()
+                fallback = self._usable_fallback(key)
+                if fallback is not None:
+                    states[key] = fallback
             elif key in self._previous_states:
                 states[key] = self._previous_states[key]
         return states
@@ -393,6 +396,22 @@ class _BuildRun:
     def write(self, files: Iterable[SiteFile]) -> list[str]:
         """Write the files whose content changed; return their paths."""
         return [file.path for file in files if self._output.write(file)]
+
+    def _usable_fallback(self, key: str) -> SensorState | None:
+        """The last state of a failed sensor, if all its files are in this output."""
+        fallback = self._fallback.get(key)
+        if fallback is None:
+            return None
+        if not all(self._output.has(path, sha) for path, sha in fallback.outputs.items()):
+            if key not in self._warned:
+                logger.warning(
+                    "Sensor %s failed and its earlier files are not in %s; not published.",
+                    key,
+                    self._output.root,
+                )
+                self._warned.add(key)
+            return None
+        return fallback.as_failed()
 
     def _is_reusable(self, sensor_id: SensorId) -> bool:
         state = self._previous_states.get(str(sensor_id))

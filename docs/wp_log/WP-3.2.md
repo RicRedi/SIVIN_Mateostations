@@ -390,7 +390,7 @@ The review covers `135416f`. My scripts and screenshots are in `/tmp/claude-0/re
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | `src/sivin/site/builder.py` (`fallback` from `StateFile`), `src/sivin/app/workspace.py` (`site_state_file`) | The build state is one global file, but the output directory varies with `--out`. Details below. | open |
+| minor | `src/sivin/site/builder.py` (`fallback` from `StateFile`), `src/sivin/app/workspace.py` (`site_state_file`) | The build state is one global file, but the output directory varies with `--out`. Details below. | fixed (round 3): one state file per output directory (`StateDirectory`: default `site-build-state.json`, other outputs `site-build-state-<sha256[:12] of the resolved path>.json`); a failed sensor's earlier entry is reused only if all its files exist with their SHA-256 in the current output, otherwise it is left out with a warning; tests `test_failing_sensor_built_into_another_output`, `test_failed_sensor_without_its_files_is_not_published`, `test_one_state_file_per_output` |
 
 Details of the new finding:
 - Reproduced: one sensor's store is corrupted, then I ran `sivin build-site --out other`. The new
