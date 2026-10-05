@@ -41,12 +41,13 @@ const END_T = Date.UTC(2026, 9, 1) / 1000;
 
 /**
  * Sensors with a full season of data: ids and positions from the repository's
- * sensor_location.gpx (elevation rounded to 0.1 m). Municipality and track are FICTIONAL.
+ * sensor_location.gpx (elevation rounded to 0.1 m). They are real devices, so the fixture makes
+ * no claim about them: municipality, track and variety stay null (as in the registry).
  */
 const SENSORS = [
-  { id: '77678271', lat: 48.880215, lon: 16.673002, elevation_m: 183.9, phaseS: 0, municipality: 'Obec A', track: 'Trať 1', variety: 'Ryzlink rýnský' },
-  { id: '77680921', lat: 48.879593, lon: 16.672016, elevation_m: 201.6, phaseS: 437, municipality: 'Obec A', track: 'Trať 1', variety: 'Veltlínské zelené' },
-  { id: '77800065', lat: 48.878895, lon: 16.6709, elevation_m: 222.4, phaseS: 911, municipality: 'Obec A', track: 'Trať 1', variety: null },
+  { id: '77678271', lat: 48.880215, lon: 16.673002, elevation_m: 183.9, phaseS: 0, municipality: null, track: null, variety: null },
+  { id: '77680921', lat: 48.879593, lon: 16.672016, elevation_m: 201.6, phaseS: 437, municipality: null, track: null, variety: null },
+  { id: '77800065', lat: 48.878895, lon: 16.6709, elevation_m: 222.4, phaseS: 911, municipality: null, track: null, variety: null },
   { id: '77799986', lat: 48.883827, lon: 16.648304, elevation_m: 219.2, phaseS: 1303, municipality: null, track: null, variety: null },
 ];
 
@@ -83,7 +84,8 @@ const PORTAL_PREFIX = '8615620';
 const OFFICE_SENSOR = '77799986';
 /** Synthetic off-site period of OFFICE_SENSOR, [start, end) in Unix seconds (UTC). */
 const OFF_SITE = [Date.UTC(2026, 5, 4, 6, 0) / 1000, Date.UTC(2026, 5, 5, 14, 0) / 1000];
-const OFF_SITE_DETAIL = 'service: synthetic example, battery replacement in the office';
+/** The site publishes only the reason of an off-site period, never the log's note (WP-3.5). */
+const OFF_SITE_DETAIL = 'service';
 const OFFICE_TEMP_C = 22;
 const OFFICE_AMPLITUDE_C = 0.6;
 const OFFICE_RH_PCT = 42;
@@ -434,12 +436,12 @@ exercise the web portal; they are **not measurements** from the SIVIN sensors an
 must not be used for any analysis.
 
 Only the ids and positions of the first four sensors (from \`sensor_location.gpx\`) are
-real. The other 16 sensors (ids 9xxxxxxx, \`(demo)\` in the label), all municipality and
-vineyard-track names ("Obec A", "Trať 1", …) and all varieties assigned here are **fictional**;
-they exist to exercise the sensor picker and marker clustering at a larger network size and
-have data only for September 2026. Placement dates, events and index values are
-placeholders. The placeholder indices use simplified formulas (Huglin without the latitude
-coefficient) and are marked \`complete: false\`.
+real; their municipality, track and variety are null. The other 16 sensors (ids 9xxxxxxx,
+\`(demo)\` in the label), all municipality and vineyard-track names ("Obec A", "Trať 1", …)
+and all varieties are **fictional**; they exist to exercise the sensor picker and marker
+clustering at a larger network size and have data only for September 2026. Placement dates,
+events and index values are placeholders. The placeholder indices use simplified formulas
+(Huglin without the latitude coefficient) and are marked \`complete: false\`.
 
 The layout follows the static site data contract, MIGRATION_PLAN.md §2.6
 (\`schema_version: 1\`). Regenerate with \`npm run fixture\` in \`web/\`.

@@ -38,13 +38,13 @@ class FakePresenter implements ChartController {
 
 function fakeViews() {
   const log = {
-    map: [] as (readonly string[])[], panel: [] as [string[], boolean][], picker: [] as [readonly string[], LimitNotice | null][],
+    map: [] as (readonly string[])[], panel: [] as string[][], picker: [] as [readonly string[], LimitNotice | null][],
     header: 0, chart: 0, fitted: 0,
   };
   const views: AppViews = {
     header: { render: () => { log.header += 1; } },
     map: { render: (ids) => { log.map.push(ids); }, invalidateSize: () => undefined, fitToSensors: () => { log.fitted += 1; } },
-    panel: { render: (selected: readonly SensorInfo[], limit) => { log.panel.push([selected.map((s) => s.id), limit]); } },
+    panel: { render: (selected: readonly SensorInfo[]) => { log.panel.push(selected.map((s) => s.id)); } },
     picker: { render: (ids, notice) => { log.picker.push([ids, notice]); } },
     windowControl: { render: () => undefined },
     chart: { render: () => { log.chart += 1; } },
@@ -109,14 +109,22 @@ describe('App', () => {
     app.onGroupToggle(many);
     expect(store.state.selectedSensorIds).toEqual(many.slice(0, 8));
     expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'group', added: 8 });
-    expect(log.panel.at(-1)?.[1]).toBe(true);
+    expect(log.panel.at(-1)).toEqual(many.slice(0, 8));
     app.onGroupToggle(['90000401']);
-    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'group', added: 0 });
+    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'full' });
     app.onSensorToggle('90000402');
-    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'sensor' });
+    expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'full' });
     app.onSensorToggle('90000101');
     expect(log.picker.at(-1)?.[1]).toBeNull();
     expect(store.state.selectedSensorIds).toHaveLength(7);
+  });
+
+  it('clears a partly selected group at the limit with its checkbox', () => {
+    const selected = ['90000101', '90000111', '90000112', '90000201', '90000202', '90000203', '90000301', '90000303'];
+    store.update({ selectedSensorIds: selected });
+    app.onGroupToggle(['90000101', '90000111', '90000112', '90000113']);
+    expect(store.state.selectedSensorIds).toEqual(['90000201', '90000202', '90000203', '90000301', '90000303']);
+    expect(log.picker.at(-1)?.[1]).toBeNull();
   });
 
   it('removes unknown sensor ids from state and URL after a hashchange', () => {

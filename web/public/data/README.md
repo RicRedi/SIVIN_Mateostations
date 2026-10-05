@@ -6,12 +6,12 @@ exercise the web portal; they are **not measurements** from the SIVIN sensors an
 must not be used for any analysis.
 
 Only the ids and positions of the first four sensors (from `sensor_location.gpx`) are
-real. The other 16 sensors (ids 9xxxxxxx, `(demo)` in the label), all municipality and
-vineyard-track names ("Obec A", "Trať 1", …) and all varieties assigned here are **fictional**;
-they exist to exercise the sensor picker and marker clustering at a larger network size and
-have data only for September 2026. Placement dates, events and index values are
-placeholders. The placeholder indices use simplified formulas (Huglin without the latitude
-coefficient) and are marked `complete: false`.
+real; their municipality, track and variety are null. The other 16 sensors (ids 9xxxxxxx,
+`(demo)` in the label), all municipality and vineyard-track names ("Obec A", "Trať 1", …)
+and all varieties are **fictional**; they exist to exercise the sensor picker and marker
+clustering at a larger network size and have data only for September 2026. Placement dates,
+events and index values are placeholders. The placeholder indices use simplified formulas
+(Huglin without the latitude coefficient) and are marked `complete: false`.
 
 The layout follows the static site data contract, MIGRATION_PLAN.md §2.6
 (`schema_version: 1`). Regenerate with `npm run fixture` in `web/`.

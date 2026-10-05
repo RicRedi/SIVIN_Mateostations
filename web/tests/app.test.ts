@@ -50,8 +50,9 @@ describe('SensorCatalog', () => {
     expect(catalog.sensors.slice(0, 4).map((s) => s.id)).toEqual(['77678271', '77680921', '77800065', '77799986']);
     expect(catalog.size).toBe(20);
     const sensor = catalog.get('77680921');
-    expect(sensor?.municipality).toBe('Obec A');
-    expect(sensor?.track).toBe('Trať 1');
+    // Real sensor ids carry no fictional grouping in the demo; the synthetic ones do.
+    expect([sensor?.municipality, sensor?.track, sensor?.variety]).toEqual([null, null, null]);
+    expect([catalog.get('90000201')?.municipality, catalog.get('90000201')?.track]).toEqual(['Obec B', 'Trať 3']);
     expect(sensor?.status).toBe('active');
     expect(catalog.get('90000302')?.status).toBe('retired');
     expect(sensor?.elevation_m).toBe(201.6);

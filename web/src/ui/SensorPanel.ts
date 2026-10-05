@@ -52,12 +52,15 @@ export class SensorPanel {
     root.append(this.toggle, this.body);
   }
 
-  /** Show metadata of `selected`; the controls and chart are shown only with a selection. */
-  render(selected: readonly SensorInfo[], limitReached: boolean): void {
+  /**
+   * Show metadata of `selected`; the controls and chart are shown only with a selection. The
+   * comparison limit is reported by the sensor picker, once.
+   */
+  render(selected: readonly SensorInfo[]): void {
     this.renderToggle();
     const hasSelection = selected.length > 0;
-    this.hint.textContent = limitReached ? this.i18n.t('comparisonLimit', { max: selected.length }) : this.i18n.t('selectHint');
-    this.hint.hidden = hasSelection && !limitReached;
+    this.hint.textContent = this.i18n.t('selectHint');
+    this.hint.hidden = hasSelection;
     this.windowSlot.hidden = !hasSelection;
     this.chartSlot.hidden = !hasSelection;
     this.details.replaceChildren(...selected.map((sensor) => this.card(sensor)));

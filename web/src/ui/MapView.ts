@@ -25,11 +25,18 @@ const MARKER_OUTLINE = '#0b0b0b';
 const MARKER_OUTLINE_WIDTH_PX = 1.5;
 const SELECTED_OUTLINE_WIDTH_PX = 3;
 const STALE_DASH = '4 3';
+/** Extra gap kept between two markers or cluster badges on screen, px. */
+const CLUSTER_MARGIN_PX = 8;
 /**
- * Markers closer than this on screen are merged into a cluster: about one marker diameter plus a
- * small margin, so clusters form only where markers would overlap.
+ * `maxClusterRadius` of `leaflet.markercluster`, px: markers closer than this on screen merge into
+ * a cluster badge. It is the larger of a marker's and a badge's diameter plus
+ * {@link CLUSTER_MARGIN_PX} (34 + 8 = 42 px), so neither markers nor badges overlap. A radius of
+ * one marker diameter (28 px, the first choice) left badges overlapping, because a badge (34 px)
+ * is larger than a marker: with 200 synthetic sensors the desktop overview showed 26 badges, many
+ * of them touching, against 16 at 44 px and 8 at 60 px (docs/web.md, "Clustering"). Change this
+ * constant to cluster more or less aggressively.
  */
-const CLUSTER_RADIUS_PX = 2 * MARKER_RADIUS_PX + 8;
+export const CLUSTER_RADIUS_PX = Math.max(2 * MARKER_RADIUS_PX, CLUSTER_ICON_SIZE_PX) + CLUSTER_MARGIN_PX;
 const VALUE_DECIMALS = 1;
 
 /** Receives clicks on sensor markers; `compare` is true for ctrl/cmd-click. */
@@ -78,7 +85,7 @@ export class MapView {
     const topo = L.tileLayer(TOPO_URL, { attribution: TOPO_ATTRIBUTION, maxZoom: TOPO_MAX_ZOOM });
     osm.addTo(this.map);
     L.control.layers({ OpenStreetMap: osm, OpenTopoMap: topo }, {}, { position: 'topright' }).addTo(this.map);
-    this.clusterIcon = new ClusterIcon(i18n);
+    this.clusterIcon = new ClusterIcon(i18n, scale);
     this.clusters = L.markerClusterGroup({
       maxClusterRadius: CLUSTER_RADIUS_PX,
       showCoverageOnHover: false,
@@ -135,16 +142,23 @@ export class MapView {
     }
   }
 
-  /** Badge of a cluster; highlighted when it hides a selected sensor. */
+  /**
+   * Badge of a cluster: coloured by the mean current temperature of its members, highlighted
+   * when it hides a selected sensor.
+   */
   private createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
-    const members = cluster.getAllChildMarkers();
-    const selectedCount = members.filter((marker) => {
-      const id = this.sensorIds.get(marker);
-      return id !== undefined && this.selectedIds.includes(id);
-    }).length;
+    const members = cluster
+      .getAllChildMarkers()
+      .map((marker) => this.catalog.get(this.sensorIds.get(marker) ?? ''))
+      .filter((sensor): sensor is SensorInfo => sensor !== undefined);
+    const selectedCount = members.filter((sensor) => this.selectedIds.includes(sensor.id)).length;
+    const appearance = this.clusterIcon.appearance(
+      members.map((sensor) => this.currentTemp(sensor)),
+      selectedCount,
+    );
     return L.divIcon({
-      html: this.clusterIcon.content(members.length),
-      className: this.clusterIcon.className(selectedCount),
+      html: this.clusterIcon.content(members.length, appearance),
+      className: appearance.className,
       iconSize: L.point(CLUSTER_ICON_SIZE_PX, CLUSTER_ICON_SIZE_PX),
     });
   }

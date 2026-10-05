@@ -64,6 +64,13 @@ export const cs = {
   selectedSensors: 'Vybraná čidla',
   removeSensor: 'Odebrat {sensor} ze srovnání',
   clusterLabel: 'Skupina čidel: {count} – přiblížit',
+  selectGroupMatches: 'Vybrat nalezená v {group}',
+  groupMatches: 'nalezeno {found} z {total}',
+  reasonOffice: 'v kanceláři',
+  reasonService: 'servis',
+  reasonTransport: 'přeprava',
+  reasonStorage: 'uskladnění',
+  reasonOther: 'jiný důvod',
 } as const;
 
 /** Message key of the UI dictionaries. */

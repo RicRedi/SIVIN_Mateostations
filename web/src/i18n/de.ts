@@ -67,4 +67,11 @@ export const de: Dictionary = {
   selectedSensors: 'Ausgewählte Sensoren',
   removeSensor: '{sensor} aus dem Vergleich entfernen',
   clusterLabel: 'Gruppe von {count} Sensoren – vergrößern',
+  selectGroupMatches: 'Treffer auswählen in {group}',
+  groupMatches: '{found} von {total} gefunden',
+  reasonOffice: 'im Büro',
+  reasonService: 'Wartung',
+  reasonTransport: 'Transport',
+  reasonStorage: 'Lagerung',
+  reasonOther: 'anderer Grund',
 };

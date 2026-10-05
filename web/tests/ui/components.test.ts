@@ -70,7 +70,7 @@ describe('SensorPanel', () => {
   it('shows the hint without a selection and hides controls', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    panel.render([], false);
+    panel.render([]);
     expect(root.querySelector('.panel__hint')?.textContent).toContain('Vyberte čidlo');
     expect(panel.chartSlot.hidden).toBe(true);
     expect(panel.windowSlot.hidden).toBe(true);
@@ -79,7 +79,7 @@ describe('SensorPanel', () => {
   it('shows metadata and latest values of selected sensors, marking stale ones', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    panel.render([sensor('77799986'), sensor('77800065')], false);
+    panel.render([sensor('77799986'), sensor('77800065')]);
     const cards = root.querySelectorAll('.sensor-card');
     expect(cards).toHaveLength(2);
     const text = cards[0]?.textContent ?? '';
@@ -95,12 +95,13 @@ describe('SensorPanel', () => {
     expect(root.querySelector<HTMLElement>('.panel__hint')?.hidden).toBe(true);
   });
 
-  it('shows the comparison limit and toggles the bottom sheet', () => {
+  it('never repeats the comparison limit (the picker shows it) and toggles the bottom sheet', () => {
     const root = document.createElement('aside');
     const onToggle = vi.fn();
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), onToggle);
-    panel.render([sensor('77678271')], true);
-    expect(root.querySelector('.panel__hint')?.textContent).toBe('Srovnat lze nejvýše 1 čidel.');
+    panel.render([sensor('77678271')]);
+    expect(root.querySelector<HTMLElement>('.panel__hint')?.hidden).toBe(true);
+    expect(root.textContent).not.toContain('Srovnat lze');
     const toggle = root.querySelector<HTMLButtonElement>('.panel__toggle');
     toggle?.click();
     expect(root.classList.contains('panel--collapsed')).toBe(true);
@@ -113,7 +114,7 @@ describe('SensorPanel', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
     const bare: SensorInfo = { ...sensor('77678271'), latest: null, elevation_m: null, placedSince: 'unknown', municipality: 'Obec X', track: null, variety: null };
-    panel.render([bare], false);
+    panel.render([bare]);
     const text = root.querySelector('.sensor-card')?.textContent ?? '';
     expect(text).toContain('bez hodnoty');
     expect(text).toContain('unknown');

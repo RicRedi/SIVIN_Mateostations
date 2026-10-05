@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SensorInfo } from '../src/app/SensorCatalog';
 import { SensorGrouping } from '../src/app/SensorGroups';
-import { SensorQuery, foldText } from '../src/app/SensorQuery';
-import { checkState, toggleGroupInSelection } from '../src/state/GroupSelection';
+import { SensorQuery, foldText, foldedWords } from '../src/app/SensorQuery';
+import { checkState, groupNotice, toggleGroupInSelection } from '../src/state/GroupSelection';
 
 // Picker logic (WP-3.5). All sensors, names and varieties are synthetic.
 
@@ -81,15 +81,34 @@ describe('SensorQuery', () => {
     expect(foldText('Šlechtitelská Ž ČÍ')).toBe('slechtitelska z ci');
   });
 
-  it('matches id, label, municipality, track and variety without diacritics', () => {
-    for (const text of ['7767', 'vut', 'sakvice', 'TRKMAN', 'rynsky', 'Ryzlink  Šak']) {
+  it('matches word starts of id, label, municipality, track and variety without diacritics', () => {
+    for (const text of ['7767', 'vut', 'sakvice', 'TRKMAN', 'rynsky', 'Ryzlink  Šak', '(VUT)', 'ryz-ryn']) {
       expect(SensorQuery.parse(text).matches(vineyard)).toBe(true);
+    }
+  });
+
+  it('does not match inside words', () => {
+    for (const text of ['8271', 'akvice', 'link', 'ut']) {
+      expect(SensorQuery.parse(text).matches(vineyard)).toBe(false);
     }
   });
 
   it('needs every word to match', () => {
     expect(SensorQuery.parse('ryzlink pálava').matches(vineyard)).toBe(false);
     expect(SensorQuery.parse('obec').matches(vineyard)).toBe(false);
+  });
+
+  it('separates single letters and digits: "obec b trat 4" is Obec B / Trať 4 only', () => {
+    const query = SensorQuery.parse('obec b trat 4');
+    expect(query.matches(sensor('90000301', 'Obec B', 'Trať 4'))).toBe(true);
+    expect(query.matches(sensor('90000401', 'Obec C', 'Trať 5'))).toBe(false);
+    expect(query.matches(sensor('90000201', 'Obec B', 'Trať 3'))).toBe(false);
+    expect(query.matches(sensor('90000441', 'Obec B', 'Trať 14'))).toBe(false);
+  });
+
+  it('splits words on punctuation', () => {
+    expect(foldedWords('Obec B – Trať 4 (demo)')).toEqual(['obec', 'b', 'trat', '4', 'demo']);
+    expect(foldedWords('  ')).toEqual([]);
   });
 
   it('matches everything when empty and ignores null fields', () => {
@@ -109,12 +128,22 @@ describe('group selection', () => {
     expect(checkState([], ['a'])).toBe('none');
   });
 
-  it('adds the unselected sensors of a group in group order', () => {
-    expect(toggleGroupInSelection(['x', 'b'], ['a', 'b', 'c'])).toEqual({ selection: ['x', 'b', 'a', 'c'], added: 2, truncated: false });
+  it('adds a group without selected sensors in group order', () => {
+    expect(toggleGroupInSelection(['x'], ['a', 'b', 'c'])).toEqual({ selection: ['x', 'a', 'b', 'c'], added: 3, truncated: false });
   });
 
-  it('removes a fully selected group and keeps the rest', () => {
+  it('clears a group with any selected sensor and keeps the rest', () => {
     expect(toggleGroupInSelection(['a', 'x', 'b'], ['a', 'b'])).toEqual({ selection: ['x'], added: 0, truncated: false });
+    expect(toggleGroupInSelection(['x', 'b'], ['a', 'b', 'c'])).toEqual({ selection: ['x'], added: 0, truncated: false });
+  });
+
+  it('clears a partly selected group also at the comparison limit', () => {
+    const full = ['s1', 's2', 's3', 's4', 's5', 's6', 'g1', 'g2'];
+    expect(toggleGroupInSelection(full, ['g1', 'g2', 'g3'])).toEqual({
+      selection: ['s1', 's2', 's3', 's4', 's5', 's6'],
+      added: 0,
+      truncated: false,
+    });
   });
 
   it('stops at the comparison limit and reports truncation', () => {
@@ -129,6 +158,12 @@ describe('group selection', () => {
     expect(none).toEqual({ selection: full, added: 0, truncated: true });
     expect(none.selection).toBe(full);
     expect(toggleGroupInSelection(['a'], ['b', 'c', 'd'], 2)).toEqual({ selection: ['a', 'b'], added: 1, truncated: true });
+  });
+
+  it('turns a truncated toggle into a notice, never "added 0"', () => {
+    expect(groupNotice({ selection: [], added: 0, truncated: false })).toBeNull();
+    expect(groupNotice({ selection: [], added: 0, truncated: true })).toEqual({ kind: 'full' });
+    expect(groupNotice({ selection: [], added: 2, truncated: true })).toEqual({ kind: 'group', added: 2 });
   });
 
   it('leaves the selection unchanged for an empty group', () => {

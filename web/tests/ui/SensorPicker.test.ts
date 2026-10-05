@@ -6,7 +6,6 @@ import { cs } from '../../src/i18n/cs';
 import { de } from '../../src/i18n/de';
 import { en } from '../../src/i18n/en';
 import { I18n } from '../../src/i18n/I18n';
-import { ClusterIcon } from '../../src/ui/ClusterIcon';
 import { SensorPicker } from '../../src/ui/picker/SensorPicker';
 import { SensorColors } from '../../src/ui/SensorColors';
 import { fixtureJson } from '../helpers';
@@ -29,7 +28,7 @@ interface Harness {
   onGroupToggle: ReturnType<typeof vi.fn<(ids: readonly string[]) => void>>;
 }
 
-function setup(selected: readonly string[] = []): Harness {
+function setup(selected: readonly string[] = [], isSheet = false): Harness {
   document.body.replaceChildren();
   const root = document.createElement('section');
   const outside = document.createElement('button');
@@ -39,7 +38,7 @@ function setup(selected: readonly string[] = []): Harness {
   colors.update(selected);
   const onSensorToggle = vi.fn<(id: string) => void>();
   const onGroupToggle = vi.fn<(ids: readonly string[]) => void>();
-  const picker = new SensorPicker(root, catalog, i18n, colors, { onSensorToggle, onGroupToggle });
+  const picker = new SensorPicker(root, catalog, i18n, colors, { onSensorToggle, onGroupToggle }, () => isSheet);
   picker.render(selected, null);
   return { root, picker, i18n, colors, onSensorToggle, onGroupToggle };
 }
@@ -62,7 +61,7 @@ function groupHeads(root: HTMLElement, level: 'municipality' | 'track'): string[
 
 function groupCheckbox(root: HTMLElement, name: string): HTMLInputElement {
   const box = [...root.querySelectorAll<HTMLInputElement>('.picker-group__all')].find(
-    (input) => input.getAttribute('aria-label') === `Vybrat vše: ${name}`,
+    (input) => [`Vybrat vše: ${name}`, `Vybrat nalezená v ${name}`].includes(input.getAttribute('aria-label') ?? ''),
   );
   if (box === undefined) {
     throw new Error(name);
@@ -97,9 +96,14 @@ describe('SensorPicker', () => {
 
   it('groups municipality → track with the unassigned groups last', () => {
     trigger(h.root).click();
-    expect(groupHeads(h.root, 'municipality')).toEqual(['Obec A1/7', 'Obec B1/6', 'Obec C0/5', 'Nezařazeno0/2']);
+    expect(groupHeads(h.root, 'municipality')).toEqual(['Obec A0/4', 'Obec B1/6', 'Obec C0/5', 'Nezařazeno1/5']);
     expect(groupHeads(h.root, 'track')).toEqual([
-      'Trať 11/4', 'Trať 20/3', 'Trať 30/3', 'Trať 41/3', 'Trať 50/2', 'Trať 60/2', 'Nezařazeno0/1', 'Nezařazeno0/2',
+      'Trať 10/1', 'Trať 20/3', 'Trať 30/3', 'Trať 41/3', 'Trať 50/2', 'Trať 60/2', 'Nezařazeno0/1', 'Nezařazeno1/5',
+    ]);
+    // The four real sensors carry no fictional grouping in the demo.
+    const unassigned = [...h.root.querySelectorAll('.picker-group--track')].at(-1);
+    expect([...(unassigned?.querySelectorAll('input[value]') ?? [])].map((box) => (box as HTMLInputElement).value)).toEqual([
+      '77678271', '77680921', '77799986', '77800065', '90000501',
     ]);
   });
 
@@ -116,13 +120,13 @@ describe('SensorPicker', () => {
 
   it('reflects the selection in checkboxes, swatches and tri-state group boxes', () => {
     const checked = [...h.root.querySelectorAll<HTMLInputElement>('.picker-sensor input:checked')].map((box) => box.value);
-    expect(checked).toEqual(['77680921', '90000302']);
-    const track1 = groupCheckbox(h.root, 'Trať 1');
-    expect([track1.checked, track1.indeterminate]).toEqual([false, true]);
+    expect(checked).toEqual(['90000302', '77680921']);
+    const track4 = groupCheckbox(h.root, 'Trať 4');
+    expect([track4.checked, track4.indeterminate]).toEqual([false, true]);
     const track2 = groupCheckbox(h.root, 'Trať 2');
     expect([track2.checked, track2.indeterminate]).toEqual([false, false]);
-    h.picker.render(['77678271', '77680921', '77800065', '90000101'], null);
-    expect([track1.checked, track1.indeterminate]).toEqual([true, false]);
+    h.picker.render(['90000301', '90000302', '90000303'], null);
+    expect([track4.checked, track4.indeterminate]).toEqual([true, false]);
     const swatch = h.root.querySelector<HTMLElement>('#picker-sensor-77680921 + .swatch');
     expect(swatch?.style.background).toBe('rgb(42, 120, 214)');
   });
@@ -138,11 +142,13 @@ describe('SensorPicker', () => {
 
   it('filters by search, ignoring case and diacritics, and selects only matches of a group', () => {
     trigger(h.root).click();
-    type(h.root, 'tRAT 4');
-    // Every word must match some field: "4" also matches the ids 900004xx of Obec C.
-    expect(groupHeads(h.root, 'municipality')).toEqual(['Obec B1/3', 'Obec C0/4']);
+    type(h.root, 'obec b tRAT 4');
+    // Word starts only: "b" does not match inside "obec", "4" not inside the ids 900004xx.
+    expect(groupHeads(h.root, 'municipality')).toEqual(['Obec Bnalezeno 3 z 61/3']);
+    type(h.root, 'trat 4');
+    expect(groupHeads(h.root, 'track')).toEqual(['Trať 4nalezeno 3 z 31/3']);
     type(h.root, 'zweigel');
-    expect(groupHeads(h.root, 'track')).toEqual(['Trať 41/2']);
+    expect(groupHeads(h.root, 'track')).toEqual(['Trať 4nalezeno 2 z 31/2']);
     groupCheckbox(h.root, 'Obec B').dispatchEvent(new Event('change'));
     expect(h.onGroupToggle).toHaveBeenLastCalledWith(['90000301', '90000302']);
     type(h.root, 'pálava');
@@ -153,6 +159,23 @@ describe('SensorPicker', () => {
     type(h.root, '');
     expect(groupHeads(h.root, 'municipality')).toHaveLength(4);
     expect(h.root.querySelector<HTMLElement>('.picker__empty')?.hidden).toBe(true);
+  });
+
+  it('names the group checkbox after the matches during a search and shows their state', () => {
+    trigger(h.root).click();
+    const box = groupCheckbox(h.root, 'Obec B');
+    expect(box.getAttribute('aria-label')).toBe('Vybrat vše: Obec B');
+    type(h.root, 'ryzl');
+    expect(box.getAttribute('aria-label')).toBe('Vybrat nalezená v Obec B');
+    expect([box.checked, box.indeterminate]).toEqual([false, false]);
+    const hint = box.parentElement?.querySelector<HTMLElement>('.picker-group__matches');
+    expect([hint?.hidden, hint?.textContent]).toEqual([false, 'nalezeno 2 z 6']);
+    h.picker.render(['90000201', '90000202'], null);
+    expect([box.checked, box.indeterminate]).toEqual([true, false]);
+    type(h.root, '');
+    expect([box.checked, box.indeterminate]).toEqual([false, true]);
+    expect(hint?.hidden).toBe(true);
+    expect(box.getAttribute('aria-label')).toBe('Vybrat vše: Obec B');
   });
 
   it('collapses groups and expands them all when a search starts', () => {
@@ -183,7 +206,7 @@ describe('SensorPicker', () => {
     trigger(h.root).click();
     type(h.root, '90000201');
     key(search(h.root), 'ArrowDown');
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Vybrat vše: Obec B');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Vybrat nalezená v Obec B');
     key(document.activeElement as HTMLElement, 'ArrowDown');
     expect(document.activeElement?.classList.contains('picker-group__toggle')).toBe(true);
     key(document.activeElement as HTMLElement, 'ArrowDown');
@@ -214,7 +237,7 @@ describe('SensorPicker', () => {
   it('shows a limit notice for a single sensor and for a group', () => {
     const notice = h.root.querySelector<HTMLElement>('.picker__notice');
     expect(notice?.hidden).toBe(true);
-    h.picker.render(['77680921'], { kind: 'sensor' });
+    h.picker.render(['77680921'], { kind: 'full' });
     expect(notice?.hidden).toBe(false);
     expect(notice?.textContent).toBe('Srovnat lze nejvýše 8 čidel.');
     h.picker.render(['77680921'], { kind: 'group', added: 3 });
@@ -223,13 +246,24 @@ describe('SensorPicker', () => {
     expect(notice?.hidden).toBe(true);
   });
 
+  it('shows the notice once: under the button when closed, inside the open panel', () => {
+    const notice = h.root.querySelector<HTMLElement>('.picker__notice');
+    const panel = h.root.querySelector('.picker__panel');
+    expect(notice?.previousElementSibling).toBe(trigger(h.root));
+    trigger(h.root).click();
+    expect(notice?.parentElement).toBe(panel);
+    expect(h.root.querySelectorAll('.picker__notice')).toHaveLength(1);
+    trigger(h.root).click();
+    expect(notice?.parentElement).toBe(h.root);
+  });
+
   it('translates on render', () => {
     h.i18n.setLanguage('en');
     h.picker.render([], null);
     trigger(h.root).click();
     expect(trigger(h.root).textContent).toBe('Sensors (0/20)▾');
     expect(search(h.root).getAttribute('aria-label')).toBe('Search sensors');
-    expect(groupHeads(h.root, 'municipality').at(-1)).toBe('Unassigned0/2');
+    expect(groupHeads(h.root, 'municipality').at(-1)).toBe('Unassigned0/5');
   });
 });
 
@@ -265,13 +299,76 @@ describe('SensorChips', () => {
   });
 });
 
-describe('ClusterIcon', () => {
-  it('shows the count, an accessible name and the selection highlight', () => {
-    const icon = new ClusterIcon(new I18n({ cs, de, en }, 'cs'));
-    const content = icon.content(5);
-    expect(content.querySelector('[aria-hidden]')?.textContent).toBe('5');
-    expect(content.querySelector('.visually-hidden')?.textContent).toBe('Skupina čidel: 5 – přiblížit');
-    expect(icon.className(0)).toBe('sensor-cluster');
-    expect(icon.className(2)).toBe('sensor-cluster sensor-cluster--selected');
+describe('SensorPicker as a phone sheet', () => {
+  function sheetSetup(): { h: Harness; page: HTMLElement; header: HTMLElement } {
+    const h = setup(['90000201'], true);
+    // Put the picker into a page like the app's: header, map, panel with other sections.
+    const header = document.createElement('header');
+    const page = document.createElement('main');
+    const other = document.createElement('section');
+    other.append(document.createElement('button'));
+    page.append(h.root, other);
+    document.body.replaceChildren(header, page);
+    return { h, page, header };
+  }
+
+  it('is a modal dialog with the rest of the page inert while open', () => {
+    const { h, page, header } = sheetSetup();
+    const panel = h.root.querySelector<HTMLElement>('.picker__panel');
+    expect(panel?.getAttribute('role')).toBe('group');
+    trigger(h.root).click();
+    expect(panel?.getAttribute('role')).toBe('dialog');
+    expect(panel?.getAttribute('aria-modal')).toBe('true');
+    expect(header.hasAttribute('inert')).toBe(true);
+    expect(page.lastElementChild?.hasAttribute('inert')).toBe(true);
+    expect(trigger(h.root).hasAttribute('inert')).toBe(true);
+    expect(h.root.querySelector('.picker-chips')?.hasAttribute('inert')).toBe(true);
+    expect(panel?.hasAttribute('inert')).toBe(false);
+    expect(page.hasAttribute('inert')).toBe(false);
+    h.root.querySelector<HTMLButtonElement>('.picker__close')?.click();
+    expect(panel?.getAttribute('role')).toBe('group');
+    expect(panel?.hasAttribute('aria-modal')).toBe(false);
+    expect(document.querySelectorAll('[inert]')).toHaveLength(0);
+    expect(document.activeElement).toBe(trigger(h.root));
+  });
+
+  it('leaves elements that were inert before alone', () => {
+    const { h, header } = sheetSetup();
+    header.setAttribute('inert', '');
+    trigger(h.root).click();
+    key(search(h.root), 'Escape');
+    expect(header.hasAttribute('inert')).toBe(true);
+  });
+
+  it('traps Tab inside the sheet', () => {
+    const { h } = sheetSetup();
+    trigger(h.root).click();
+    const close = required(h.root.querySelector<HTMLButtonElement>('.picker__close'));
+    const controls = [...required(h.root.querySelector('.picker__panel')).querySelectorAll<HTMLElement>('input, button')].filter(
+      (control) => control.closest('[hidden]') === null,
+    );
+    const last = required(controls.at(-1) ?? null);
+    last.focus();
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    last.dispatchEvent(forward);
+    expect(forward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(close);
+    const back = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    close.dispatchEvent(back);
+    expect(document.activeElement).toBe(last);
+    search(h.root).focus();
+    const middle = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    search(h.root).dispatchEvent(middle);
+    expect(middle.defaultPrevented).toBe(false);
+  });
+
+  it('is not modal on desktop', () => {
+    const h = setup();
+    trigger(h.root).click();
+    expect(h.root.querySelector('.picker__panel')?.getAttribute('role')).toBe('group');
+    expect(document.querySelectorAll('[inert]')).toHaveLength(0);
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    search(h.root).dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
   });
 });

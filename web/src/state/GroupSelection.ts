@@ -25,9 +25,11 @@ export interface GroupToggle {
 /**
  * Toggle a group ("select all" checkbox of a municipality or a track).
  *
- * A fully selected group is removed from the selection. Otherwise its unselected sensors are
- * appended in group order until `max` sensors are selected; the rest is left out and reported
- * as `truncated`, so the caller can tell the user about the limit.
+ * A group with any selected sensor (tri-state `some` or `all`) is cleared: its selected sensors
+ * leave the selection, so a partly selected group can always be cleared with its checkbox, also
+ * at the comparison limit. A group without a selected sensor is added: its sensors are appended
+ * in group order until `max` sensors are selected; the rest is left out and reported as
+ * `truncated`, so the caller can tell the user about the limit.
  */
 export function toggleGroupInSelection(
   selected: readonly string[],
@@ -37,20 +39,28 @@ export function toggleGroupInSelection(
   if (groupIds.length === 0) {
     return { selection: selected, added: 0, truncated: false };
   }
-  if (checkState(groupIds, selected) === 'all') {
+  if (checkState(groupIds, selected) !== 'none') {
     return { selection: selected.filter((id) => !groupIds.includes(id)), added: 0, truncated: false };
   }
-  const missing = groupIds.filter((id) => !selected.includes(id));
   const room = Math.max(0, max - selected.length);
-  const added = missing.slice(0, room);
+  const added = groupIds.slice(0, room);
   return {
     selection: added.length === 0 ? selected : [...selected, ...added],
     added: added.length,
-    truncated: added.length < missing.length,
+    truncated: added.length < groupIds.length,
   };
 }
 
-/** Why the last selection change hit the comparison limit; shown to the user once. */
-export type LimitNotice =
-  | { readonly kind: 'sensor' }
-  | { readonly kind: 'group'; readonly added: number };
+/**
+ * Why the last selection change hit the comparison limit; shown to the user once. `full`: nothing
+ * could be added; `group`: only `added` sensors of a group were added.
+ */
+export type LimitNotice = { readonly kind: 'full' } | { readonly kind: 'group'; readonly added: number };
+
+/** The notice for the outcome of a group toggle, or `null` when the limit was not hit. */
+export function groupNotice(toggle: GroupToggle): LimitNotice | null {
+  if (!toggle.truncated) {
+    return null;
+  }
+  return toggle.added === 0 ? { kind: 'full' } : { kind: 'group', added: toggle.added };
+}

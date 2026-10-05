@@ -66,4 +66,11 @@ export const en: Dictionary = {
   selectedSensors: 'Selected sensors',
   removeSensor: 'Remove {sensor} from the comparison',
   clusterLabel: 'Group of {count} sensors – zoom in',
+  selectGroupMatches: 'Select matches in {group}',
+  groupMatches: '{found} of {total} found',
+  reasonOffice: 'in the office',
+  reasonService: 'service',
+  reasonTransport: 'transport',
+  reasonStorage: 'storage',
+  reasonOther: 'other reason',
 };

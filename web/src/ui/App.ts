@@ -3,7 +3,7 @@ import type { SensorCatalog, SensorInfo } from '../app/SensorCatalog';
 import type { I18n } from '../i18n/I18n';
 import type { LanguagePreference } from '../i18n/LanguagePreference';
 import { selectOnly, toggleInSelection, type AppState, type AppStore } from '../state/AppState';
-import { toggleGroupInSelection, type LimitNotice } from '../state/GroupSelection';
+import { groupNotice, toggleGroupInSelection, type LimitNotice } from '../state/GroupSelection';
 import type { SensorColors } from './SensorColors';
 import type { WindowChange, WindowControlState } from './TimeWindowControl';
 
@@ -11,7 +11,7 @@ import type { WindowChange, WindowControlState } from './TimeWindowControl';
 export interface AppViews {
   readonly header: { render(): void };
   readonly map: { render(selectedIds: readonly string[]): void; invalidateSize(): void; fitToSensors(): void };
-  readonly panel: { render(selected: readonly SensorInfo[], limitReached: boolean): void };
+  readonly panel: { render(selected: readonly SensorInfo[]): void };
   readonly picker: { render(selectedIds: readonly string[], notice: LimitNotice | null): void };
   readonly windowControl: { render(state: WindowControlState): void };
   readonly chart: { render(): void };
@@ -59,12 +59,12 @@ export class App {
   };
 
   /**
-   * "Select all" checkbox of a picker group: removes a fully selected group, otherwise adds its
-   * sensors up to the comparison limit (reported when not all fit).
+   * "Select all" checkbox of a picker group: clears a group with any selected sensor, otherwise
+   * adds its sensors up to the comparison limit (reported when not all fit).
    */
   readonly onGroupToggle = (sensorIds: readonly string[]): void => {
     const result = toggleGroupInSelection(this.store.state.selectedSensorIds, sensorIds);
-    this.notice = result.truncated ? { kind: 'group', added: result.added } : null;
+    this.notice = groupNotice(result);
     this.select(result.selection);
   };
 
@@ -79,7 +79,7 @@ export class App {
   private toggled(sensorId: string): readonly string[] {
     const current = this.store.state.selectedSensorIds;
     const next = toggleInSelection(current, sensorId);
-    this.notice = next === current ? { kind: 'sensor' } : null;
+    this.notice = next === current ? { kind: 'full' } : null;
     return next;
   }
 
@@ -122,7 +122,7 @@ export class App {
       .filter((sensor): sensor is SensorInfo => sensor !== undefined);
     this.views.map.render(state.selectedSensorIds);
     this.views.picker.render(state.selectedSensorIds, this.notice);
-    this.views.panel.render(selected, this.notice !== null);
+    this.views.panel.render(selected);
     this.views.windowControl.render({
       spec: state.window,
       resolution: state.resolution,

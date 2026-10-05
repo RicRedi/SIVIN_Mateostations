@@ -23,6 +23,8 @@ interface PickerNode {
   readonly element: HTMLElement;
   /** Show the node for `state`; returns the ids of its visible sensors (none = node hidden). */
   update(state: PickerViewState): readonly string[];
+  /** Number of sensors in the node, visible or not. */
+  readonly size: number;
   expandAll(): void;
 }
 
@@ -35,6 +37,7 @@ export function applyCheckState(input: HTMLInputElement, state: CheckState): voi
 /** One sensor: checkbox, line-colour swatch, label and a muted line with variety / retired. */
 class SensorRow implements PickerNode {
   readonly element: HTMLLIElement;
+  readonly size = 1;
   private readonly checkbox: HTMLInputElement;
   private readonly swatch = el('span', { class: 'swatch', 'aria-hidden': 'true' });
   private readonly meta = el('span', { class: 'picker-sensor__meta' });
@@ -80,6 +83,10 @@ class SensorRow implements PickerNode {
 /**
  * A municipality or track: a "select all" checkbox (tri-state over the visible sensors), a
  * disclosure button with the name and the count of selected / visible sensors, and the children.
+ *
+ * During a search the checkbox acts on the matches only, so it says so: its name becomes
+ * "Vybrat nalezená v <group>" and a hint "nalezeno m z n" shows how many of the group's sensors
+ * match; its check state refers to the matches.
  */
 class GroupNode implements PickerNode {
   readonly element: HTMLLIElement;
@@ -87,6 +94,8 @@ class GroupNode implements PickerNode {
   private readonly toggle: HTMLButtonElement;
   private readonly nameText = el('span', { class: 'picker-group__name' });
   private readonly count = el('span', { class: 'picker-group__count' });
+  private readonly matches = el('span', { class: 'picker-group__matches' });
+  readonly size: number;
   private readonly body: HTMLUListElement;
   private visibleIds: readonly string[] = [];
   private expanded = true;
@@ -99,12 +108,14 @@ class GroupNode implements PickerNode {
     private readonly i18n: I18n,
     onGroupToggle: (sensorIds: readonly string[]) => void,
   ) {
+    this.size = children.reduce((total, child) => total + child.size, 0);
     this.checkbox.addEventListener('change', () => {
       onGroupToggle(this.visibleIds);
     });
     this.toggle = el('button', { type: 'button', class: 'picker-group__toggle', 'aria-expanded': 'true', 'aria-controls': bodyId }, [
       el('span', { class: 'picker-group__chevron', 'aria-hidden': 'true' }),
       this.nameText,
+      this.matches,
       this.count,
     ]);
     this.toggle.addEventListener('click', () => {
@@ -125,8 +136,11 @@ class GroupNode implements PickerNode {
     this.element.classList.toggle('is-unassigned', this.name === null);
     const selected = this.visibleIds.filter((id) => state.selectedIds.includes(id)).length;
     this.count.textContent = `${selected}/${this.visibleIds.length}`;
+    const searching = !state.query.isEmpty;
+    this.matches.hidden = !searching;
+    this.matches.textContent = searching ? this.i18n.t('groupMatches', { found: this.visibleIds.length, total: this.size }) : '';
     applyCheckState(this.checkbox, checkState(this.visibleIds, state.selectedIds));
-    this.checkbox.setAttribute('aria-label', this.i18n.t('selectGroup', { group: name }));
+    this.checkbox.setAttribute('aria-label', this.i18n.t(searching ? 'selectGroupMatches' : 'selectGroup', { group: name }));
     return this.visibleIds;
   }
 

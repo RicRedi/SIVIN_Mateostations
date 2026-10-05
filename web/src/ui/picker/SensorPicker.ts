@@ -6,10 +6,13 @@ import { MAX_COMPARED_SENSORS } from '../../state/AppState';
 import type { LimitNotice } from '../../state/GroupSelection';
 import { el } from '../dom';
 import type { SensorColors } from '../SensorColors';
+import { ModalSheet } from './ModalSheet';
 import { PickerTree, type PickerTreeHandlers } from './PickerTree';
 import { SensorChips } from './SensorChips';
 
 const PANEL_ID = 'sensor-picker-panel';
+/** Role of the open panel when it is not a modal sheet (desktop disclosure). */
+const PANEL_ROLE = 'group';
 /** Controls the arrow keys move between inside the open panel. */
 const FOCUSABLE = 'input, button';
 
@@ -21,7 +24,10 @@ const FOCUSABLE = 'input, button';
  *
  * Keyboard: the button toggles the panel; opening focuses the search field; Tab and the
  * arrow keys move between the controls; Escape closes and returns focus to the button. A click
- * outside closes the panel. On phones the panel is a full-screen sheet with a close button (CSS).
+ * outside closes the panel. On phones (`isSheet()`) the open panel is a modal full-screen sheet
+ * ({@link ModalSheet}: `role="dialog"`, `aria-modal`, the rest of the page `inert`, Tab trapped)
+ * with a close button. A limit notice is shown once: inside the open panel, else under the
+ * button.
  */
 export class SensorPicker {
   private readonly trigger = el('button', {
@@ -37,6 +43,8 @@ export class SensorPicker {
   private readonly notice = el('p', { class: 'picker__notice', role: 'status' });
   private readonly empty = el('p', { class: 'picker__empty' });
   private readonly panel: HTMLDivElement;
+  private readonly list: HTMLDivElement;
+  private readonly sheet: ModalSheet;
   private readonly tree: PickerTree;
   private readonly chips: SensorChips;
   private query = SensorQuery.EMPTY;
@@ -48,6 +56,8 @@ export class SensorPicker {
    * @param i18n - Translations.
    * @param colors - Line colours of the compared sensors.
    * @param handlers - Called when a sensor or a whole group is toggled (chips remove a sensor).
+   * @param isSheet - Whether the panel opens as a full-screen sheet (phone layout); checked on
+   *   every opening.
    */
   constructor(
     private readonly root: HTMLElement,
@@ -55,19 +65,21 @@ export class SensorPicker {
     private readonly i18n: I18n,
     colors: SensorColors,
     handlers: PickerTreeHandlers,
+    private readonly isSheet: () => boolean = () => false,
   ) {
     this.tree = new PickerTree(new SensorGrouping().group(catalog.sensors), i18n, colors, handlers);
     this.chips = new SensorChips(catalog, i18n, colors, handlers.onSensorToggle, this.trigger);
-    this.panel = el('div', { class: 'picker__panel', id: PANEL_ID, role: 'group', 'aria-labelledby': this.title.id, hidden: true }, [
+    this.list = el('div', { class: 'picker__list' }, [this.tree.element]);
+    this.panel = el('div', { class: 'picker__panel', id: PANEL_ID, role: PANEL_ROLE, 'aria-labelledby': this.title.id, hidden: true }, [
       el('div', { class: 'picker__bar' }, [this.title, this.closeButton]),
       this.search,
-      this.notice,
       this.empty,
-      el('div', { class: 'picker__list' }, [this.tree.element]),
+      this.list,
     ]);
+    this.sheet = new ModalSheet(this.panel, PANEL_ROLE);
     this.trigger.append(this.triggerText, el('span', { class: 'picker__caret', 'aria-hidden': 'true' }, ['▾']));
     root.classList.add('picker');
-    root.append(this.trigger, this.panel, this.chips.element);
+    root.append(this.trigger, this.notice, this.panel, this.chips.element);
     this.listen();
   }
 
@@ -133,6 +145,7 @@ export class SensorPicker {
   }
 
   private onKeyDown(event: KeyboardEvent): void {
+    this.sheet.trapTab(event);
     if (event.key === 'Escape' && this.isOpen) {
       event.preventDefault();
       this.close(true);
@@ -153,6 +166,16 @@ export class SensorPicker {
     this.panel.hidden = !open;
     this.trigger.setAttribute('aria-expanded', String(open));
     this.root.classList.toggle('picker--open', open);
+    if (open) {
+      this.panel.insertBefore(this.notice, this.empty);
+    } else {
+      this.root.insertBefore(this.notice, this.panel);
+    }
+    if (open && this.isSheet()) {
+      this.sheet.activate();
+    } else if (this.sheet.active) {
+      this.sheet.deactivate();
+    }
   }
 
   private updateTree(): void {

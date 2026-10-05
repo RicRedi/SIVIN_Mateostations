@@ -186,3 +186,8 @@ class TestWhitespace:
         store.save(store.load(path), path)
         saved = json.loads(path.read_text(encoding="utf-8"))["features"][0]["properties"]
         assert saved["municipality"] == "Mikulov"
+
+
+def test_non_mapping_input_is_left_to_pydantic() -> None:
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        Sensor.model_validate("not a sensor")
