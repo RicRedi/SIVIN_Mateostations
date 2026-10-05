@@ -43,7 +43,8 @@ data provider portal ──► PortalClient ──► ExportParser ──► Inp
 
 ## Shared contracts (WP-0.1)
 
-These live in `sivin.core` and `sivin.analytics.base`. Every later workpackage builds on them;
+These live in `sivin.core` and `sivin.analytics.base`; import them from the submodules
+(`sivin.core` re-exports nothing, so light modules such as `sivin.config` never load pandas). Every later workpackage builds on them;
 changing one is a plan change approved by the owner.
 
 | Contract | Module | Summary |
@@ -51,10 +52,11 @@ changing one is a plan change approved by the owner.
 | `SensorId` | `sivin.core.ids` | Canonical 8-digit serial (`77678271`). `SensorId.parse` accepts the portal name `8615620 77678271`, the GPX name `77678271 (VUT)` and export file names/paths. The legacy 4-digit suffix (`8271`) is ambiguous and only resolvable through the sensor registry. |
 | `QcFlag` | `sivin.core.flags` | `IntFlag` bit field per sample: `MISSING=1, OUT_OF_RANGE=2, SPIKE=4, STEP=8, STUCK=16, PRE_DEPLOYMENT=32, NEIGHBOR_OUTLIER=64, TIMESTAMP_SUSPECT=128, MANUAL_EXCLUDE=256`. `QcFlag.DEFAULT_EXCLUDE` (311) is the default exclusion mask for indices. |
 | `MeasurementSeries` | `sivin.core.schema` | Validated, immutable measurements of one sensor: `timestamp_utc` (`datetime64[ns, UTC]`, strictly increasing), `temp_c`, `rh_pct` (`float64`, `NaN` = missing), `qc` (`int32`), optional `source`. `to_frame()` adds `sensor_id` (long format). |
-| `LocalTimeConverter` | `sivin.core.timeutil` | Local wall-clock → UTC with deterministic daylight-saving handling (ambiguous and nonexistent times are marked suspect); local calendar dates; UTC bounds of a local day (23 h / 25 h days). |
-| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day, number of valid samples and `coverage` (share of the real day length covered by valid samples). |
+| `LocalTimeConverter` | `sivin.core.timeutil` | Local wall-clock → UTC with deterministic daylight-saving handling: each fall-back transition is resolved on its own from the backward jump of the wall clock (or, without a jump, from the most regular sample spacing); nonexistent spring times are shifted by the gap. Ambiguous and nonexistent rows are `suspect`; guesses are `unresolved`; a suspect row that would duplicate another UTC instant becomes `NaT`. Also local calendar dates and UTC bounds of a local day (23 h / 25 h days). |
+| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day. Each variable is aggregated over its own valid values (present and not excluded): `temp_n_samples`/`temp_coverage`, `rh_n_samples`/`rh_coverage`. `n_samples` and `coverage` equal the temperature columns; `coverage` (share of the real day length covered by valid samples) is the column of the site contract. |
 | `MonthDay`, `Season` | `sivin.core.season` | Periods given by month and day (vegetation season, Huglin period, single months). |
 | `ClimateIndex`, `IndexContext`, `IndexResult`, `IndexRegistry` | `sivin.analytics.base` | Extension point for indices: a new index is a subclass registered with `@index_registry.register`; parameters are frozen pydantic models. |
+| defaults | `sivin.core.defaults` | Shared default values (time zone, nominal 1825 s interval, coverage thresholds) without heavy imports. |
 | `SivinConfig` | `sivin.config` | `config/sivin.yaml` as frozen pydantic models (`extra="forbid"`): sections `paths`, `time`, `analytics`. |
 | `ProjectPaths` | `sivin.paths` | Project root discovery; configuration paths are relative to it. |
 

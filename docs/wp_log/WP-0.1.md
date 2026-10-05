@@ -11,17 +11,23 @@ CLI skeleton (`sivin --version`, `sivin config show`). The legacy `requirements.
 legacy scripts and YAML files are unchanged and excluded from ruff and mypy.
 `docs/architecture.md` condenses MIGRATION_PLAN §2.
 
+**Round 2** addressed the review (round 1): fall-back resolution per transition, per-variable
+daily aggregation, no silent duplicate UTC instants, stricter validation (`DailyWeather`,
+`IndexContext`, `SensorId`, `MeasurementSeries`, config), `params_model` check, light config
+imports via `sivin.core.defaults`, bounded dev tools and a `.gitignore` test. Details per
+finding are in the *Status* column of the review table.
+
 ## Changed files
 
 - Tooling: `pyproject.toml`, `Makefile`, `.pre-commit-config.yaml`, `.gitignore`,
   `.github/workflows/ci.yml`, `requirements.txt` (deleted).
 - Configuration: `config/sivin.yaml`.
 - Package: `src/sivin/{__init__,cli,config,paths,logging_setup}.py`,
-  `src/sivin/core/{__init__,ids,flags,schema,timeutil,daily,season}.py`,
+  `src/sivin/core/{__init__,ids,flags,schema,timeutil,daily,season,defaults}.py`,
   `src/sivin/analytics/{__init__,base}.py`,
   `src/sivin/{registry,ingest,storage,quality,alignment}/__init__.py` (docstring only).
 - Tests: `tests/conftest.py`, `tests/core/test_{ids,flags,schema,timeutil,daily,season}.py`,
-  `tests/analytics/test_base.py`, `tests/test_{config,paths,cli}.py`.
+  `tests/analytics/test_base.py`, `tests/test_{config,paths,cli,gitignore}.py`.
 - Docs: `docs/architecture.md`, `docs/wp_log/WP-0.1.md`.
 
 ## Public API for later workpackages
@@ -54,7 +60,8 @@ class MeasurementSeries:
     to_frame() -> pd.DataFrame   # with leading sensor_id column
 
 # sivin.core.timeutil
-@dataclass(frozen=True) class ConversionResult: timestamps_utc: pd.Series; suspect: pd.Series
+@dataclass(frozen=True) class ConversionResult:
+    timestamps_utc: pd.Series; suspect: pd.Series; unresolved: pd.Series
 class LocalTimeConverter:
     def __init__(self, timezone: str); timezone: str
     to_utc(local_naive: pd.Series) -> ConversionResult
@@ -68,7 +75,8 @@ class DailyWeather:
     @classmethod from_series(series, timezone, expected_interval_s, exclude_mask)
     sensor_id, timezone, frame (copy), dates, __len__
     complete_days(min_coverage) -> DailyWeather; between(start_date, end_date) -> DailyWeather
-    # columns temp_min, temp_mean, temp_max, rh_min, rh_mean, rh_max, n_samples, coverage
+    # columns temp_min, temp_mean, temp_max, rh_min, rh_mean, rh_max, temp_n_samples,
+    # rh_n_samples, temp_coverage, rh_coverage, n_samples (= temp), coverage (= temp)
 
 # sivin.core.season
 @dataclass(frozen=True, slots=True, order=True) class MonthDay: month, day; in_year(year)
@@ -77,19 +85,25 @@ class DailyWeather:
 
 # sivin.analytics.base
 @dataclass(frozen=True, slots=True) class IndexContext: sensor_id, year, daily, series,
-    latitude_deg, elevation_m, timezone, min_daily_coverage=0.9, min_season_coverage=0.9,
-    exclude_mask=311
+    latitude_deg, elevation_m, timezone, min_daily_coverage, min_season_coverage, exclude_mask
+    # all required; consistency of sensor_id/timezone with daily/series is checked
 @dataclass(frozen=True) class IndexResult: index_id, sensor_id, year, value, unit, coverage,
     complete, classification=None, daily=None, details={}, estimated=False
 class IndexParams(BaseModel)                       # frozen, extra="forbid"
 class ClimateIndex[P: IndexParams](ABC):
-    index_id: ClassVar[str]; unit: ClassVar[str]; params_model: ClassVar[type[IndexParams]]
+    index_id: ClassVar[str]; unit: ClassVar[str]
+    params_model: ClassVar[type[IndexParams]]      # required; checked at registration
     def __init__(self, params: P | None = None); params: P
     @abstractmethod compute(self, ctx: IndexContext) -> IndexResult
     _season_days(self, ctx, season) -> SeasonDays  # complete days + coverage + complete
 class IndexRegistry: register (class decorator; also register("id")), create(index_id, params),
     get(index_id), ids(), __contains__, __len__
 index_registry: IndexRegistry
+
+# sivin.core.defaults (no pandas)
+DEFAULT_TIMEZONE, LEGACY_SAMPLING_INTERVAL_S, DEFAULT_MIN_DAILY_COVERAGE,
+DEFAULT_MIN_SEASON_COVERAGE
+# sivin.core/__init__ re-exports nothing: import from the submodules.
 
 # sivin.config / sivin.paths / sivin.logging_setup
 SivinConfig(paths: PathsConfig, time: TimeConfig, analytics: AnalyticsConfig); .default()
@@ -100,7 +114,31 @@ setup_logging(level="INFO")
 
 ## How it was verified
 
-All commands in `/home/user/wt/wp-0.1` with a venv created by
+Round 2 (all commands in `/home/user/wt/wp-0.1`, same venv; ruff 0.16.10, mypy 2.4.0):
+
+- `make lint` → `All checks passed!`, `32 files already formatted`.
+- `make type` → `Success: no issues found in 20 source files`.
+- `make test` → `181 passed`.
+- `make cov` → `TOTAL 825 0 178 0 100%`, `Required test coverage of 85% reached. Total
+  coverage: 100.00%`.
+- The reviewer's probes in `/tmp/claude-0/review-0.1/` re-run: `tz_probe.py` and
+  `tz_probe2.py` give correct, strictly increasing UTC for all fall-back phase offsets, for every
+  single missing sample (1800 s and 1825 s) and for `NaT` in the repeated hour. The only wrong
+  instant left is the 2026 group of the multi-year probe, which has a single sample with equal
+  evidence for both offsets; it is now flagged `unresolved` and no longer affects 2025. The
+  spring collision rows come back as `NaT` + `unresolved`, and `from_records` keeps all 15 rows
+  of the multi-year probe (it dropped 2 before). `daily_probe.py` gives `temp_max = 30.0` with
+  RH missing. `idx_probe.py` now stops at `IndexContext(...)` because the three thresholds are
+  required. `ms_probe.py` stops at the `±inf` value with `SchemaError`, and `ids_probe.py`
+  rejects the Arabic-Indic serial. All three are intended changes.
+- `.gitignore`: `tests/test_gitignore.py` asserts with `git check-ignore --no-index` that
+  `web/public/data/manifest.json`, `web/src/data/DataClient.ts`,
+  `docs/wp_log/img/WP-3.1-desktop.png`, fixtures, `sensors/sensors.geojson` and
+  `config/sivin.yaml` are versioned and that `/data/`, `/site/`, `/vystupy/`, root exports,
+  `.env`, `.venv/`, `web/node_modules/` and `web/dist/` are ignored (skipped without git).
+- `sivin.cli` import does not load pandas (`tests/test_config.py`, subprocess check).
+
+Round 1, with a venv created by
 `uv venv --seed --python 3.12 .venv && uv pip install -e ".[dev,ingest,viz]"`
 (pandas 3.0.6, numpy 2.5.3, pydantic 2.13.5, typer 0.27.2, ruff 0.16.10, mypy 2.4.0).
 
@@ -142,17 +180,32 @@ All commands in `/home/user/wt/wp-0.1` with a venv created by
    and 3.x would double the dtype handling, so the lower bound is 3.0 (installed: 3.0.6). The
    constructor of `MeasurementSeries` therefore rejects `datetime64[us, UTC]`; `from_records`
    normalises to `ns` as required by plan §2.5.
-2. **Every ambiguous fall-back time is marked suspect**, also when its offset was inferred from
-   the sample order. Plan WP-1.2 says "ambiguous → `TIMESTAMP_SUSPECT`"; the brief only asked to
-   mark the cases where inference fails. If inference fails, all ambiguous times of that input
-   are read as standard time (deterministic, logged as a warning).
+2. **Every ambiguous fall-back time is marked suspect**, also when its offset was resolved.
+   Plan WP-1.2 says "ambiguous → `TIMESTAMP_SUSPECT`"; the brief only asked to mark the cases
+   where inference fails. Resolution rule (round 2; pandas' `ambiguous="infer"` is no longer
+   used): ambiguous rows are grouped per local date, so every transition is resolved on its own;
+   (a) exactly one backward jump of the wall clock in recorded order (`NaT` skipped, "not later
+   than the predecessor") is the switch point; (b) without a jump, the split that maximises the
+   smallest step between consecutive UTC instants (including the nearest unambiguous
+   neighbours) wins if it is strictly increasing and unique, because the sensors sample at an
+   almost constant interval; (c) otherwise (several jumps, ties, no neighbours) the group is
+   read as standard time and flagged in the new `ConversionResult.unresolved` mask, with a
+   warning. Rule (b) is a heuristic; it is what makes a missing sample in the repeated hour
+   resolvable.
 3. **Nonexistent spring-forward times** are read with the UTC offset in force before the
    transition (PEP 495 `fold=0`), i.e. shifted forward by the length of the gap
    (02:15 → 03:15 CEST = 01:15 UTC). pandas' `nonexistent="shift_forward"` would collapse all of
-   them to 03:00 and create duplicates. Consequence: such samples can be later in UTC than a
-   genuine 03:00 sample that follows them; `from_records` sorts, and the rows are suspect.
+   them to 03:00. **No silent duplicates** (round 2): any suspect row whose UTC instant equals
+   another row's is returned as `NaT` and flagged `unresolved` (warning logged); duplicates
+   between two ordinary rows come from the source and are left to `InputValidator`. Samples in
+   the gap usually mean the configured source zone is wrong (Q2). Non-colliding shifted samples
+   can still be later than a genuine 03:00 sample that follows them; `from_records` sorts.
 4. **Additions to the briefed API** (only additions): `IndexContext.min_daily_coverage`,
-   `.min_season_coverage`, `.exclude_mask` (with defaults); `AnalyticsConfig.min_season_coverage`
+   `.min_season_coverage`, `.exclude_mask` (required since round 2, so a context factory must
+   pass the configuration values; `__post_init__` checks that `sensor_id`/`timezone` match the
+   carried `daily`/`series` and that the thresholds are valid); `ConversionResult.unresolved`;
+   `DailyWeather` columns `temp_n_samples`, `rh_n_samples`, `temp_coverage`, `rh_coverage`;
+   `sivin.core.defaults`; `AnalyticsConfig.min_season_coverage`
    (default 0.9, project default to be tuned) to decide `IndexResult.complete`; `SeasonDays`
    (return type of the protected helper); `IndexParams` base model; `IndexRegistry.get`/`__len__`;
    `QcFlag.all_bits()`; `excluded()` (vectorised `is_excluded`); `LocalTimeConverter.timezone`
@@ -161,20 +214,39 @@ All commands in `/home/user/wt/wp-0.1` with a venv created by
 5. **Index parameters**: the parameter model is the class variable `params_model` and the class
    is generic, `ClimateIndex[P]`, so `self.params` is precisely typed under mypy `--strict`.
    A nested class named `Params` cannot be used as the generic argument of its own outer class.
+   Since round 2 `params_model` has no default: registration and instantiation fail with a
+   clear `TypeError` when it is missing (`IndexParams` itself for an index without parameters).
 6. **Registry decorator**: the key is always the class's `index_id` (brief), but the form shown
    in plan §1.2, `@index_registry.register("huglin")`, is accepted too and must match it.
-7. **`DailyWeather` valid sample** = not excluded by the mask **and** both `temp_c` and `rh_pct`
-   present. All days from the first to the last sample are rows; days without valid samples
-   have `n_samples = 0`, `coverage = 0`, `NaN` aggregates. Means are arithmetic sample means.
+7. **`DailyWeather` aggregates temperature and humidity independently** (round 2, was: both
+   required). A value is valid when present and its row is not excluded by the mask; each
+   variable has its own count and coverage (`temp_n_samples`/`temp_coverage`,
+   `rh_n_samples`/`rh_coverage`). `n_samples` and `coverage` equal the temperature columns,
+   because nearly all indices are temperature-based; `coverage` is the site-contract column and
+   the one `complete_days()` uses. All days from the first to the last sample are rows; days
+   without valid values have zero counts and coverage and `NaN` aggregates. Means are
+   arithmetic sample means. The constructor validates dtypes, non-negative counts, coverage
+   within 0-1 and the equality of the alias columns.
 8. **`MeasurementSeries`** accepts a `sensor_id` column in its constructor only if every row
    equals the series' id (then drops it), so `to_frame()` output round-trips. `from_records`
-   does not set `MISSING` for `NaN` values; that is left to QC (WP-1.5).
+   does not set `MISSING` for `NaN` values; that is left to QC (WP-1.5). Duplicate timestamps
+   with different values are reduced to the last row with a warning (documented); reconciling
+   conflicts belongs to WP-1.2/WP-1.4. Round 2: `±inf` is rejected, column labels are plain
+   `str`, unparsable timestamp `Series` raise `SchemaError`.
 9. **`.gitignore`**: besides the briefed rules, `lib/`/`lib64/` (Python template) are anchored to
    the root so that `web/src/lib/` is not ignored, root-level images/videos (legacy outputs)
    are ignored, and `!/tests/fixtures/**` re-includes fixtures matched by any global rule.
 10. **Tests outside the plan's Files list**: `tests/analytics/test_base.py` and
     `tests/test_{config,paths,cli}.py` (plan lists only `tests/core/**`; the brief allows them).
 11. CI also runs on pushes to `main` (brief) in addition to `wp/**`, `claude/**` and PRs (plan).
+12. **Round 2 tooling:** `ruff>=0.16,<0.17` (matches the pre-commit pin v0.16.10) and
+    `mypy>=2.4,<3`. pytest keeps warnings as errors, except `DeprecationWarning` /
+    `PendingDeprecationWarning` raised inside third-party packages (runtime deps have no upper
+    bound, so these would make CI depend on upstream releases); deprecations attributed to
+    `sivin` code still fail.
+13. **`SensorId`** accepts ASCII digits only and the browser copy suffix
+    (`... (1).xlsx`). `sivin.core` re-exports nothing any more, so `sivin.config` (and
+    `sivin --version`) do not import pandas.
 
 ## Out of scope
 
@@ -182,6 +254,10 @@ All commands in `/home/user/wt/wp-0.1` with a venv created by
   rewritten in WP-5.2.
 - `CLAUDE.md` (line 30) and `CONTRIBUTING.md` (line 14) still say that before WP-0.1 only
   `requirements.txt` exists; the remark becomes obsolete after the merge.
+- WP-1.4 / WP-4.1: the briefed `/data/` rule also matches `data/raw/...` on the `data` branch;
+  that branch needs its own `.gitignore` or `git add -f`.
+- WP-1.2 / WP-1.4: store readers and parsers must build series through `from_records`
+  (pandas 3 reads `datetime64[us]`), and resolve conflicting duplicate timestamps before it.
 - Proposal: QualityCheck (WP-1.5) and ExportParser (WP-1.2) registries will repeat the
   `IndexRegistry` logic. A small generic `Registry[T]` in `sivin.core` could serve all three;
   not done here to keep the briefed API.
@@ -195,6 +271,11 @@ All commands in `/home/user/wt/wp-0.1` with a venv created by
 3. Should resolved (inferred) ambiguous times really carry `TIMESTAMP_SUSPECT` (decision 2), or
    only those that could not be inferred?
 4. Is requiring pandas ≥ 3.0 acceptable (decision 1)?
+5. `qc` is one bit field per row (frozen contract §2.5), so an RH-only QC finding also
+   excludes that row's temperature. Should the contract get per-variable flags before WP-1.5?
+   (Raised by the reviewer.)
+6. Is the spacing heuristic for fall-back groups without a clock jump (decision 2b)
+   acceptable, or should such groups always be `unresolved`?
 
 ## Review
 
@@ -240,22 +321,22 @@ naive bounds and `NaT`, `to_frame()` round trip; `_season_days` coverage (163/18
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | `src/sivin/core/timeutil.py:110-119` | Ambiguous-time fallback is global: if pandas cannot infer **one** fall-back cluster, **every** ambiguous time of the whole input is read as standard time. Reproduced: (a) input spanning 2025 (complete repeated hour, 1800 s) and 2026 (one sample in the repeated hour) → the correctly inferable 2025 rows `02:00`/`02:30` CEST map to the same UTC instants as the CET rows (2 exact duplicates, result not monotonic); `MeasurementSeries.from_records` then silently drops 2 real samples (warning only). (b) single year, 1825 s sampling, one sample missing inside the repeated hour → 1–2 samples silently 3600 s late while the output stays monotonic, so no later check can see it. (c) one `NaT` inside the repeated hour has the same effect. Fix: resolve each transition cluster separately (group ambiguous runs by local date); within a cluster use the backward jump of the wall clock as the switch point; when a cluster has no jump, pick the offset that keeps UTC strictly increasing w.r.t. the neighbouring unambiguous samples; never return duplicate UTC instants silently (raise or report). Add tests for (a)–(c) and for 1825 s data with a missing sample. | open |
-| major | `src/sivin/core/daily.py:128-130` | A sample counts only if **both** `temp_c` and `rh_pct` are present (deviation 7), so a missing RH value discards a valid temperature. Reproduced: `temp_c=[1, 30]`, `rh_pct=[50, NaN]` → `temp_max = 1.0` instead of 30.0, `n_samples = 1`. Most indices of §3.1/§3.2 use temperature only; an RH channel failure would make them lose whole days and `complete` flags. Fix: aggregate each variable over its own valid (not excluded, not NaN) samples; define `n_samples`/`coverage` explicitly (e.g. on temperature, which all thermal indices use, or add `n_samples_rh`/`coverage_rh` while keeping `coverage` for the site contract) and document it; add a hand-computed test. Related owner question: `qc` is one bit field per row (frozen contract §2.5), so an RH-only QC finding also excludes the temperature — worth raising before WP-1.5. | open |
-| minor | `src/sivin/core/timeutil.py:121-123` | Nonexistent spring-forward times read with `fold=0` can collide with genuine post-gap samples: local `02:00, 02:15, 03:00, 03:15` on 2026-03-29 → UTC `01:00, 01:15, 01:00, 01:15` (duplicates; `from_records` then drops two). The docstring says spacing is preserved but not that duplicates can occur. Suggest: report non-monotonic / duplicate output in `ConversionResult` (or raise), and document that samples inside the gap mean the source zone assumption (Q2) is probably wrong. | open |
-| minor | `src/sivin/core/schema.py:164-171` | `from_records` resolves duplicate timestamps with **different** values by keeping the last row, with only a log warning (reproduced: two rows at the same instant with 1.0 and 2.0 → 2.0 kept). This hides both the DST bugs above and real conflicts that §2.7 assigns to `InputValidator`. Suggest: drop only fully identical rows; raise `SchemaError` (or return the conflicts) for conflicting duplicates and leave the policy to WP-1.2/WP-1.4. | open |
-| minor | `src/sivin/core/ids.py:21,27` | `\d` matches any Unicode digit: `SensorId("٧٧٦٧٨٢٧١")` is accepted and `parse` returns a non-ASCII serial. Use `[0-9]` or `re.ASCII` (also for `name.isdigit()` at line 101). | open |
-| minor | `src/sivin/core/ids.py:23-33` | Browser-renamed downloads are rejected: `MeteoData_8615620 77678271 (VUT)_20260301_223857 (1).xlsx` → `ValueError`. Chrome appends ` (1)` when the legacy `chrome_driver.py` downloads into the same folder twice. Suggest accepting an optional ` \(\d+\)` before the extension (with a test), or documenting that callers strip it. | open |
-| minor | `src/sivin/core/daily.py:219-230` | The public `DailyWeather` constructor validates only column names and index: string columns, `coverage = 5.0` and negative `n_samples` are accepted (reproduced). Validate dtypes (`float64`, `int64`), `0 <= coverage <= 1`, `n_samples >= 0`. | open |
-| minor | `src/sivin/analytics/base.py:56-92` | `IndexContext` repeats `sensor_id` and `timezone` that `daily`/`series` already carry and does not check consistency (reproduced: context with sensor `11111111`, zone `UTC` and Prague daily data of `77678271` is accepted). Its defaults `0.9/0.9/311` duplicate the config defaults, so a factory that forgets to pass the configuration silently ignores `config/sivin.yaml`. Suggest: `__post_init__` consistency checks and no defaults for the three config-driven fields (or derive `sensor_id`/`timezone` from `daily`). | open |
-| minor | `src/sivin/analytics/base.py:208` | `params_model` defaults to the empty `IndexParams`; a subclass that forgets to set it registers fine and `create("y", {"base": 5})` fails with a confusing "extra inputs not permitted". Make `_add` require that `params_model` is overridden (a proper subclass of `IndexParams`). | open |
-| minor | `src/sivin/config.py:17` | Layering inversion: the configuration module imports `sivin.analytics.base` (and through it pandas, `daily`, `schema`) only for two constants, so `sivin --version` / `config show` import the whole analytics stack. Move `DEFAULT_MIN_*` to `config.py` (or `sivin.core`) and let analytics depend on them, not the reverse. | open |
-| minor | `pyproject.toml:31-32,89` | Dev tools are unbounded (`ruff>=0.6`, `mypy>=1.11`) while pre-commit pins ruff `v0.16.10`, and `filterwarnings = ["error"]` turns any new deprecation into a failure; with no lock file CI can turn red on a new release without a code change, and local pre-commit and CI may disagree. Suggest bounding ruff/mypy to the tested series (e.g. `ruff>=0.16,<0.17`, `mypy>=2.4,<3`) to match pre-commit. pandas `>=3.0`: see deviations. | open |
-| minor | `.gitignore:213` | `/data/` (briefed rule) also ignores `data/raw/...` on the `data` branch, which is where §2.5 puts the store. WP-1.4 / WP-4.1 must `git add -f` or the `data` branch needs its own `.gitignore`. Not a defect of this WP; note it in the WP-1.4 brief. | open |
-| nit | `src/sivin/config.py:114` | `exclude_mask: true` is accepted as `1` (pydantic lax mode). Use `StrictInt`. | open |
-| nit | `src/sivin/core/schema.py:376` | `±inf` is accepted as a temperature/RH value; the contract only knows `NaN` = missing. Reject or convert to `NaN`. | open |
-| nit | `src/sivin/core/schema.py:395-398` | A `Series` of strings with mixed UTC offsets raises pandas' bare `ValueError` instead of `SchemaError`, unlike the list path. | open |
-| nit | `src/sivin/core/schema.py:151-162` | Frames built by `from_records` carry `Column` enum members as column labels, frames passed to the constructor keep plain `str` labels; harmless (StrEnum) but inconsistent — normalise labels to `str` in `_validated_copy`. | open |
+| major | `src/sivin/core/timeutil.py:110-119` | Ambiguous-time fallback is global: if pandas cannot infer **one** fall-back cluster, **every** ambiguous time of the whole input is read as standard time. Reproduced: (a) input spanning 2025 (complete repeated hour, 1800 s) and 2026 (one sample in the repeated hour) → the correctly inferable 2025 rows `02:00`/`02:30` CEST map to the same UTC instants as the CET rows (2 exact duplicates, result not monotonic); `MeasurementSeries.from_records` then silently drops 2 real samples (warning only). (b) single year, 1825 s sampling, one sample missing inside the repeated hour → 1–2 samples silently 3600 s late while the output stays monotonic, so no later check can see it. (c) one `NaT` inside the repeated hour has the same effect. Fix: resolve each transition cluster separately (group ambiguous runs by local date); within a cluster use the backward jump of the wall clock as the switch point; when a cluster has no jump, pick the offset that keeps UTC strictly increasing w.r.t. the neighbouring unambiguous samples; never return duplicate UTC instants silently (raise or report). Add tests for (a)–(c) and for 1825 s data with a missing sample. | fixed: per-date groups, clock-jump switch point, spacing rule, `unresolved` mask, no silent duplicates; tests for multi-year, missing sample, NaT |
+| major | `src/sivin/core/daily.py:128-130` | A sample counts only if **both** `temp_c` and `rh_pct` are present (deviation 7), so a missing RH value discards a valid temperature. Reproduced: `temp_c=[1, 30]`, `rh_pct=[50, NaN]` → `temp_max = 1.0` instead of 30.0, `n_samples = 1`. Most indices of §3.1/§3.2 use temperature only; an RH channel failure would make them lose whole days and `complete` flags. Fix: aggregate each variable over its own valid (not excluded, not NaN) samples; define `n_samples`/`coverage` explicitly (e.g. on temperature, which all thermal indices use, or add `n_samples_rh`/`coverage_rh` while keeping `coverage` for the site contract) and document it; add a hand-computed test. Related owner question: `qc` is one bit field per row (frozen contract §2.5), so an RH-only QC finding also excludes the temperature — worth raising before WP-1.5. | fixed: T and RH aggregated independently; `temp_/rh_n_samples`, `temp_/rh_coverage`, `coverage` = temperature; test added |
+| minor | `src/sivin/core/timeutil.py:121-123` | Nonexistent spring-forward times read with `fold=0` can collide with genuine post-gap samples: local `02:00, 02:15, 03:00, 03:15` on 2026-03-29 → UTC `01:00, 01:15, 01:00, 01:15` (duplicates; `from_records` then drops two). The docstring says spacing is preserved but not that duplicates can occur. Suggest: report non-monotonic / duplicate output in `ConversionResult` (or raise), and document that samples inside the gap mean the source zone assumption (Q2) is probably wrong. | fixed: colliding suspect rows become `NaT` + `unresolved`, documented; test added |
+| minor | `src/sivin/core/schema.py:164-171` | `from_records` resolves duplicate timestamps with **different** values by keeping the last row, with only a log warning (reproduced: two rows at the same instant with 1.0 and 2.0 → 2.0 kept). This hides both the DST bugs above and real conflicts that §2.7 assigns to `InputValidator`. Suggest: drop only fully identical rows; raise `SchemaError` (or return the conflicts) for conflicting duplicates and leave the policy to WP-1.2/WP-1.4. | accepted: keep last + warning, now documented; conflict resolution belongs to WP-1.2/WP-1.4 |
+| minor | `src/sivin/core/ids.py:21,27` | `\d` matches any Unicode digit: `SensorId("٧٧٦٧٨٢٧١")` is accepted and `parse` returns a non-ASCII serial. Use `[0-9]` or `re.ASCII` (also for `name.isdigit()` at line 101). | fixed: ASCII `[0-9]` only, also for the legacy check; tests added |
+| minor | `src/sivin/core/ids.py:23-33` | Browser-renamed downloads are rejected: `MeteoData_8615620 77678271 (VUT)_20260301_223857 (1).xlsx` → `ValueError`. Chrome appends ` (1)` when the legacy `chrome_driver.py` downloads into the same folder twice. Suggest accepting an optional ` \(\d+\)` before the extension (with a test), or documenting that callers strip it. | fixed: optional ` (n)` browser suffix accepted; tests added |
+| minor | `src/sivin/core/daily.py:219-230` | The public `DailyWeather` constructor validates only column names and index: string columns, `coverage = 5.0` and negative `n_samples` are accepted (reproduced). Validate dtypes (`float64`, `int64`), `0 <= coverage <= 1`, `n_samples >= 0`. | fixed: dtypes, counts >= 0, coverage 0-1, alias equality validated; tests added |
+| minor | `src/sivin/analytics/base.py:56-92` | `IndexContext` repeats `sensor_id` and `timezone` that `daily`/`series` already carry and does not check consistency (reproduced: context with sensor `11111111`, zone `UTC` and Prague daily data of `77678271` is accepted). Its defaults `0.9/0.9/311` duplicate the config defaults, so a factory that forgets to pass the configuration silently ignores `config/sivin.yaml`. Suggest: `__post_init__` consistency checks and no defaults for the three config-driven fields (or derive `sensor_id`/`timezone` from `daily`). | fixed: thresholds required, `__post_init__` checks sensor/timezone/thresholds/mask; tests added |
+| minor | `src/sivin/analytics/base.py:208` | `params_model` defaults to the empty `IndexParams`; a subclass that forgets to set it registers fine and `create("y", {"base": 5})` fails with a confusing "extra inputs not permitted". Make `_add` require that `params_model` is overridden (a proper subclass of `IndexParams`). | fixed: no default; `TypeError` at registration and instantiation; test added |
+| minor | `src/sivin/config.py:17` | Layering inversion: the configuration module imports `sivin.analytics.base` (and through it pandas, `daily`, `schema`) only for two constants, so `sivin --version` / `config show` import the whole analytics stack. Move `DEFAULT_MIN_*` to `config.py` (or `sivin.core`) and let analytics depend on them, not the reverse. | fixed: constants in `sivin.core.defaults`, `sivin.core` re-exports nothing; test that `sivin.cli` does not load pandas |
+| minor | `pyproject.toml:31-32,89` | Dev tools are unbounded (`ruff>=0.6`, `mypy>=1.11`) while pre-commit pins ruff `v0.16.10`, and `filterwarnings = ["error"]` turns any new deprecation into a failure; with no lock file CI can turn red on a new release without a code change, and local pre-commit and CI may disagree. Suggest bounding ruff/mypy to the tested series (e.g. `ruff>=0.16,<0.17`, `mypy>=2.4,<3`) to match pre-commit. pandas `>=3.0`: see deviations. | fixed: `ruff>=0.16,<0.17`, `mypy>=2.4,<3`; third-party deprecations no longer errors (decision 12) |
+| minor | `.gitignore:213` | `/data/` (briefed rule) also ignores `data/raw/...` on the `data` branch, which is where §2.5 puts the store. WP-1.4 / WP-4.1 must `git add -f` or the `data` branch needs its own `.gitignore`. Not a defect of this WP; note it in the WP-1.4 brief. | accepted: note for WP-1.4/WP-4.1 (data branch will use its own ignore rules or `git add -f`) |
+| nit | `src/sivin/config.py:114` | `exclude_mask: true` is accepted as `1` (pydantic lax mode). Use `StrictInt`. | fixed: `StrictInt`; test with `true` added |
+| nit | `src/sivin/core/schema.py:376` | `±inf` is accepted as a temperature/RH value; the contract only knows `NaN` = missing. Reject or convert to `NaN`. | fixed: `±inf` rejected with `SchemaError`; tests added |
+| nit | `src/sivin/core/schema.py:395-398` | A `Series` of strings with mixed UTC offsets raises pandas' bare `ValueError` instead of `SchemaError`, unlike the list path. | fixed: wrapped in `SchemaError`; test added |
+| nit | `src/sivin/core/schema.py:151-162` | Frames built by `from_records` carry `Column` enum members as column labels, frames passed to the constructor keep plain `str` labels; harmless (StrEnum) but inconsistent — normalise labels to `str` in `_validated_copy`. | fixed: labels normalised to `str` (also `to_frame`); test added |
 
 ### Deviations assessment
 
