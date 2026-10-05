@@ -179,7 +179,131 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
 
 ## Review
 
-Verdict: _pending_ (round 1)
+Verdict: APPROVE (round 1)
+
+Reviewer: independent reviewer agent; nothing below was fixed by the reviewer.
+
+**Gates observed** (in `/home/user/wt/wp-2.3`):
+
+- `make lint`: `All checks passed!`, `43 files already formatted`.
+- `make type`: `Success: no issues found in 27 source files`.
+- `make test`: `213 passed`.
+- `make cov`: every module of `sivin/analytics/disease` is at 100 % (statements and branches);
+  `TOTAL 1317 0 264 0 100%`.
+- Scope: `git diff --name-only bcde7d9...HEAD` lists only files in the WP-2.3 Files scope and
+  the hand-off note. No shared file was touched. `src/sivin/analytics/disease` has no `type: ignore`,
+  `Any` or `cast`.
+
+**Independent checks** (throwaway scripts in `/tmp/claude-0/review-2.3/`, outside the repo):
+
+- `SampleDurations` and `RunFinder` on irregular steps with drift and two gaps
+  (offsets 0, 1830, 3640, 5470, 10500, 12330, 14150, 15990, 30000, 31820 s; cap 4562.5 s).
+  Hand result for the durations: 1830, 1810, 1830, 1825 (gap), 1830, 1820, 1840, 1825 (gap),
+  1820, 1825 (last sample). With sample 6 out of band and no bridging, the runs are
+  0-3 = 7295 s, 4-5 = 3650 s, 7 = 1825 s and 8-9 = 3645 s. With bridging up to 1900 s, the
+  run 4-7 is 7315 s with 1840 s of interruption. The code gives exactly these values.
+- Gubler-Thomas over 30 days of 1827 s sampling (drifting clock), 7 h per day in the band.
+  The index goes 0, 0, 60, 80, 100, ...; the longest run is 7.105 h (the represented time,
+  up to the first sample out of band). Onset is on day 3.
+- A night run in the band from 21:00 to 03:00 local gives 0 favourable days. The run is split
+  at midnight into about 3 h + 3 h (see finding 2).
+- Outage: 1 favourable day, then 11 days without data, then 2 favourable days. Onset happens
+  on the 14th day with index 60 (see finding 1).
+- Botrytis over the DST-end night (Oct 24/25): an RH ≥ 90 % period from 21:00 to 06:00 local with
+  one bridged dry sample gives W = 10.14 h, which includes the extra DST hour. The period is
+  counted on its end date (Oct 25), and `estimated=True`. A period that starts on Oct 31 and
+  ends on Nov 1 is dropped, and the value is 0.0.
+- Broome Y(5 h, 15 °C) = 0.16766 (matches the doc's worked example), Y(0, ·) = 0.0661 and
+  Y(48 h, 20 °C) = 0.99992 (saturation, see finding 5).
+
+**Science check.**
+
+- Gubler-Thomas: the band of 70-85 °F, ≥ 6 continuous hours, 3 consecutive days for onset,
+  +20 / −10, −10 for ≥ 95 °F during 15 min, the bounds of 0-100 and the classes 0-30 / 40-50 /
+  60-100 agree with the UC IPM description as I know it. The citation Gubler et al. (1999),
+  *APSnet Features*, also matches my knowledge.
+- Onset value 60: this is the common reading, and it is correctly marked `[to be verified]`.
+  The same applies to "+20 and heat −10 on the same day" and to "stays active after 0". All
+  three are flagged in the docs as interpretation, except for two sentences that present the
+  reasoning as fact (finding 3).
+- Values of 31-39 and 51-59 cannot occur with the default parameters (all steps are multiples
+  of 10). With other parameters, `classify` maps them by lower bounds: 31-39 → low,
+  51-59 → moderate. This is acceptable.
+- Broome et al. (1995): the logit form, W (wetness duration, h) and T (mean temperature during
+  wetness, °C) agree with the coefficients I know (−2.647866, −0.374927, 0.061601,
+  −0.001511). They are still marked `[to be verified]`, which is fine. The RH ≥ 90 % proxy is
+  documented honestly: it is a project default `[to be tuned]`, `estimated=True`, both bias
+  directions are named, and Sentelhas et al. (2008) is cited. That citation is correct to my
+  knowledge.
+- Counting bridged dry spells in W is a project assumption, and it is stated as one.
+- Downy mildew: the 3-10 rule (≥ 10 °C, ≥ 10 mm of rain in 24-48 h, shoots ≥ 10 cm; Baldacci
+  1947, marked to be verified) is stated correctly. Rossi et al. (2008) is correctly described
+  as a mechanistic primary-infection model driven by hourly rain, leaf wetness, T and RH.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| minor | src/sivin/analytics/disease/gubler_thomas.py:303 | An undetermined day carries the onset streak without limit, so "3 consecutive days" can span weeks of outage | open |
+| minor | src/sivin/analytics/disease/powdery_mildew.py:409-419; docs/indices/powdery_mildew_gt.md:80 | A favourable run that crosses midnight is split per local day; the consequence is not documented | open |
+| minor | docs/indices/powdery_mildew_gt.md:66, :79 | Two unverified interpretations are justified with statements about "the rules"/"the sources" as if checked | open |
+| minor | src/sivin/analytics/disease/botrytis.py:423-435 | `details` grows by 4 keys per event without bound (hundreds per season) | open |
+| minor | docs/indices/botrytis_broome.md:131-133 | The fitted W/T range is not given; long RH ≥ 90 % periods saturate Y ≈ 1 | open |
+| nit | src/sivin/analytics/disease/botrytis.py:430 | `event_{number:03d}` breaks the lexical order beyond 999 events | open |
+| nit | docs/indices/downy_mildew.md:29 | "infection step ... depends on rain splash" mixes up dispersal (rain splash) and infection (leaf wetness) | open |
+| nit | src/sivin/analytics/disease/powdery_mildew.py:488-495 | `value` (season maximum) and `classification` (last day) describe different days, so the web may show "100, low" | open |
+
+**Details and suggested fixes.**
+
+1. **Outage carries the onset streak.**
+   - Input: June 1 favourable, June 2-12 without samples, June 13 and 14 favourable.
+   - Wrong behaviour: onset on June 14 at 60 points (class high). The literal rule needs 3
+     consecutive days.
+   - Once the index is active, a long outage also freezes it, for example at 100.
+   - The `complete` flag and `n_undetermined_days` show the problem, but the curve itself
+     looks normal.
+   - Fix: add a parameter such as `max_carried_undetermined_days` (project default, e.g. 1-2).
+     Beyond it, reset the streak while waiting, or mark the index as unknown or NaN while
+     active. Document the parameter.
+2. **Midnight split.**
+   - Input: in the band 21:00-03:00 local.
+   - Behaviour: two runs of about 3 h, so the day is not favourable.
+   - The UC IPM rules are formulated per day, so this may be intended. However, the doc
+     (interpretation 6) mentions only the few minutes that spill into the next day.
+   - Fix: state the consequence explicitly in the doc. Optionally assign a run to the day on
+     which it ends, or to the day that holds most of it. This is rare in South Moravia, which
+     is why the finding is only minor.
+3. **Wording.**
+   - Line 66 says "The rules list both conditions separately", and line 79 says "a rule the
+     sources do not state". The sources were not checked in this WP.
+   - Fix: rephrase both as "in the descriptions known to us" and keep `[to be verified]`.
+4. **Flattened `details`.**
+   - With `min_event_duration_h = 0`, every night with a single sample at RH ≥ 90 % is an
+     event. A humid South Moravian season can yield 100+ events and 400+ keys per sensor and
+     year. The site contract (§2.6) does not use `details` today, so this is not a blocker.
+   - The workaround is acceptable for now.
+   - Fix: keep summary keys in `details` (`n_events`, plus start, W, T and Y of the event with
+     the maximum Y). Expose the full list only via `infection_events()` and the proposed
+     contract field (already listed under *Out of scope*).
+5. **Range of validity.**
+   - The doc correctly calls W > 24 h an extrapolation.
+   - It should also say that, with the proxy, multi-day fog or rain spells easily give
+     W > 24 h. Y then saturates near 1. Example: W = 48 h at 20 °C gives Y = 0.9999.
+   - Fix: add one sentence. Optionally add a configurable `max_wetness_h` cap, documented as a
+     project choice.
+
+**Deviations assessment.**
+
+1. Gap semantics (nominal duration instead of the cap): agreed. It is more conservative than
+   crediting the cap, and the run is correctly closed at the gap; verified by hand above.
+2. Heat as a represented duration ≥ 15 min: agreed; it is equivalent at 30-min sampling and
+   correct for denser sampling.
+3. Undetermined days: the rule is reasonable and documented, but needs a limit (finding 1).
+4. Onset 60, independent heat penalty, heat ignored before onset, and staying active: all are
+   acceptable as documented `[to be verified]` choices and are raised as owner questions.
+5. April 1 - October 31 period: acceptable as a configurable project default.
+6. The curve starts at the first sample: acceptable.
+7. W includes bridged interruptions, and a period is counted on its end date: acceptable and
+   documented. Counting on the end date avoids the midnight split for Botrytis.
+8. Value 0.0 without events, no classes by default: acceptable. The intercept caveat is
+   documented.
+9. RH-aware coverage helper: correct; the contract gap is noted under *Out of scope*.
+10. Flattened events: acceptable as a stop-gap (finding 4).
