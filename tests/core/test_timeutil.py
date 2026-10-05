@@ -74,18 +74,125 @@ def test_fall_back_inferred_from_order() -> None:
     assert result.suspect.tolist() == [False, True, True, True, True, False]
 
 
-def test_fall_back_without_repetition_reads_standard_time(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_fall_back_single_sample_resolved_by_spacing() -> None:
+    # 02:30 between 01:30 CEST (23:30 UTC) and 03:00 CET (02:00 UTC):
+    # read as CEST -> 00:30 UTC, steps 60 and 90 min; as CET -> 01:30 UTC, steps 120 and 30 min.
+    # The larger minimum step (60 min) wins: summer time.
     local = naive("2026-10-25 01:30", "2026-10-25 02:30", "2026-10-25 03:00")
-    with caplog.at_level(logging.WARNING):
-        result = LocalTimeConverter(PRAGUE).to_utc(local)
-    # 02:30 read as CET (UTC+1) -> 01:30 UTC
+    result = LocalTimeConverter(PRAGUE).to_utc(local)
     assert result.timestamps_utc.tolist() == utc(
-        "2026-10-24 23:30", "2026-10-25 01:30", "2026-10-25 02:00"
+        "2026-10-24 23:30", "2026-10-25 00:30", "2026-10-25 02:00"
     )
     assert result.suspect.tolist() == [False, True, False]
-    assert "Cannot infer 1 ambiguous" in caplog.text
+    assert result.unresolved.tolist() == [False, False, False]
+
+
+def test_fall_back_tie_reads_standard_time_and_is_unresolved(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # 02:30 between 01:30 CEST (23:30 UTC) and 03:30 CET (02:30 UTC): both readings give
+    # steps of 60 and 120 min, so the sample order cannot decide.
+    local = naive("2026-10-25 01:30", "2026-10-25 02:30", "2026-10-25 03:30")
+    with caplog.at_level(logging.WARNING):
+        result = LocalTimeConverter(PRAGUE).to_utc(local)
+    assert result.timestamps_utc.tolist() == utc(
+        "2026-10-24 23:30", "2026-10-25 01:30", "2026-10-25 02:30"
+    )
+    assert result.suspect.tolist() == [False, True, False]
+    assert result.unresolved.tolist() == [False, True, False]
+    assert "cannot be resolved" in caplog.text
+
+
+def test_fall_back_missing_sample_in_repeated_hour() -> None:
+    # 1825 s sampling; the sample at 02:39:05 CEST (00:39:05 UTC) is missing, so the wall
+    # clock shows no backward jump: 02:08:40, 02:09:30, 02:39:55.
+    local = naive(
+        "2026-10-25 01:38:15",  # CEST
+        "2026-10-25 02:08:40",  # CEST
+        "2026-10-25 02:09:30",  # CET
+        "2026-10-25 02:39:55",  # CET
+        "2026-10-25 03:10:20",  # CET
+    )
+    result = LocalTimeConverter(PRAGUE).to_utc(local)
+    assert result.timestamps_utc.tolist() == utc(
+        "2026-10-24 23:38:15",
+        "2026-10-25 00:08:40",
+        "2026-10-25 01:09:30",
+        "2026-10-25 01:39:55",
+        "2026-10-25 02:10:20",
+    )
+    assert result.unresolved.tolist() == [False] * 5
+
+
+def test_fall_back_nat_inside_repeated_hour() -> None:
+    local = naive(
+        "2026-10-25 01:30",
+        "2026-10-25 02:00",  # CEST
+        None,  # would be 02:30 CEST
+        "2026-10-25 02:00",  # CET
+        "2026-10-25 02:30",  # CET
+        "2026-10-25 03:00",
+    )
+    result = LocalTimeConverter(PRAGUE).to_utc(local)
+    stamps = result.timestamps_utc.tolist()
+    assert stamps[:2] == utc("2026-10-24 23:30", "2026-10-25 00:00")
+    assert pd.isna(stamps[2])
+    assert stamps[3:] == utc("2026-10-25 01:00", "2026-10-25 01:30", "2026-10-25 02:00")
+    assert result.suspect.tolist() == [False, True, False, True, True, False]
+
+
+def test_fall_back_each_year_resolved_independently() -> None:
+    # 2025: complete repeated hour (2025-10-26), 2026: a single unresolvable sample.
+    local = naive(
+        "2025-10-26 01:30",
+        "2025-10-26 02:00",  # CEST
+        "2025-10-26 02:30",  # CEST
+        "2025-10-26 02:00",  # CET
+        "2025-10-26 02:30",  # CET
+        "2025-10-26 03:00",
+        "2026-10-25 01:30",
+        "2026-10-25 02:30",  # ambiguous, tie -> standard time, unresolved
+        "2026-10-25 03:30",
+    )
+    result = LocalTimeConverter(PRAGUE).to_utc(local)
+    assert result.timestamps_utc.tolist() == utc(
+        "2025-10-25 23:30",
+        "2025-10-26 00:00",
+        "2025-10-26 00:30",
+        "2025-10-26 01:00",
+        "2025-10-26 01:30",
+        "2025-10-26 02:00",
+        "2026-10-24 23:30",
+        "2026-10-25 01:30",
+        "2026-10-25 02:30",
+    )
+    assert result.unresolved.tolist() == [False] * 7 + [True, False]
+    assert result.timestamps_utc.is_unique
+
+
+def test_fall_back_several_jumps_are_unresolved() -> None:
+    local = naive("2026-10-25 02:30", "2026-10-25 02:00", "2026-10-25 02:40", "2026-10-25 02:10")
+    result = LocalTimeConverter(PRAGUE).to_utc(local)
+    assert result.unresolved.all()
+    assert result.timestamps_utc.tolist() == utc(
+        "2026-10-25 01:30", "2026-10-25 01:00", "2026-10-25 01:40", "2026-10-25 01:10"
+    )
+
+
+def test_spring_forward_collisions_become_nat(caplog: pytest.LogCaptureFixture) -> None:
+    # 02:00 and 02:15 do not exist; shifted by the gap they equal 03:00 and 03:15 CEST.
+    local = naive("2026-03-29 02:00", "2026-03-29 02:15", "2026-03-29 03:00", "2026-03-29 03:15")
+    local.index = [5, 5, 6, 7]  # duplicate labels must not matter
+    with caplog.at_level(logging.WARNING):
+        result = LocalTimeConverter(PRAGUE).to_utc(local)
+    stamps = result.timestamps_utc.tolist()
+    assert pd.isna(stamps[0])
+    assert pd.isna(stamps[1])
+    assert stamps[2:] == utc("2026-03-29 01:00", "2026-03-29 01:15")
+    assert result.suspect.tolist() == [True, True, False, False]
+    assert result.unresolved.tolist() == [True, True, False, False]
+    assert result.timestamps_utc.index.tolist() == [5, 5, 6, 7]
+    assert "returned as NaT" in caplog.text
 
 
 def test_spring_forward_nonexistent_times_are_shifted_and_suspect() -> None:
@@ -141,3 +248,23 @@ def test_day_bounds_and_length(day: date, start: str, end: str, length_s: float)
     )
     assert converter.day_length_s(day) == length_s
     assert converter.timezone == PRAGUE
+
+
+@pytest.mark.parametrize(
+    ("local", "expected_unresolved"),
+    [
+        # A lone ambiguous sample without neighbours: no evidence either way.
+        (("2026-10-25 02:30",), [True]),
+        # The following sample is earlier than both readings (unsorted input).
+        (("2026-10-25 02:30", "2026-10-25 01:00"), [True, False]),
+        # A nonexistent spring sample is no usable neighbour.
+        (("2026-03-29 02:30", "2026-10-25 02:30"), [False, True]),
+        # NaT before the group is skipped: same as test_fall_back_single_sample_resolved_by_spacing.
+        (("2026-10-25 01:30", None, "2026-10-25 02:30", "2026-10-25 03:00"), [False] * 4),
+    ],
+)
+def test_fall_back_without_jump_edge_cases(
+    local: tuple[str | None, ...], expected_unresolved: list[bool]
+) -> None:
+    result = LocalTimeConverter(PRAGUE).to_utc(naive(*local))
+    assert result.unresolved.tolist() == expected_unresolved

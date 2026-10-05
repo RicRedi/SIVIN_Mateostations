@@ -10,47 +10,66 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_NO_INSTANT: Final = np.iinfo(np.int64).min
+"""Marker for "no instant" in int64 nanosecond arrays (the value pandas uses for ``NaT``)."""
 
 
 @dataclass(frozen=True)
 class ConversionResult:
     """Result of :meth:`LocalTimeConverter.to_utc`.
 
+    All three series have the index of the input.
+
     Attributes
     ----------
     timestamps_utc : pandas.Series
-        Converted timestamps, ``datetime64[ns, UTC]``, aligned with the input.
+        Converted timestamps, ``datetime64[ns, UTC]``. ``NaT`` where the input was ``NaT`` and
+        where the conversion would have collided with another row (see ``unresolved``).
     suspect : pandas.Series of bool
         ``True`` where the local time was ambiguous (repeated hour when clocks fall back) or
         nonexistent (skipped hour when clocks spring forward). Callers typically set
         :attr:`~sivin.core.flags.QcFlag.TIMESTAMP_SUSPECT` on these rows.
+    unresolved : pandas.Series of bool
+        Subset of ``suspect``: rows whose UTC instant is a guess (ambiguous time without a
+        usable clock jump) or could not be determined at all (``NaT`` because of a collision).
     """
 
     timestamps_utc: pd.Series
     suspect: pd.Series
+    unresolved: pd.Series
 
 
 class LocalTimeConverter:
     """Convert between UTC and the wall-clock time of one IANA time zone.
 
-    Daylight-saving transitions are resolved deterministically:
+    Daylight-saving transitions are resolved deterministically, row by row in recorded order:
 
-    * **Ambiguous** times (the repeated hour when clocks fall back) are first resolved from the
-      order of the samples (``ambiguous="infer"``: the first occurrence is summer time, the
-      repeated one standard time). When that is impossible, e.g. because the repeated hour has
-      only one sample, every ambiguous time of the input is read as **standard time**.
+    * **Ambiguous** times (the repeated hour when clocks fall back) are grouped per local
+      calendar date, so every transition is resolved on its own. Within a group, the
+      **backward jump of the wall clock** (a sample not later than its predecessor, ``NaT``
+      rows skipped) is the switch point: samples before it are summer time, samples from it
+      on standard time. This needs no complete hour and tolerates missing samples. A group
+      without exactly one such jump (e.g. a single sample in the repeated hour) is read as
+      **standard time** and marked ``unresolved``.
     * **Nonexistent** times (the skipped hour when clocks spring forward) are read with the UTC
-      offset in effect *before* the transition (PEP 495, ``fold=0``), which equals shifting
-      them forward by the length of the gap; spacing between samples is preserved.
+      offset in effect *before* the transition (PEP 495, ``fold=0``), i.e. shifted forward by
+      the length of the gap. Samples inside the gap usually mean that the device clock does
+      not follow daylight-saving time, i.e. that the configured source zone is wrong.
+    * **No silent duplicates:** a suspect row whose UTC instant equals that of another row is
+      returned as ``NaT`` and marked ``unresolved`` (a warning is logged). Duplicates between
+      two ordinary rows come from the source data and are left to input validation.
 
-    Both kinds are reported as suspect in :class:`ConversionResult`, whether or not inference
-    succeeded, because a resolved ambiguous time is still a guess about the device clock.
+    Every ambiguous or nonexistent row is suspect, whether or not it was resolved, because a
+    resolved time is still a guess about the device clock.
 
     Parameters
     ----------
@@ -83,46 +102,93 @@ class LocalTimeConverter:
         ----------
         local_naive : pandas.Series
             Naive ``datetime64`` timestamps in this zone's wall-clock time, in recorded order
-            (inference of ambiguous times relies on that order). ``NaT`` stays ``NaT``.
+            (resolution of ambiguous times relies on that order). ``NaT`` stays ``NaT``.
 
         Returns
         -------
         ConversionResult
-            UTC timestamps (``datetime64[ns, UTC]``) and the suspect mask, both with the index
-            of ``local_naive``.
+            UTC timestamps (``datetime64[ns, UTC]``), the suspect and the unresolved masks.
 
         Raises
         ------
         TypeError
             If the series is not of a naive ``datetime64`` dtype.
         """
-        naive = self._checked_naive(local_naive)
+        naive = self._checked_naive(local_naive).reset_index(drop=True)
+        present = naive.notna().to_numpy()
         n_rows = len(naive)
-        standard_time = np.zeros(n_rows, dtype=bool)
         ambiguous = (
-            naive.dt.tz_localize(self._zone, ambiguous="NaT", nonexistent="shift_forward").isna()
-            & naive.notna()
+            present
+            & naive.dt.tz_localize(self._zone, ambiguous="NaT", nonexistent="shift_forward")
+            .isna()
+            .to_numpy()
         )
         nonexistent = (
-            naive.dt.tz_localize(self._zone, ambiguous=standard_time, nonexistent="NaT").isna()
-            & naive.notna()
-        )
-        try:
-            localized = naive.dt.tz_localize(self._zone, ambiguous="infer", nonexistent="NaT")
-        except ValueError:
-            logger.warning(
-                "Cannot infer %d ambiguous local time(s) in %s from sample order; "
-                "reading them as standard time.",
-                int(ambiguous.sum()),
-                self.timezone,
+            present
+            & naive.dt.tz_localize(
+                self._zone, ambiguous=np.zeros(n_rows, dtype=bool), nonexistent="NaT"
             )
-            localized = naive.dt.tz_localize(self._zone, ambiguous=standard_time, nonexistent="NaT")
+            .isna()
+            .to_numpy()
+        )
+        summer_time, unresolved = self._resolve_ambiguous(naive, ambiguous)
+        localized = naive.dt.tz_localize(self._zone, ambiguous=summer_time, nonexistent="NaT")
         utc = localized.dt.tz_convert("UTC").dt.as_unit("ns")
         if nonexistent.any():
-            utc = utc.copy()
-            utc.loc[nonexistent] = [self._before_gap_utc(t) for t in naive.loc[nonexistent]]
-        suspect = (ambiguous | nonexistent).rename("suspect")
-        return ConversionResult(timestamps_utc=utc.rename(local_naive.name), suspect=suspect)
+            utc.iloc[np.flatnonzero(nonexistent)] = [
+                self._before_gap_utc(pd.Timestamp(wall_clock))
+                for wall_clock in naive.to_numpy()[nonexistent]
+            ]
+        suspect = ambiguous | nonexistent
+        collided = suspect & utc.duplicated(keep=False).to_numpy() & utc.notna().to_numpy()
+        if collided.any():
+            logger.warning(
+                "%d suspect local time(s) in %s would duplicate another UTC instant; "
+                "returned as NaT.",
+                int(collided.sum()),
+                self.timezone,
+            )
+            utc.iloc[np.flatnonzero(collided)] = pd.NaT
+        index = local_naive.index
+        return ConversionResult(
+            timestamps_utc=pd.Series(utc.to_numpy(), index=index, name=local_naive.name),
+            suspect=pd.Series(suspect, index=index, name="suspect"),
+            unresolved=pd.Series(unresolved | collided, index=index, name="unresolved"),
+        )
+
+    def _resolve_ambiguous(
+        self, naive: pd.Series, ambiguous: npt.NDArray[np.bool_]
+    ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
+        """Decide summer or standard time for the ambiguous rows, one transition at a time.
+
+        Returns
+        -------
+        tuple of numpy.ndarray of bool
+            ``(summer_time, unresolved)`` per row.
+        """
+        n_rows = len(naive)
+        summer_time = np.zeros(n_rows, dtype=bool)
+        unresolved = np.zeros(n_rows, dtype=bool)
+        if not ambiguous.any():
+            return summer_time, unresolved
+        candidates = _TransitionCandidates.build(naive, self._zone)
+        positions = np.flatnonzero(ambiguous)
+        days = naive.to_numpy()[positions].astype("datetime64[D]")
+        for day in np.unique(days):
+            group = positions[days == day]
+            n_summer = candidates.switch_point(group, ambiguous)
+            if n_summer is None:
+                unresolved[group] = True
+                logger.warning(
+                    "%d ambiguous local time(s) on %s in %s cannot be resolved from the "
+                    "sample order; reading them as standard time.",
+                    len(group),
+                    day,
+                    self.timezone,
+                )
+                continue
+            summer_time[group[:n_summer]] = True
+        return summer_time, unresolved
 
     def local_dates(self, utc: pd.Series) -> pd.Series:
         """Return the local calendar date of each UTC timestamp.
@@ -199,3 +265,91 @@ class LocalTimeConverter:
             raise TypeError(f"Expected naive datetime64 timestamps, got dtype {local_naive.dtype}.")
         naive: pd.Series = local_naive.dt.as_unit("ns")
         return naive
+
+
+@dataclass(frozen=True)
+class _TransitionCandidates:
+    """UTC instants of every row read as summer time and as standard time (int64 ns).
+
+    Nonexistent rows and ``NaT`` are ``_NO_INSTANT`` in both arrays.
+    """
+
+    wall_clock_ns: npt.NDArray[np.int64]
+    summer_ns: npt.NDArray[np.int64]
+    standard_ns: npt.NDArray[np.int64]
+
+    @classmethod
+    def build(cls, naive: pd.Series, zone: ZoneInfo) -> _TransitionCandidates:
+        n_rows = len(naive)
+
+        def as_ns(summer: bool) -> npt.NDArray[np.int64]:
+            flags = np.full(n_rows, summer, dtype=bool)
+            local = naive.dt.tz_localize(zone, ambiguous=flags, nonexistent="NaT")
+            return _instants_ns(pd.DatetimeIndex(local).tz_convert("UTC").tz_localize(None))
+
+        return cls(
+            wall_clock_ns=_instants_ns(pd.DatetimeIndex(naive)),
+            summer_ns=as_ns(summer=True),
+            standard_ns=as_ns(summer=False),
+        )
+
+    def switch_point(
+        self, group: npt.NDArray[np.intp], ambiguous: npt.NDArray[np.bool_]
+    ) -> int | None:
+        """Return how many leading rows of an ambiguous group are summer time.
+
+        1. Exactly one backward jump of the wall clock (a sample not later than its
+           predecessor) is the switch point.
+        2. Without any jump, the split that keeps consecutive samples (including the nearest
+           unambiguous neighbours) farthest apart is chosen, because the sensors sample at an
+           almost constant interval; it must be strictly increasing and unique.
+        3. Otherwise (several jumps, ties) ``None``: the group is unresolved.
+        """
+        wall_clock = self.wall_clock_ns[group]
+        jumps = np.flatnonzero(wall_clock[1:] <= wall_clock[:-1]) + 1
+        if len(jumps) == 1:
+            return int(jumps[0])
+        if len(jumps) > 1:
+            return None
+        before = self._neighbour(group[0], -1, ambiguous)
+        after = self._neighbour(group[-1], 1, ambiguous)
+        scores: list[float] = []
+        for n_summer in range(len(group) + 1):
+            sequence = np.concatenate(
+                [
+                    before,
+                    self.summer_ns[group[:n_summer]],
+                    self.standard_ns[group[n_summer:]],
+                    after,
+                ]
+            )
+            steps = np.diff(sequence)
+            if len(steps) == 0:
+                scores.append(np.inf)
+            elif (steps <= 0).any():
+                scores.append(-np.inf)
+            else:
+                scores.append(float(steps.min()))
+        best = max(scores)
+        if best == -np.inf or scores.count(best) != 1:
+            return None
+        return scores.index(best)
+
+    def _neighbour(
+        self, position: np.intp, direction: int, ambiguous: npt.NDArray[np.bool_]
+    ) -> npt.NDArray[np.int64]:
+        """Return the UTC instant of the nearest usable row before/after ``position``."""
+        index = int(position) + direction
+        while 0 <= index < len(self.standard_ns):
+            if self.standard_ns[index] != _NO_INSTANT and not ambiguous[index]:
+                return self.standard_ns[index : index + 1]
+            if self.wall_clock_ns[index] != _NO_INSTANT and not ambiguous[index]:
+                break
+            index += direction
+        return np.empty(0, dtype=np.int64)
+
+
+def _instants_ns(naive: pd.DatetimeIndex) -> npt.NDArray[np.int64]:
+    """Return naive timestamps as int64 nanoseconds; ``NaT`` becomes ``_NO_INSTANT``."""
+    values = naive.as_unit("ns").to_numpy(dtype="datetime64[ns]")
+    return np.asarray(values.view(np.int64), dtype=np.int64)
