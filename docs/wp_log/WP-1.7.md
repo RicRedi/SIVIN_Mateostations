@@ -202,7 +202,120 @@ All commands in `/home/user/wt/wp-1.7` (venv by `uv`, Python 3.12, ruff 0.16, my
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent; base `0efaaaf`, head `3540a2f`.
+
+### Gates (run by the reviewer in `/home/user/wt/wp-1.7`)
+
+- `make lint` → `All checks passed!`; `make type` → `Success: no issues found in 157 source files`;
+  `make test` → `1671 passed`.
+- `make cov` → `1671 passed`, total 99.88 % (threshold 85 %); `sivin/app/*`, `sivin/config/*`,
+  `storage/source.py`, `storage/store.py`, `quality/pipeline.py` 100 %, `analytics/disease/botrytis.py` 98 %.
+
+### What the reviewer ran (operator view, temporary project outside the repo)
+
+Temporary project `/tmp/claude-0/review-1.7/proj` (own `pyproject.toml`, copy of the committed
+`config/sivin.yaml`, `sensors/sensors.geojson`, `sensors/offsite_log.yaml`), the **full real export**
+of 77799986 (3520 rows) and SYNTHETIC portal-layout exports of 77678271 and 77680921
+(2025-01-01 – 2026-03-01, 1830 s, 77680921 with every 13th humidity blank) and of the
+unregistered 99999999. The portal URL was pointed at `127.0.0.1:9`; the real portal was not
+contacted. Results:
+
+- `sensors check` → exit 0, readable counts. `ingest --dry-run --from-dir` → exit 1 (unregistered
+  sensor), **tree hash unchanged**. `ingest` → 3 files imported, 99999999 copied to
+  `data/quarantine/` with `.report.json`, run record with full names, store `source` =
+  `20260301T223842` etc.; second `ingest` → `+0 new`, raw files byte-identical (idempotent).
+- `qc` → 77799986: all 3520 rows `PRE_DEPLOYMENT`, `off_site` event 2025-07-30T08:00Z –
+  2026-03-01T21:30Z (= log 10:00 CEST / 22:30 CET); 77680921: `MISSING 1544` (= ceil(20060/13)).
+- `indices --season 2025/2026` → exit 2 (`--season` takes a year; `2025` is the season of
+  calendar 2025); `indices --season 2025` → exit 0, 17 indices × 3 sensors, file written.
+- `run --skip-fetch` (with and without `--season`) → exit 0; `config show` / `config schema` → exit 0,
+  valid YAML / JSON.
+- Config errors (unknown key, typo in a check / strategy / index parameter, unknown preset,
+  unknown index, bad zone, negative interval, a subsystem interval or zone contradicting `time`,
+  `ingest.portal.password` in YAML, non-mapping, invalid YAML, missing `--config`) → exit 3,
+  each with its key path. `time.expected_interval_s: 600` reaches parsers, sampling check, aligner
+  and every index `sampling.nominal_interval_s`; the derived caps stay (documented, OQ3).
+- Overlapping off-site log → `sensors check` exit 1, `qc`/`indices`/`run`/`ingest` exit 3, message
+  names entries and lines. Outside a project → exit 3. Bad `--log-level`, `--sensor`, `--from`,
+  `--index`, missing file → exit 2.
+- Empty data dir: `qc` exit 0 (prints nothing), `indices`/`run --skip-fetch` exit 0 and write an
+  indices file without sensors, `ingest` → "No export files to ingest." exit 0.
+- Malformed store file → that sensor fails (exit 1), the others are processed; ingest of that
+  sensor fails without touching the file.
+- Random bytes as `.csv`/`.xlsx`, empty file, zip-signature junk → rejected with readable reasons.
+- No credentials → `fetch` exit 3, `run` continues with stored data, exit 1, `FAILED fetch: ...`.
+  `.env` never overrides an already-set variable (checked with `SIVIN_USER` set in the shell).
+- Index results vs. base: indices of 77678271 and 77680921 (season 2025, store data, `MISSING`
+  set on half rows) computed with the base source and with this branch → only `dew_point` of
+  77678271 differs, 11.4801935 → 11.4801930 °C (last-sample weight 1825 → 1830 s). No unexpected change.
+- Row validity (`qc = 0`, every second row without humidity or without temperature): frost,
+  heat_hours, dew_point, vpd, powdery_mildew_gt get no day/hour from half rows; `SampleSet` keeps
+  72 of 144 samples; Broome wetness periods end at every half row (72 one-sample periods of a
+  3-day wet spell) — consistent with the whole-row rule and with flagged data.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | src/sivin/cli/main.py:71 (with `logging_setup.setup_logging`) | `--log-level DEBUG` turns on Selenium's `remote_connection` debug logger, which logs every WebDriver command body. The login `send_keys` body is `{'text': '<password>', 'value': [...]}` (below Selenium's 100-character trim), so a real `sivin fetch`/`sivin run --log-level DEBUG` writes `SIVIN_PASSWORD` (and user name) in clear text to the log. Reproduced with Selenium 4.50 `RemoteConnection.execute(SEND_KEYS_TO_ELEMENT, ...)` after `setup_logging("DEBUG")`: `POST .../element/e/value {'text': 'pwSENTINEL2', ...}`. Fix: in the CLI logging setup cap `selenium` and `urllib3` loggers at `INFO`/`WARNING` regardless of `--log-level` (or add a filter that drops `selenium.webdriver.remote.remote_connection` records), plus a test that a DEBUG fetch with the fake driver / a direct `RemoteConnection` call never logs the secret. | open |
+| major | src/sivin/app/ingest.py:132-137, 304 | `Quarantine.put` is not guarded: if the rejected file cannot be copied/moved (unreadable, removed meanwhile, quarantine dir not writable, disk full) the `OSError` escapes `IngestService.ingest`, so `sivin ingest` and `sivin run` abort with a traceback before QC, indices and the run record. The parser already turns the unreadable file into a `file-readable` rejection; only the quarantine step crashes. Reproduced by patching `Path.read_bytes`/`shutil.copyfile` to raise `PermissionError` for one file: `CRASH PermissionError`. Contradicts the class docstring "one bad file never stops it" and WP-4.1's "continue past failures". Fix: catch `OSError` in `_one` around `put` (and around `_reader.read` for safety), record `failure="rejected: ...; quarantine failed: ..."`, still write the report JSON if possible; test it. | open |
+| major | src/sivin/app/indices.py:400-401; src/sivin/app/quality.py:307 | Selection options silently overwrite the derived files (the WP-3.2 input) with partial content. `sivin indices --season 2025 --sensor 77678271 --index huglin` replaced `indices/2025.json` (3 sensors × 17 indices) by one sensor × one index; `sivin run --sensor X` does the same; a sensor that fails or has no data in a run disappears from the file. `sivin qc --sensor 77799986 --from 2026-02-01 --to 2026-02-02` replaced `events/77799986.json` (3520 samples, 6 events) by 94 samples and 1 event. Not documented in `docs/cli.md`/`docs/storage.md`. Fix (owner's choice): merge per sensor/index into the existing file, or write derived files only for unrestricted runs (restricted runs report only, like `--dry-run`), or at least document it and keep failed sensors' previous entries; add tests. | open |
+| major | src/sivin/app/factory.py:302-310; src/sivin/app/run.py:217 | `sivin run --dry-run` (without `--skip-fetch`) logs into the portal and downloads every export into `data/downloads/`, then prints "Dry run: nothing was written." (`--help`: "Compute and report, but write nothing."). Reproduced with the WP-1.3 fake driver: three new files in `data/downloads` after `run --dry-run`. A later plain `sivin ingest` then ingests them. Fix: make `--dry-run` imply `--skip-fetch` (or fetch into a temporary directory that is removed), document it, test with a tree hash. | open |
+| minor | src/sivin/app/ingest.py:324 (with storage/store.py:148) | Every ingest of a normal export logs WARNINGs "QC flags are not stored in raw files and were dropped: MISSING on 1544 row(s), TIMESTAMP_SUSPECT on 2 row(s)", because the parser's flags reach `store.append`. In the daily job this is noise that hides real warnings. Fix: `IngestService` passes the series with `qc` cleared (the flags are recomputed by QC), or logs at INFO. | open |
+| minor | src/sivin/cli/commands/report.py:47; src/sivin/app/indices.py:400 | Empty store: `sivin qc` prints nothing and exits 0; `sivin indices`/`run --skip-fetch` exit 0 and write an indices file with `"sensors": {}` over any earlier one. For an unattended job (e.g. the `data` branch not checked out) "OK" with an empty result is misleading. Fix: print "No stored data." and do not write the indices file when no sensor has data (or treat it as a failure in `run`). | open |
+| minor | src/sivin/app/run.py:217-219; docs/cli.md (Exit codes) | Missing credentials / failed login in `sivin run` is exit 1, the same as one rejected file or one failed device, so WP-4.1 cannot tell "portal permanently broken / secrets missing" from a routine partial failure without parsing text. Owner question OQ1; suggest a distinct code or a machine-readable run summary (e.g. step outcomes in the run record) for the job summary. | open |
+| minor | src/sivin/config/shared.py:124-131; docs/configuration.md | Derived defaults do not follow `time.expected_interval_s` (documented, OQ3). Consequence not documented: with `time.expected_interval_s` ≥ 4575 s the configuration fails with six errors at `analytics.indices.*.sampling` ("max_sample_duration_s must not be shorter than nominal_interval_s") that do not mention `time.expected_interval_s`. Fix: either derive the caps from the shared interval or name `time.expected_interval_s` in the message / docs. | open |
+| nit | src/sivin/quality/pipeline.py:111 | An unknown key under `quality.check_settings` is reported at `quality` ("check_settings given for checks that are not enabled: ['nonexist']"), not at `quality.check_settings.nonexist` like every other config error. | open |
+| nit | src/sivin/app/ingest.py:131-137 | A rejected file with the same name as an earlier quarantined one silently overwrites it and its report; with `quarantine_mode: copy` and `run --skip-fetch`, a bad file in the download directory is re-rejected (exit 1) on every run until removed by hand (relates to OQ2). | open |
+| nit | src/sivin/app/period.py (`_instant`) | `--from/--to` local times in the DST gap or fold are accepted silently with `fold=0`; the parsers reject/flag such times. Low impact. | open |
+
+### Deviations assessment
+
+1. **Files outside the literal scope (1825 s cleanup):** demanded by the brief (WP-0.2 list). Reviewed
+   `5d0c20d`: mechanical (constant swap `LEGACY_SAMPLING_INTERVAL_S` → `DEFAULT_SAMPLING_INTERVAL_S`,
+   prose, recomputed test values); the `grid.py` `usable_span` row-validity change is correct and
+   in the spirit of task 5. Accepted.
+2. **Default changes (935 s, 2745 s, 4575 s, 5490 s, spike `min_interval_s` 1830 s):** consistent
+   (½·1830+20, 1.5·1830, 2.5·1830, 3·1830) and documented in the field descriptions,
+   `docs/alignment.md`, `docs/quality-control.md`, `docs/indices/*`. Base-vs-head comparison on
+   store data changed only `dew_point` by 4.5e-7 °C. Accepted.
+3. **`sivin.config` imports the subsystems and pandas:** acceptable — composing the subsystem
+   models requires it, and `sivin --version`/`--help` stay light via lazy imports in `cli/state.py`
+   (subprocess test). The owner should know the WP-0.1 decision is reversed.
+4. **Shared values by field name:** works (verified with 600 s, conflicts reported with key paths).
+   Risk: a future field called `expected_interval_s` with another meaning would be overwritten
+   silently; acceptable with the docstring warning. `offsite_log.timezone` is deliberately not shared.
+5. **`gsr.preset` in the config layer:** fine; unknown preset fails with its key path.
+6. **Global `--config`, exit 3 for invalid config:** fine, documented.
+7. **Source identifiers:** verified. Old full names read back shortened; a file is rewritten only
+   when its data change. Two exports collide on one id only if their export times are equal to the
+   second (or a 48-bit hash collides); `source` is provenance only — the conflict policy uses import
+   order, not `source` (`storage/conflicts.py:172-196`) — so a collision cannot change data, it only
+   makes the provenance ambiguous between files that the run log lists in full anyway.
+8. **ISO times in derived files:** fine for WP-3.2 (mapping is its job); see the major on partial
+   overwrites before WP-3.2 relies on them.
+9. **Exit codes 0/1/2/3:** consistent across commands (verified); see minor on run/fetch failures.
+10. **Indices QC over the whole record, previous year loaded:** correct; `--season` is a calendar year,
+    so the season of 2025 is `--season 2025` (a value like `2025/2026` is a usage error, exit 2).
+11. **Extra options:** fine.
+
+### Readiness for WP-4.1 / WP-3.2
+
+- Portal down / no secrets: `run` keeps the stored data, runs QC and indices, records `fetch: ...`,
+  exit 1 — good. A crash in quarantine (major 2) or an invalid off-site log (exit 3, by plan §2.8)
+  stops the whole run including fetch/ingest.
+- Restartable: yes — ingest is idempotent, derived files are rewritten atomically, the store is
+  never left half-written per file (atomic writes; a mid-run failure leaves complete partition
+  files). Each re-run downloads the exports again; old downloads accumulate in `data/downloads`
+  (WP-4.1 should decide whether to keep them on the `data` branch).
+- Do not enable `--log-level DEBUG` in the workflow until major 1 is fixed.
+- WP-3.2: the derived formats are documented and byte-stable; fix major 3 first, and note that
+  disease indices return a numeric value (e.g. `0`) with `coverage 0.00` for an all-off-site
+  sensor — the site must use `complete` (out of scope here, WP-2.3 semantics).
+
+### Out of scope (seen during review)
+
+- WP-1.2: a truncated export with 1 of 7 timestamps unreadable (14.3 %, "limit 5.0 %") is only a
+  WARNING and the file is accepted (`timestamps-parseable`).
