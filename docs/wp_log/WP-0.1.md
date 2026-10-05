@@ -490,3 +490,56 @@ thresholds).
 3. R2-4: callers of `to_utc` (WP-1.2) must drop `NaT` rows before `from_records`.
 4. No change is requested to `DailyWeather`, `IndexContext`, `ClimateIndex`, `IndexRegistry`,
    `MeasurementSeries` or `sivin.core.defaults`.
+
+### Round 3
+
+Verdict: APPROVE (round 3)
+
+Reviewer: independent Claude reviewer subagent. Reviewed commits `0a92b2b..7609437`
+(`a818150`, `7609437`). All round 2 probes plus a new probe (`/tmp/claude-0/review-0.1/r2/r3_order.py`)
+were run outside the repository; only this file was changed.
+
+#### Gates observed by the reviewer
+
+- `make lint` → `All checks passed!`, `32 files already formatted`.
+- `make type` → `Success: no issues found in 20 source files`.
+- `make test` → `190 passed`.
+- `make cov` → `TOTAL 843 0 186 0 100%`, threshold 85 % reached.
+- Scope: only `src/sivin/core/{timeutil,schema}.py`, `src/sivin/analytics/base.py`, own tests,
+  `docs/architecture.md` and this file changed.
+
+#### Round 2 statuses verified
+
+- **R2-1 (fixed — verified).** `r2/fb_min.py` (73 phases × all drops of ≤ 3 of 12 samples,
+  21 823 patterns): 0 silently wrong rows (round 2: 490 patterns). `r2/fb_fuzz.py`: multi-year
+  2021–2026 at 1825 s ± 20 s, random loss 5/20/50 %: the 1/20/54 wrong rows are now all
+  `unresolved` (0 silent). Without gaps still 0 wrong, 0 unresolved. Exhaustive drops around the
+  2024/2025/2026 fall-backs: 0 silent. Docstrings (class, `ConversionResult.unresolved`,
+  `switch_point`) and `docs/architecture.md` now describe the code; the two round 2 examples are
+  tests.
+- **R2-2 (fixed — verified).** Reversed input: `ValueError` in all 5 767 patterns (≤ 2 drops,
+  73 phases). Input sorted by local time: never silently wrong, all 5 767 patterns `unresolved`.
+  A newest-first excerpt with only one unambiguous row escapes the order check but is fully
+  `unresolved` (not silent).
+- **R2-3 (fixed — verified).** Duplicated export row `02:31:15` in complete 1825 s data: the
+  other 4 ambiguous rows are now resolved correctly; both copies become `NaT` + `unresolved`, as
+  documented.
+- **R2-4 (fixed — verified).** `from_records` with `NaT` raises
+  `SchemaError: Timestamps must not be missing (NaT); drop the rows that ... to_utc() returns as NaT first.`
+  without the misleading duplicate warning; caller guidance is in all three docstrings.
+- **R2-5 (fixed — verified).** `exclude_mask=True`, `latitude_deg=200.0` (and `NaN`) rejected.
+- **R2-6 (accepted) — agree.** No worktree depends on the old location.
+- Round 1 probes (`ctx.py`, `misc.py`, `nat_chain.py`) show no regressions.
+
+#### Findings (round 3)
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `src/sivin/core/timeutil.py` `_check_order` | **R3-1.** Any single backward step among the ordinary rows makes `to_utc` raise for the **whole** input, and the message suggests reversing a newest-first export. Reproduced: (a) a device clock corrected back by 30 s on 2026-07-01 → `ValueError`; (b) two overlapping exports concatenated oldest-first each → `ValueError`. Raising is safe, since nothing is silently wrong, but drifting clocks with resyncs are expected in this domain, so one correction would block a multi-year file. No change to `to_utc` is required. WP-1.2's `InputValidator` must detect backward steps and overlaps **before** conversion (drop, split or quarantine), and the `ValueError` message could say "not in chronological order" without assuming a reversed export. | open |
+| nit | `src/sivin/core/timeutil.py` `switch_point` | **R3-2.** A backward clock correction that falls **inside** the repeated hour, while the standard-time pass is missing, is taken as the switch point. Local `02:20, 02:50, 02:20:30` (true UTC `00:20, 00:50, 00:20:30`) → the third row returned as `01:20:30`, `unresolved=False`. The same step outside the DST hour raises (R3-1), so the treatment is inconsistent, but it needs a clock correction in that one hour plus a gap. Document it; no fix needed now. | open |
+
+#### API concerns
+
+None. Round 3 adds no signatures. `to_utc` now documents a `ValueError` for non-chronological
+input (as requested in round 2). For WP-1.2: pass rows oldest-first without sorting, validate
+monotonicity and overlaps before `to_utc` (R3-1), and drop `NaT` rows before `from_records`.
