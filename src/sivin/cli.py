@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 import yaml
 
 from sivin import __version__
-from sivin.config import DEFAULT_CONFIG_FILE, ConfigError, SivinConfig, load_config
 from sivin.logging_setup import setup_logging
 from sivin.paths import ProjectPaths, ProjectRootNotFoundError
+
+if TYPE_CHECKING:
+    from sivin.config import SivinConfig
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ def config_show(
     ] = None,
 ) -> None:
     """Print the resolved configuration (file values merged with defaults) as YAML."""
+    from sivin.config import ConfigError
+
     try:
         resolved = _load(config)
     except ConfigError as error:
@@ -81,6 +85,8 @@ def config_show(
 
 
 def _load(config: Path | None) -> SivinConfig:
+    from sivin.config import DEFAULT_CONFIG_FILE, SivinConfig, load_config
+
     if config is not None:
         return load_config(config)
     try:

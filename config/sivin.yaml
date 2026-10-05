@@ -1,21 +1,74 @@
-# SIVIN Meteostations configuration (MIGRATION_PLAN §1.3).
-# Every key below shows its default. Unknown keys are rejected at start-up.
-# Paths are relative to the project root. Secrets (portal credentials) never go here;
-# they come from the environment variables SIVIN_USER and SIVIN_PASSWORD.
+# SIVIN Meteostations configuration (MIGRATION_PLAN §1.3, docs/configuration.md).
+#
+# One file for the whole pipeline. The values below are the defaults; keys that are not
+# listed take their defaults too. `sivin config show` prints every resolved value, including
+# the settings of each quality check and the parameters of each index; `sivin config schema`
+# prints the JSON schema. Unknown keys are rejected at start-up with their key path.
+#
+# Paths are relative to the project root. Secrets (portal credentials) never go here; they
+# come from the environment variables SIVIN_USER and SIVIN_PASSWORD (locally from .env).
 
 paths:
-  data_dir: data                          # measurement store
+  data_dir: data                          # measurement store (raw/, runs/)
+  derived_dir: data/derived               # events/<sensor_id>.json, indices/<season>.json
+  quarantine_dir: data/quarantine         # rejected exports + validation report (JSON)
   site_dir: site                          # generated static site data
   sensors_file: sensors/sensors.geojson   # sensor registry (GeoJSON)
   output_dir: vystupy                     # plots and other outputs for people
 
+# Set once here and copied into every subsystem field of the same name
+# (ingest.parsers, the sampling check, the aligner, the sample durations of the indices,
+# the deployment detector). Repeating one of them elsewhere with another value is an error.
 time:
   source_timezone: Europe/Prague    # zone of the export timestamps (local time, owner Q2)
   display_timezone: Europe/Prague   # zone for display and local calendar days
   expected_interval_s: 1830.0       # nominal sampling interval [s], median of the first real export
 
+registry:
+  allowed_area:                     # every placement must lie in this box [deg, WGS 84]
+    min_lat_deg: 48.55
+    max_lat_deg: 51.06
+    min_lon_deg: 12.09
+    max_lon_deg: 18.86
+
+offsite_log:
+  file: sensors/offsite_log.yaml    # periods when a sensor was not in the vineyard (§2.8)
+  timezone: Europe/Prague           # zone of the local times in the log
+
+ingest:
+  portal:                           # portal client; selectors and timeouts: see config show
+    portal_url: https://lemon.e-service.cz/
+    folder_name: SIVIN VUT
+    headless: true
+    browser: chrome
+    download_dir: data/downloads    # exports are saved here by `sivin fetch`
+  quarantine_mode: copy             # copy | move a rejected export to paths.quarantine_dir
+  file_patterns: ["*.csv", "*.xlsx"]  # files picked up by `sivin ingest --from-dir`
+
+storage:
+  conflict_policy: prefer_newest    # prefer_newest | prefer_existing | raise
+  partitioning: year                # one file per sensor and UTC year
+  max_recorded_conflicts: 100       # conflicts kept per append in the run log [count]
+
+quality:
+  screening_checks: [missing, sampling, range, precip_range, precip_counter, battery]
+  deployed_checks: [spike, step, persistence]
+  detect_deployment: true
+  deployment:
+    mode: advisory                  # advisory (warnings only) | enforce (WP-1.5 flags)
+
+alignment:
+  strategy: nearest_within_tolerance  # nearest_within_tolerance | linear_interpolation
+  grid_step_s: 1800.0                 # common grid step [s]
+  span: union                         # union | overlap
+
 analytics:
-  min_daily_coverage: 0.9    # share of a day covered by valid samples [0-1]; project default
-  min_season_coverage: 0.9   # share of complete days in an index period [0-1]; project default
-  exclude_mask: 311          # QcFlag bits excluding a sample: MISSING|OUT_OF_RANGE|SPIKE|
-                             # STUCK|PRE_DEPLOYMENT|MANUAL_EXCLUDE (1+2+4+16+32+256)
+  min_daily_coverage: 0.9           # share of a day covered by valid samples [0-1]; project default
+  min_season_coverage: 0.9          # share of complete days in an index period [0-1]; project default
+  exclude_mask: 311                 # QcFlag bits excluding a sample: MISSING|OUT_OF_RANGE|SPIKE|
+                                    # STUCK|PRE_DEPLOYMENT|MANUAL_EXCLUDE (1+2+4+16+32+256)
+  auxiliary_exclude_mask: 288       # bits excluding precipitation/battery from daily values:
+                                    # PRE_DEPLOYMENT|MANUAL_EXCLUDE (32+256)
+  indices:                          # parameters per index id (docs/indices/<id>.md)
+    huglin: {}                      # e.g. {k_override: 1.05}; default K from the latitude band
+    gsr: {}                         # e.g. {preset: sauvignon_blanc} for the cultivar targets

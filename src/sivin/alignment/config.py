@@ -1,7 +1,6 @@
-"""Configuration of the time alignment (proposed section ``alignment`` of ``config/sivin.yaml``).
+"""Configuration of the time alignment (section ``alignment`` of ``config/sivin.yaml``).
 
-Wiring this model into :class:`~sivin.config.SivinConfig` is left to the integration
-workpackage (WP-1.7); until then it is used directly, e.g. by
+Part of :class:`~sivin.config.SivinConfig` since WP-1.7; the aligner is built with
 :meth:`~sivin.alignment.aligner.SensorAligner.from_config`.
 """
 

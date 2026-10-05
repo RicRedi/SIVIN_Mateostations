@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 class QualityPipelineSettings(BaseModel):
-    """Settings of :class:`QualityPipeline` (proposed configuration section ``quality``)."""
+    """Settings of :class:`QualityPipeline` (configuration section ``quality``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

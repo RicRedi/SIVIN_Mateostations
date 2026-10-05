@@ -1,8 +1,7 @@
 """Configuration of the measurement store and the factory that builds it from it.
 
-Proposed as the ``storage`` section of ``config/sivin.yaml``; wiring it into
-:class:`~sivin.config.SivinConfig` is left to the integration workpackage. The store directory
-itself is ``paths.data_dir``.
+The ``storage`` section of ``config/sivin.yaml`` (:class:`~sivin.config.SivinConfig`, WP-1.7).
+The store directory itself is ``paths.data_dir``.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from sivin.storage.store import MeasurementStore
 
 
 class StorageConfig(BaseModel):
-    """Measurement-store settings (proposed section ``storage``)."""
+    """Measurement-store settings (section ``storage``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

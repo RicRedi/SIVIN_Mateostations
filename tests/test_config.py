@@ -32,6 +32,16 @@ def test_defaults() -> None:
     assert config.paths.site_dir == Path("site")
     assert config.paths.sensors_file == Path("sensors/sensors.geojson")
     assert config.paths.output_dir == Path("vystupy")
+    assert config.paths.derived_dir == Path("data/derived")
+    assert config.paths.quarantine_dir == Path("data/quarantine")
+    assert config.offsite_log.file == Path("sensors/offsite_log.yaml")
+    assert config.ingest.portal.download_dir == Path("data/downloads")
+    assert config.ingest.quarantine_mode == "copy"
+    assert config.storage.conflict_policy == "prefer_newest"
+    assert config.quality.deployment.mode == "advisory"
+    assert "battery" in config.quality.screening_checks
+    assert config.alignment.strategy == "nearest_within_tolerance"
+    assert config.analytics.auxiliary_exclude_mask == 288
     assert config.time.source_timezone == "Europe/Prague"
     assert config.time.display_timezone == "Europe/Prague"
     assert config.time.expected_interval_s == 1830.0
