@@ -356,3 +356,62 @@ in QC (`IndoorInterval.end_utc` and the battery run end are never `None`), so th
 
 Scope otherwise clean; no shared core/storage/CI file touched. The CLI registration and the
 `config/model.py` change are within the WP's scope.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+The review covers `135416f`. My scripts and screenshots are in `/tmp/claude-0/review-3.2/`:
+`round2.py`, `idxfail.py`, `stale.cjs`, `r2-*.png`.
+
+**Gates (all run by me):**
+- `make lint`: all checks passed, 289 files formatted.
+- `make type`: no issues found in 176 source files.
+- `make test` and `make cov`: 1844 passed, 99 % total. Every module in `sivin/site/*` and
+  `app/site.py` is at 100 %.
+- `tests/e2e/test_site.py`: the fixture is up to date.
+- Web (`npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`): exit 0,
+  168 tests passed, 99.39 % line coverage.
+
+**Round-1 findings:**
+
+| Severity | Round-1 finding | Status | Evidence |
+|---|---|---|---|
+| major | zero-coverage index values and classes | resolved | A whole-season off-site period on 77678271 now gives no index with a non-null `value` or `class`. Entries look like `{value: null, class: null, coverage: 0.0, status: "no_data", detail: "no data"}`. Classes are now published only for `complete` results. The regenerated fixture validates in the web without warnings. |
+| minor | a failing sensor was unpublished by a full build | resolved | With a corrupted store file and a changed off-site log, the full build keeps the sensor's files. The manifest then carries `data_status: "error"` and `last_built_at`. The same holds for `--full` and for incremental builds. After the store is repaired, the next build restores a normal entry. |
+| minor | index failures were cached | resolved | I ran this end to end with a `HuglinIndex.compute` that raises. Builds 1 and 2 both rebuild the sensor and exit 1. After the fix, build 3 publishes `huglin` and exits 0. Build 4 reuses the sensor. |
+| minor | `unlogged_off_site` was public by default | resolved | It is now opt-in, in the code default, in `config/sivin.yaml` and in `docs/site.md`. |
+| minor | Czech label of `gdd_winkler` | resolved | It is now "Suma efektivních teplot (Winklerův index)". `vpd` is "Sytostní doplněk (deficit tlaku vodní páry)", which is the correct Czech term. |
+| nit | build state published in `site/data` | resolved | The state is now `data/derived/site-build-state.json`, and nothing in `site/data` starts with `.` or contains "state". |
+| nit | registry copy publishes `portal_name` and notes | open (owner decision) | Unchanged, as the plan specifies. |
+| nit | `stale` frozen at `generated_at` | resolved | The manifest now carries `stale_after_s`, and `SensorCatalog` re-judges staleness against the current time. In a browser, a copy of the fixture with `latest.stale` set to `false` still shows "(neaktuální)" (`r2-09-client-stale.png`). |
+
+**New finding:**
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `src/sivin/site/builder.py` (`fallback` from `StateFile`), `src/sivin/app/workspace.py` (`site_state_file`) | The build state is one global file, but the output directory varies with `--out`. Details below. | open |
+
+Details of the new finding:
+- Reproduced: one sensor's store is corrupted, then I ran `sivin build-site --out other`. The new
+  directory's manifest lists 77680921 with `raw_months` and `data_status: "error"`, but its
+  `series/` files do not exist there. The web would fail on "listed month cannot be loaded".
+- A build with `--out` also overwrites the state of the default `site/data`. This only costs a
+  rebuild, because outputs are checked by SHA-256.
+- Suggested fix: use a fallback state only if all its outputs exist in the current output
+  (`output.has`), otherwise leave the sensor out. Alternatively, key the state by output
+  directory.
+- It is not blocking: `sivin run` and the scheduled workflow always use the default output.
+
+**Web with real data (regenerated fixture, playwright-core and `/opt/pw-browsers/chromium`):**
+- 77799986 shows its grey off-site band with no line, plus the amber low-battery marker.
+- The synthetic 77678271 shows its data.
+- 24 h, 7 d, 30 d, season and custom windows work.
+- No contract warnings or errors appeared; only map tiles failed, because there is no network.
+- Screenshots: `r2-01` … `r2-09`.
+
+**Performance** (4 sensors × 3 years of synthetic 1830 s data, rerun):
+- Full build: 14.1 s, 162 files, 6.9 MB.
+- Incremental build with no change: 0.1 s. With one sensor changed: 3.8 s.
+- Incremental and full builds are byte-identical.
+- No leaks: no absolute paths, credentials or file names in the output.
