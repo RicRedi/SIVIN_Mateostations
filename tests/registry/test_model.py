@@ -155,7 +155,8 @@ class TestSensor:
             id=SensorId("11112222"),
             portal_name="8615620 11112222",
             label="x",
-            site=None,
+            municipality=None,
+            track=None,
             variety=None,
             status="active",
             placements=(make_placement(),),
@@ -203,7 +204,7 @@ class TestSensor:
         )
         assert len(sensor.placements) == 3
 
-    @pytest.mark.parametrize("key", ["portal_name", "site", "variety", "notes"])
+    @pytest.mark.parametrize("key", ["portal_name", "municipality", "track", "variety", "notes"])
     def test_every_key_is_required(self, make_sensor: SensorFactory, key: str) -> None:
         document = make_sensor().model_dump()
         del document[key]
@@ -348,6 +349,6 @@ class TestMovedTo:
 
     def test_replaced_revalidates(self, make_sensor: SensorFactory) -> None:
         sensor = make_sensor()
-        assert sensor.replaced(site="Synthetic site").site == "Synthetic site"
+        assert sensor.replaced(track="Synthetic track").track == "Synthetic track"
         with pytest.raises(ValidationError):
             sensor.replaced(status="retired")

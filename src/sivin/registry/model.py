@@ -48,6 +48,16 @@ SensorStatus = Literal["active", "inactive", "retired"]
 use, no placement is open.
 """
 
+DEPRECATED_SITE_KEY: Final = "site"
+"""Registry key of the site name before 2026-10-05, replaced by ``municipality`` and ``track``.
+
+Owner decision 2026-10-05 (MIGRATION_PLAN §0.5): the web groups sensors by municipality and
+vineyard track. An old file with ``site`` still loads; the value is read as ``track``.
+"""
+
+SITE_REPLACEMENT_KEYS: Final = ("municipality", "track")
+"""The keys that replaced :data:`DEPRECATED_SITE_KEY`."""
+
 _UTC_SUFFIX: Final = "+00:00"
 """ISO 8601 offset of UTC as written by :meth:`datetime.isoformat`; written as ``Z``."""
 
@@ -252,8 +262,12 @@ class Sensor(BaseModel):
         Device name in the provider's portal, e.g. ``"8615620 77678271"``; must contain the id.
     label : str
         Human-readable name, e.g. the GPX waypoint name ``"77678271 (VUT)"``.
-    site : str or None
-        Vineyard or site name.
+    municipality : str or None
+        Municipality (obec) the sensor stands in, e.g. ``"Mikulov"``; the first grouping level
+        of the web's sensor picker.
+    track : str or None
+        Vineyard track (viniční trať) within the municipality, e.g. ``"Turold"``; the second
+        grouping level.
     variety : str or None
         Grape variety at the sensor.
     status : {"active", "inactive", "retired"}
@@ -265,11 +279,16 @@ class Sensor(BaseModel):
 
     Every parameter is required, also the nullable ones (pass ``None``), as in the file.
 
+    The key ``site`` of registry files written before 2026-10-05 is accepted as a deprecated
+    alias: its value becomes ``track``, ``municipality`` becomes ``None`` and a warning is
+    logged (see :data:`DEPRECATED_SITE_KEY`). Saving the registry writes the new keys.
+
     Raises
     ------
     pydantic.ValidationError
         If the placements are unsorted or overlap, an open placement is not the last one,
-        ``portal_name`` names another serial, or ``status`` contradicts the placements.
+        ``portal_name`` names another serial, ``status`` contradicts the placements, or the
+        deprecated ``site`` is given together with ``municipality`` or ``track``.
     """
 
     model_config = ConfigDict(
@@ -282,7 +301,16 @@ class Sensor(BaseModel):
         description="Device name in the provider's portal, e.g. '8615620 77678271'.",
     )
     label: str = Field(min_length=1, description="Human-readable name, e.g. '77678271 (VUT)'.")
-    site: str | None = Field(min_length=1, description="Vineyard or site name; null if unknown.")
+    municipality: str | None = Field(
+        min_length=1,
+        description="Municipality (obec) the sensor stands in, e.g. 'Mikulov'; null if unknown.",
+    )
+    track: str | None = Field(
+        min_length=1,
+        description=(
+            "Vineyard track (viniční trať) within the municipality, e.g. 'Turold'; null if unknown."
+        ),
+    )
     variety: str | None = Field(
         min_length=1, description="Grape variety at the sensor; null if unknown."
     )
@@ -291,6 +319,30 @@ class Sensor(BaseModel):
         min_length=1, description="Placement history in time order; only the last may be open."
     )
     notes: str | None = Field(min_length=1, description="Free text; null if none.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_site(cls, data: object) -> object:
+        if not isinstance(data, dict) or DEPRECATED_SITE_KEY not in data:
+            return data
+        replacements = [key for key in SITE_REPLACEMENT_KEYS if key in data]
+        if replacements:
+            raise ValueError(
+                f"'{DEPRECATED_SITE_KEY}' was replaced by 'municipality' and 'track' "
+                f"(2026-10-05); remove '{DEPRECATED_SITE_KEY}', the sensor already has "
+                f"{' and '.join(repr(key) for key in replacements)}"
+            )
+        migrated = {key: value for key, value in data.items() if key != DEPRECATED_SITE_KEY}
+        logger.warning(
+            "Sensor %s: the registry key '%s' is deprecated (replaced by 'municipality' and "
+            "'track', 2026-10-05); its value %r is read as 'track' and 'municipality' as null. "
+            "Save the registry to write the new keys, then fill in 'municipality' "
+            "(docs/sensors.md).",
+            data.get("id"),
+            DEPRECATED_SITE_KEY,
+            data[DEPRECATED_SITE_KEY],
+        )
+        return migrated | {"municipality": None, "track": data[DEPRECATED_SITE_KEY]}
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
