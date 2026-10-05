@@ -214,8 +214,6 @@ __marimo__/
 *.pdf
 *.eps
 
-# Guides
-*.md
 
 # Grafy
 vystupy/
