@@ -9,12 +9,12 @@ from sivin.storage.atomic import AtomicFileWriter
 from sivin.storage.codec import CsvSeriesCodec, SeriesCodec
 from sivin.storage.config import StorageConfig, build_store
 from sivin.storage.conflicts import (
+    ConflictDecision,
     ConflictPolicy,
     PreferExisting,
     PreferNewest,
     RaiseOnConflict,
-    RowConflict,
-    StoredRow,
+    ValueConflict,
     conflict_policy_registry,
 )
 from sivin.storage.errors import MeasurementConflictError, StoreError, StoreFormatError
@@ -27,6 +27,7 @@ __all__ = [
     "AppendCounts",
     "AppendResult",
     "AtomicFileWriter",
+    "ConflictDecision",
     "ConflictPolicy",
     "CsvSeriesCodec",
     "MeasurementConflictError",
@@ -36,7 +37,6 @@ __all__ = [
     "PreferExisting",
     "PreferNewest",
     "RaiseOnConflict",
-    "RowConflict",
     "RunLog",
     "RunRecord",
     "SeriesCodec",
@@ -44,7 +44,7 @@ __all__ = [
     "StorageConfig",
     "StoreError",
     "StoreFormatError",
-    "StoredRow",
+    "ValueConflict",
     "YearPartitioning",
     "build_store",
     "conflict_policy_registry",

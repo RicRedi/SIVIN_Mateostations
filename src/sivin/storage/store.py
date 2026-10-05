@@ -15,13 +15,14 @@ from typing import Final
 import numpy as np
 import pandas as pd
 
+from sivin.core.flags import QcFlag
 from sivin.core.ids import SensorId
 from sivin.core.schema import Column, MeasurementSeries, TimestampLike
 from sivin.storage.atomic import AtomicFileWriter
 from sivin.storage.codec import CsvSeriesCodec, SeriesCodec
-from sivin.storage.conflicts import ConflictPolicy, PreferNewest
+from sivin.storage.conflicts import ConflictDecision, ConflictPolicy, PreferNewest
 from sivin.storage.errors import StoreFormatError
-from sivin.storage.merge import AppendCounts, SeriesMerger
+from sivin.storage.merge import DEFAULT_MAX_RECORDED_CONFLICTS, AppendCounts, SeriesMerger
 from sivin.storage.partitioning import Partitioning, YearPartitioning
 
 logger = logging.getLogger(__name__)
@@ -39,14 +40,18 @@ class AppendResult:
     sensor_id : SensorId
         The sensor appended to.
     counts : AppendCounts
-        New, identical, conflicting and replaced rows.
+        New and identical rows; filled, ignored, conflicting and replaced values.
     files_written : tuple of pathlib.Path
         Partition files that were created or replaced; empty when nothing changed.
+    conflicts : tuple of ConflictDecision
+        The first ``max_recorded_conflicts`` conflicts with both values and the decision, in
+        time order; ``counts.conflicting_values`` tells how many there were in total.
     """
 
     sensor_id: SensorId
     counts: AppendCounts = field(default_factory=AppendCounts)
     files_written: tuple[Path, ...] = ()
+    conflicts: tuple[ConflictDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +76,12 @@ class MeasurementStore:
     partitioning : Partitioning, optional
         Split of a sensor's rows into files; :class:`YearPartitioning` (UTC year) by default.
     conflict_policy : ConflictPolicy, optional
-        Decides rows that conflict with stored ones; :class:`PreferNewest` by default.
+        Decides values that conflict with stored ones; :class:`PreferNewest` by default.
     writer : AtomicFileWriter, optional
         Writes files atomically.
+    max_recorded_conflicts : int, optional
+        Conflicts kept in :attr:`AppendResult.conflicts` per append (and logged one by one per
+        partition file).
     """
 
     __slots__ = ("_codec", "_merger", "_partitioning", "_root", "_writer")
@@ -85,12 +93,13 @@ class MeasurementStore:
         partitioning: Partitioning | None = None,
         conflict_policy: ConflictPolicy | None = None,
         writer: AtomicFileWriter | None = None,
+        max_recorded_conflicts: int = DEFAULT_MAX_RECORDED_CONFLICTS,
     ) -> None:
         self._root = root
         self._codec = codec if codec is not None else CsvSeriesCodec()
         self._partitioning = partitioning if partitioning is not None else YearPartitioning()
         policy = conflict_policy if conflict_policy is not None else PreferNewest()
-        self._merger = SeriesMerger(policy)
+        self._merger = SeriesMerger(policy, max_recorded_conflicts)
         self._writer = writer if writer is not None else AtomicFileWriter()
 
     @property
@@ -103,18 +112,21 @@ class MeasurementStore:
 
         All partitions are merged in memory first, so a refused conflict
         (:class:`~sivin.storage.conflicts.RaiseOnConflict`) writes nothing. Each changed file is
-        then replaced atomically; if writing one file fails, files written before it keep their
-        new content and repeating the append completes the rest.
+        then replaced atomically. If writing one file fails, files written before it keep their
+        new content; repeating the append completes the rest and gives the same bytes as one
+        clean append, but its counts report the rows already written as identical. The caller
+        must therefore record the failed attempt (e.g. in ``RunRecord.failures``).
 
         Parameters
         ----------
         series : MeasurementSeries
-            Measurements of one sensor; its ``qc`` column is not stored.
+            Measurements of one sensor. Its ``qc`` column is not stored; set flags are logged
+            as a warning with a count per flag.
 
         Returns
         -------
         AppendResult
-            Counts and the files written.
+            Counts, the files written and the recorded conflicts.
 
         Raises
         ------
@@ -125,29 +137,30 @@ class MeasurementStore:
         """
         if series.is_empty:
             return AppendResult(series.sensor_id)
-        if bool(series.frame[Column.QC].any()):
-            logger.debug("Sensor %s: QC flags are not stored and were dropped.", series.sensor_id)
+        _warn_dropped_flags(series)
         counts = AppendCounts()
+        conflicts: list[ConflictDecision] = []
         pending: list[_PendingWrite] = []
         for key, part in self._partitions_of(series):
             path = self._file(series.sensor_id, key)
             outcome = self._merger.merge(self._read_partition(series.sensor_id, key, path), part)
             counts += outcome.counts
+            conflicts += outcome.conflicts
             if outcome.counts.changes_data:
                 pending.append(_PendingWrite(path, outcome.series))
         for write in pending:
             with self._writer.open(write.path) as stream:
                 self._codec.write(write.series, stream)
         logger.info(
-            "Sensor %s: %d new, %d identical, %d conflicting (%d replaced) row(s); %d file(s).",
+            "Sensor %s: %s; %d file(s) written.",
             series.sensor_id,
-            counts.new_rows,
-            counts.identical_skipped,
-            counts.conflicting_rows,
-            counts.replaced_rows,
+            ", ".join(f"{name} {count}" for name, count in counts.to_dict().items()),
             len(pending),
         )
-        return AppendResult(series.sensor_id, counts, tuple(write.path for write in pending))
+        recorded = tuple(conflicts[: self._merger.max_recorded_conflicts])
+        return AppendResult(
+            series.sensor_id, counts, tuple(write.path for write in pending), recorded
+        )
 
     def read(
         self,
@@ -316,6 +329,19 @@ class MeasurementStore:
             if bool((keys != key).any()):
                 raise StoreFormatError(f"{path}: holds rows outside partition {key!r}.")
         return series
+
+
+def _warn_dropped_flags(series: MeasurementSeries) -> None:
+    """Log a warning with a count per flag when the series carries QC flags (not stored)."""
+    flags = series.frame[Column.QC].to_numpy()
+    if not flags.any():
+        return
+    per_flag = {str(flag.name): int(((flags & flag.value) != 0).sum()) for flag in QcFlag}
+    logger.warning(
+        "Sensor %s: QC flags are not stored in raw files and were dropped: %s.",
+        series.sensor_id,
+        ", ".join(f"{name} on {count} row(s)" for name, count in per_flag.items() if count),
+    )
 
 
 def _bound(value: TimestampLike | None, name: str, default: pd.Timestamp) -> pd.Timestamp:

@@ -12,6 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sivin.storage.conflicts import DEFAULT_CONFLICT_POLICY, conflict_policy_registry
+from sivin.storage.merge import DEFAULT_MAX_RECORDED_CONFLICTS
 from sivin.storage.partitioning import YearPartitioning, partitioning_registry
 from sivin.storage.store import MeasurementStore
 
@@ -25,8 +26,18 @@ class StorageConfig(BaseModel):
         DEFAULT_CONFLICT_POLICY,
         description=(
             "What to keep when an imported row has the timestamp of a stored row but different "
-            "values (name, no unit): 'prefer_newest' (the import wins, default per "
-            "MIGRATION_PLAN WP-1.4), 'prefer_existing' or 'raise'."
+            "values (name, no unit): 'prefer_newest' (the last appended value wins, default "
+            "per MIGRATION_PLAN WP-1.4), 'prefer_existing' (use for back-fills of older "
+            "exports) or 'raise'. A missing value never conflicts with a present one."
+        ),
+    )
+    max_recorded_conflicts: int = Field(
+        DEFAULT_MAX_RECORDED_CONFLICTS,
+        ge=0,
+        description=(
+            "Conflicts per append kept with both values in the append result and the run log "
+            "and logged one by one per partition file (count); further ones are only counted. "
+            "Project default."
         ),
     )
     partitioning: str = Field(
@@ -70,10 +81,12 @@ def build_store(root: Path, config: StorageConfig) -> MeasurementStore:
     Returns
     -------
     MeasurementStore
-        A store with the configured conflict policy and partitioning and the CSV codec.
+        A store with the configured conflict policy, conflict cap and partitioning and the
+        CSV codec.
     """
     return MeasurementStore(
         root,
         partitioning=partitioning_registry.create(config.partitioning),
         conflict_policy=conflict_policy_registry.create(config.conflict_policy),
+        max_recorded_conflicts=config.max_recorded_conflicts,
     )

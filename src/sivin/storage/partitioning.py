@@ -24,7 +24,7 @@ class Partitioning(ABC):
     """
 
     name: ClassVar[str]
-    """Registry name of the partitioning, used in the configuration."""
+    """Registry name of the partitioning, used in the configuration (the only place it is set)."""
 
     @abstractmethod
     def keys_of(self, timestamps_utc: pd.Series) -> pd.Series:
@@ -99,7 +99,7 @@ partitioning_registry: Final = NamedRegistry[Partitioning](Partitioning)
 """Registered partitionings, keyed by :attr:`Partitioning.name`."""
 
 
-@partitioning_registry.register("year")
+@partitioning_registry.register
 class YearPartitioning(Partitioning):
     """One partition per **UTC** calendar year; the key is the four-digit year, e.g. ``2026``.
 

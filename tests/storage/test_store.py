@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO
 
@@ -14,8 +16,9 @@ import pytest
 
 from sivin.core.ids import SensorId
 from sivin.core.schema import Column, MeasurementSeries
+from sivin.storage.atomic import AtomicFileWriter
 from sivin.storage.codec import CsvSeriesCodec
-from sivin.storage.conflicts import PreferExisting, RaiseOnConflict
+from sivin.storage.conflicts import PreferExisting, PreferNewest, RaiseOnConflict
 from sivin.storage.errors import MeasurementConflictError, StoreFormatError
 from sivin.storage.merge import AppendCounts
 from sivin.storage.store import MeasurementStore
@@ -117,8 +120,9 @@ def test_conflict_prefer_newest_replaces_and_rewrites(
 ) -> None:
     store.append(make_utc_series(["2026-02-01T00:00:00Z"], [3.0], [70.0], "old.csv"))
     result = store.append(make_utc_series(["2026-02-01T00:00:00Z"], [3.1], [70.0], "new.csv"))
-    assert result.counts == AppendCounts(conflicting_rows=1, replaced_rows=1)
+    assert result.counts == AppendCounts(conflicting_values=1, replaced_values=1)
     assert store.read(sensor_id).frame[Column.TEMP].tolist() == [3.1]
+    assert [d.to_dict()["kept"] for d in result.conflicts] == ["incoming"]
 
 
 def test_conflict_prefer_existing_writes_nothing(
@@ -128,8 +132,9 @@ def test_conflict_prefer_existing_writes_nothing(
     store.append(make_utc_series(["2026-02-01T00:00:00Z"], [3.0], [70.0], "old.csv"))
     before = _digests(tmp_path)
     result = store.append(make_utc_series(["2026-02-01T00:00:00Z"], [3.1], [70.0], "new.csv"))
-    assert result.counts == AppendCounts(conflicting_rows=1)
+    assert result.counts == AppendCounts(conflicting_values=1)
     assert result.files_written == ()
+    assert [d.to_dict()["kept"] for d in result.conflicts] == ["stored"]
     assert _digests(tmp_path) == before
 
 
@@ -344,3 +349,114 @@ def test_header_only_partition_file_reads_as_empty(
         pd.Timestamp("2026-01-01T00:00:00Z"),
         pd.Timestamp("2026-01-01T00:00:00Z"),
     )
+
+
+def test_missing_value_in_a_reimport_keeps_the_stored_value(
+    store: MeasurementStore, make_utc_series: UtcSeriesFactory, sensor_id: SensorId
+) -> None:
+    # A truncated last row of an export: temperature missing. Default policy PreferNewest.
+    store.append(make_utc_series(["2026-05-01T00:00:00Z"], [12.3], [80.0], "old.csv"))
+    before = _digests(store.root)
+    result = store.append(make_utc_series(["2026-05-01T00:00:00Z"], [math.nan], [80.0], "new"))
+    assert result.counts == AppendCounts(ignored_missing_values=1)
+    assert result.files_written == ()
+    assert _digests(store.root) == before
+    assert store.read(sensor_id).frame[Column.TEMP].tolist() == [12.3]
+
+
+def test_missing_values_are_filled_column_by_column(
+    store: MeasurementStore, make_utc_series: UtcSeriesFactory, sensor_id: SensorId
+) -> None:
+    store.append(make_utc_series(["2026-05-01T01:00:00Z"], [math.nan], [70.0], "old.csv"))
+    result = store.append(make_utc_series(["2026-05-01T01:00:00Z"], [11.0], [math.nan], "new.csv"))
+    assert result.counts == AppendCounts(filled_values=1, ignored_missing_values=1)
+    lines = (store.root / "raw" / "77678271" / "2026.csv").read_text().splitlines()
+    assert lines[1:] == ["2026-05-01T01:00:00Z,11.0,70.0,new.csv"]
+    assert store.read(sensor_id).frame[Column.RH].tolist() == [70.0]
+
+
+def test_backfill_of_an_older_export_needs_prefer_existing(
+    tmp_path: Path, make_utc_series: UtcSeriesFactory, sensor_id: SensorId
+) -> None:
+    # "Newest" is import order: the older export appended last wins under PreferNewest.
+    newer = make_utc_series(["2026-01-01T00:00:00Z"], [4.2], [60.0], "export_2026-02.csv")
+    older = make_utc_series(["2026-01-01T00:00:00Z"], [4.0], [60.0], "data.xlsx")
+    by_import_order = MeasurementStore(tmp_path / "newest", conflict_policy=PreferNewest())
+    by_import_order.append(newer)
+    by_import_order.append(older)
+    assert by_import_order.read(sensor_id).frame[Column.TEMP].tolist() == [4.0]
+    backfill = MeasurementStore(tmp_path / "existing", conflict_policy=PreferExisting())
+    backfill.append(newer)
+    backfill.append(older)
+    assert backfill.read(sensor_id).frame[Column.TEMP].tolist() == [4.2]
+
+
+def test_dropped_qc_flags_are_warned_with_counts_per_flag(
+    store: MeasurementStore,
+    make_utc_series: UtcSeriesFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    times = ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", "2026-01-01T01:00:00Z"]
+    with caplog.at_level(logging.WARNING, logger="sivin.storage.store"):
+        store.append(make_utc_series(times, [1, 2, 3], [4, 5, 6], qc=[256, 256 | 4, 0]))
+    assert caplog.messages == [
+        "Sensor 77678271: QC flags are not stored in raw files and were dropped: "
+        "SPIKE on 1 row(s), MANUAL_EXCLUDE on 2 row(s)."
+    ]
+
+
+def test_no_qc_warning_without_flags(
+    store: MeasurementStore,
+    make_utc_series: UtcSeriesFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="sivin.storage.store"):
+        store.append(make_utc_series(["2026-01-01T00:00:00Z"], [1.0], [2.0]))
+    assert caplog.messages == []
+
+
+class _WriterFailingOnSecondFile(AtomicFileWriter):
+    """Simulates a crash after the first partition file of an append was written."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @contextmanager
+    def open(self, target: Path) -> Iterator[IO[bytes]]:
+        self.calls += 1
+        if self.calls == 2:
+            raise OSError("crash between partitions (injected)")
+        with super().open(target) as stream:
+            yield stream
+
+
+def test_retry_after_crash_between_partitions_completes_the_append(
+    tmp_path: Path, make_utc_series: UtcSeriesFactory
+) -> None:
+    times = ["2025-06-01T00:00:00Z", "2026-06-01T00:00:00Z", "2027-06-01T00:00:00Z"]
+    series = make_utc_series(times, [1.0, 2.0, 3.0], [10.0, 20.0, 30.0])
+    clean = MeasurementStore(tmp_path / "clean")
+    clean.append(series)
+    crashing = MeasurementStore(tmp_path / "crash", writer=_WriterFailingOnSecondFile())
+    with pytest.raises(OSError, match="injected"):
+        crashing.append(series)
+    written = sorted(path.name for path in (tmp_path / "crash").rglob("*") if path.is_file())
+    assert written == ["2025.csv"]
+    retry = MeasurementStore(tmp_path / "crash").append(series)
+    # The retry under-reports: the 2025 row counts as identical, not new.
+    assert retry.counts == AppendCounts(new_rows=2, identical_skipped=1)
+    assert _digests(tmp_path / "crash") == _digests(tmp_path / "clean")
+
+
+def test_recorded_conflicts_are_capped_per_append_across_partitions(
+    tmp_path: Path, make_utc_series: UtcSeriesFactory
+) -> None:
+    store = MeasurementStore(tmp_path, max_recorded_conflicts=2)
+    times = ["2025-12-31T23:30:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z"]
+    store.append(make_utc_series(times, [1.0, 1.0, 1.0], [5.0, 5.0, 5.0]))
+    result = store.append(make_utc_series(times, [2.0, 2.0, 2.0], [5.0, 5.0, 5.0]))
+    assert result.counts.conflicting_values == 3
+    assert [d.conflict.timestamp_utc for d in result.conflicts] == [
+        pd.Timestamp(times[0]),
+        pd.Timestamp(times[1]),
+    ]

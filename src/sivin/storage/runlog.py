@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, Final, Self
 
 from sivin.core.ids import SensorId
-from sivin.storage.errors import StoreFormatError
+from sivin.storage.conflicts import ConflictDecision
 from sivin.storage.merge import AppendCounts
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,8 @@ RUN_LOG_SUFFIX: Final = ".jsonl"
 """File-name suffix of a run log (JSON Lines)."""
 
 _UTC_SUFFIX: Final = "+00:00"
+
+_LINE_END: Final = "\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +45,12 @@ class RunRecord:
         Number of input-validation findings per category (e.g. per severity), as reported by
         the input validator (WP-1.2).
     failures : tuple of str
-        One message per failure (file not written, sensor not downloaded, ...).
+        One message per failure (file not written, sensor not downloaded, failed append that
+        was retried, ...).
+    conflicts : tuple of ConflictDecision
+        Recorded conflicts of the run's appends (bounded per append, see
+        ``storage.max_recorded_conflicts``), so the ``data`` branch records which stored
+        values were replaced.
 
     Raises
     ------
@@ -57,6 +64,7 @@ class RunRecord:
     appends: Mapping[SensorId, AppendCounts] = field(default_factory=dict)
     validation_issues: Mapping[str, int] = field(default_factory=dict)
     failures: tuple[str, ...] = ()
+    conflicts: tuple[ConflictDecision, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("started_at", "finished_at"):
@@ -68,6 +76,7 @@ class RunRecord:
             raise ValueError("finished_at is before started_at.")
         object.__setattr__(self, "files", tuple(self.files))
         object.__setattr__(self, "failures", tuple(self.failures))
+        object.__setattr__(self, "conflicts", tuple(self.conflicts))
         object.__setattr__(self, "appends", MappingProxyType(dict(sorted(self.appends.items()))))
         issues = dict(sorted(self.validation_issues.items()))
         object.__setattr__(self, "validation_issues", MappingProxyType(issues))
@@ -92,6 +101,7 @@ class RunRecord:
             "appends": {str(sensor): counts.to_dict() for sensor, counts in self.appends.items()},
             "validation_issues": dict(self.validation_issues),
             "failures": list(self.failures),
+            "conflicts": [decision.to_dict() for decision in self.conflicts],
         }
 
     @classmethod
@@ -123,6 +133,7 @@ class RunRecord:
             },
             validation_issues=dict(data["validation_issues"]),
             failures=tuple(data["failures"]),
+            conflicts=tuple(ConflictDecision.from_dict(item) for item in data["conflicts"]),
         )
 
 
@@ -158,6 +169,10 @@ class RunLog:
     def append(self, record: RunRecord) -> Path:
         """Append one record as a single line and flush it to disk.
 
+        If the file does not end with a line break (a previous write was interrupted), one is
+        added first, so the new record starts on its own line and only the broken line is
+        lost.
+
         Parameters
         ----------
         record : RunRecord
@@ -171,15 +186,21 @@ class RunLog:
         path = self.path_for(record.day)
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True)
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(line + "\n")
+        prefix = _LINE_END if _lacks_final_line_end(path) else ""
+        if prefix:
+            logger.warning("%s ends with an incomplete line; starting a new line.", path)
+        with path.open("a", encoding="utf-8", newline=_LINE_END) as stream:
+            stream.write(prefix + line + _LINE_END)
             stream.flush()
             os.fsync(stream.fileno())
         logger.debug("Appended a run record to %s.", path)
         return path
 
     def read(self, day: date) -> list[RunRecord]:
-        """Read all records of a UTC date, in the order they were appended.
+        """Read all valid records of a UTC date, in the order they were appended.
+
+        A line that is not a valid record (e.g. cut off by an interrupted write) is skipped
+        with a warning naming the file and line number.
 
         Parameters
         ----------
@@ -190,11 +211,6 @@ class RunLog:
         -------
         list of RunRecord
             Empty when no run was logged that day.
-
-        Raises
-        ------
-        StoreFormatError
-            If a line is not a valid record.
         """
         path = self.path_for(day)
         if not path.exists():
@@ -204,8 +220,17 @@ class RunLog:
             try:
                 records.append(RunRecord.from_dict(json.loads(line)))
             except (KeyError, TypeError, ValueError, AttributeError) as error:
-                raise StoreFormatError(f"{path}:{number}: invalid run record: {error}") from error
+                logger.warning("%s:%d: skipped an invalid run record: %s", path, number, error)
         return records
+
+
+def _lacks_final_line_end(path: Path) -> bool:
+    """Tell whether ``path`` exists, is not empty and does not end with a line break."""
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    with path.open("rb") as stream:
+        stream.seek(-1, os.SEEK_END)
+        return stream.read(1) != _LINE_END.encode()
 
 
 def _format_utc(moment: datetime) -> str:

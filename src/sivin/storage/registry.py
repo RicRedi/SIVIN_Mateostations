@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +13,9 @@ class NamedRegistry[T]:
 
     Registries are the one kind of module-level mutable state the project allows
     (MIGRATION_PLAN §1.2, point 2): they are filled by class decorators when the defining module
-    is imported and never changed afterwards. Registered classes must be constructible without
-    arguments, so that a configuration can name them.
+    is imported and never changed afterwards. Registered classes carry their key as the class
+    variable ``name`` and must be constructible without arguments, so that a configuration can
+    name them.
 
     Parameters
     ----------
@@ -31,44 +31,44 @@ class NamedRegistry[T]:
         self._base = base
         self._classes: dict[str, type[T]] = {}
 
-    def register(self, name: str) -> Callable[[type[T]], type[T]]:
-        """Return a class decorator registering the class under ``name``.
+    def register(self, cls: type[T]) -> type[T]:
+        """Register a class under its ``name`` class variable; use as a class decorator.
+
+        The name is set once, as the class variable ``name``, and read from there.
 
         Parameters
         ----------
-        name : str
-            Short, lower-case name used in the configuration, e.g. ``"prefer_newest"``.
+        cls : type
+            A concrete subclass of the extension point with a non-empty ``name``.
 
         Returns
         -------
-        callable
-            A decorator that registers the class and returns it unchanged.
+        type
+            The class unchanged.
 
         Raises
         ------
         ValueError
-            If ``name`` is empty or already registered.
+            If the name is already registered.
         TypeError
-            If the decorated class is not a concrete subclass of the extension point.
+            If the class is not a concrete subclass of the extension point or has no
+            non-empty string ``name``.
         """
-        if not name:
-            raise ValueError("A registry name must not be empty.")
-
-        def decorator(cls: type[T]) -> type[T]:
-            if not (isinstance(cls, type) and issubclass(cls, self._base)):
-                raise TypeError(f"Only {self._base.__name__} subclasses can be registered.")
-            if inspect.isabstract(cls):
-                raise TypeError(f"{cls.__name__} is abstract and cannot be registered.")
-            if name in self._classes:
-                raise ValueError(
-                    f"{self._base.__name__} name {name!r} is already registered by "
-                    f"{self._classes[name].__qualname__}."
-                )
-            self._classes[name] = cls
-            logger.debug("Registered %s %r (%s).", self._base.__name__, name, cls.__qualname__)
-            return cls
-
-        return decorator
+        if not (isinstance(cls, type) and issubclass(cls, self._base)):
+            raise TypeError(f"Only {self._base.__name__} subclasses can be registered.")
+        if inspect.isabstract(cls):
+            raise TypeError(f"{cls.__name__} is abstract and cannot be registered.")
+        name = getattr(cls, "name", None)
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{cls.__name__} must define a non-empty class variable 'name'.")
+        if name in self._classes:
+            raise ValueError(
+                f"{self._base.__name__} name {name!r} is already registered by "
+                f"{self._classes[name].__qualname__}."
+            )
+        self._classes[name] = cls
+        logger.debug("Registered %s %r (%s).", self._base.__name__, name, cls.__qualname__)
+        return cls
 
     def get(self, name: str) -> type[T]:
         """Return the class registered under ``name``.
