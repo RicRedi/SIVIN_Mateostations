@@ -32,7 +32,16 @@ def test_constructor_accepts_canonical_frame(sensor_id: SensorId) -> None:
     assert len(series) == 3
     assert not series.is_empty
     assert series.sensor_id == sensor_id
-    assert list(series.frame.columns) == ["timestamp_utc", "temp_c", "rh_pct", "qc"]
+    assert list(series.frame.columns) == [
+        "timestamp_utc",
+        "temp_c",
+        "rh_pct",
+        "precip_mm",
+        "precip_total_mm",
+        "battery_v",
+        "qc",
+    ]
+    assert series.frame[["precip_mm", "precip_total_mm", "battery_v"]].isna().all().all()
     assert "rows=3" in repr(series)
 
 
@@ -89,7 +98,16 @@ def test_constructor_rejects_non_frame(sensor_id: SensorId) -> None:
 def test_matching_sensor_id_column_is_dropped(sensor_id: SensorId) -> None:
     frame = canonical_frame().assign(sensor_id="77678271", source="x.csv")
     series = MeasurementSeries(sensor_id, frame)
-    assert list(series.frame.columns) == ["timestamp_utc", "temp_c", "rh_pct", "qc", "source"]
+    assert list(series.frame.columns) == [
+        "timestamp_utc",
+        "temp_c",
+        "rh_pct",
+        "precip_mm",
+        "precip_total_mm",
+        "battery_v",
+        "qc",
+        "source",
+    ]
 
 
 def test_from_records_normalises(sensor_id: SensorId, caplog: pytest.LogCaptureFixture) -> None:
@@ -230,7 +248,7 @@ def test_complete_mask_needs_both_values_and_no_excluded_flag(sensor_id: SensorI
 
 def test_to_frame_adds_sensor_id(sensor_id: SensorId) -> None:
     long = MeasurementSeries(sensor_id, canonical_frame()).to_frame()
-    assert list(long.columns) == [c.value for c in (Column.SENSOR_ID, *list(Column)[1:5])]
+    assert list(long.columns) == [c.value for c in (Column.SENSOR_ID, *list(Column)[1:8])]
     assert long["sensor_id"].tolist() == ["77678271"] * 3
     assert MeasurementSeries(sensor_id, long).frame.equals(
         MeasurementSeries(sensor_id, canonical_frame()).frame

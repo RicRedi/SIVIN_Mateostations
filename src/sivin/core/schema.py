@@ -31,6 +31,9 @@ class Column(StrEnum):
     TIMESTAMP = "timestamp_utc"
     TEMP = "temp_c"
     RH = "rh_pct"
+    PRECIP = "precip_mm"
+    PRECIP_TOTAL = "precip_total_mm"
+    BATTERY = "battery_v"
     QC = "qc"
     SOURCE = "source"
 
@@ -45,10 +48,25 @@ QC_DTYPE: Final = np.dtype(np.int32)
 """Dtype of the :attr:`Column.QC` bit field (:class:`~sivin.core.flags.QcFlag`)."""
 
 REQUIRED_COLUMNS: Final = (Column.TIMESTAMP, Column.TEMP, Column.RH, Column.QC)
-"""Columns every series frame must have, in canonical order."""
+"""Columns every frame given to :class:`MeasurementSeries` must have."""
+
+AUXILIARY_COLUMNS: Final = (Column.PRECIP, Column.PRECIP_TOTAL, Column.BATTERY)
+"""Measured columns outside the whole-row validity rule (owner decision Q9, 2026-10-05).
+
+Precipitation in the interval since the previous sample (mm), the device's cumulative
+precipitation counter (mm) and the battery voltage (V). A frame may omit them; they are then
+filled with ``NaN``, so every series has them. A missing auxiliary value never makes a row
+invalid (:meth:`MeasurementSeries.complete_mask` looks at temperature and humidity only).
+"""
+
+VALUE_COLUMNS: Final = (Column.TEMP, Column.RH, *AUXILIARY_COLUMNS)
+"""All measured ``float64`` columns, in canonical order."""
 
 OPTIONAL_COLUMNS: Final = (Column.SOURCE,)
-"""Columns a series frame may have."""
+"""Columns a series frame may have; they are not added when missing."""
+
+CANONICAL_ORDER: Final = (Column.TIMESTAMP, *VALUE_COLUMNS, Column.QC, *OPTIONAL_COLUMNS)
+"""Order of the columns of :attr:`MeasurementSeries.frame` (``source`` only when present)."""
 
 TimestampLike = pd.Timestamp | datetime | str
 """Anything :class:`pandas.Timestamp` accepts as a tz-aware point in time."""
@@ -81,12 +99,23 @@ class MeasurementSeries:
     ``timestamp_utc``         ``datetime64[ns, UTC]``    —     strictly increasing, unique
     ``temp_c``                ``float64``                °C    ``NaN`` = missing
     ``rh_pct``                ``float64``                %     ``NaN`` = missing
+    ``precip_mm``             ``float64``                mm    precipitation since the
+                                                               previous sample; ``NaN`` = missing
+    ``precip_total_mm``       ``float64``                mm    cumulative precipitation counter
+                                                               of the device; ``NaN`` = missing
+    ``battery_v``             ``float64``                V     battery voltage; ``NaN`` = missing
     ``qc``                    ``int32``                  —     :class:`QcFlag` bit field
     ``source`` (optional)     string                     —     name of the source file
     ========================  =========================  ====  =================================
 
     The ``sensor_id`` column of the long format is not stored per row; it is added by
     :meth:`to_frame`.
+
+    The auxiliary columns ``precip_mm``, ``precip_total_mm`` and ``battery_v``
+    (:data:`AUXILIARY_COLUMNS`, since WP-1.9) are optional on input and filled with ``NaN`` when
+    the given frame lacks them, so they are always present afterwards. They are not part of the
+    whole-row validity rule: a measurement is valid with or without them
+    (:meth:`complete_mask`).
 
     Parameters
     ----------
@@ -117,6 +146,10 @@ class MeasurementSeries:
         rh_pct: npt.ArrayLike,
         qc: npt.ArrayLike | None = None,
         source: str | Sequence[str] | None = None,
+        *,
+        precip_mm: npt.ArrayLike | None = None,
+        precip_total_mm: npt.ArrayLike | None = None,
+        battery_v: npt.ArrayLike | None = None,
     ) -> Self:
         """Build a series from raw columns, normalising them before validation.
 
@@ -145,6 +178,13 @@ class MeasurementSeries:
             :class:`QcFlag` bit fields; ``0`` (no finding) for every row when omitted.
         source : str or sequence of str, optional
             Source file name, either one for all rows or one per row.
+        precip_mm : array_like of float, optional
+            Precipitation in the interval since the previous sample in mm; ``NaN`` for every
+            row when omitted.
+        precip_total_mm : array_like of float, optional
+            Cumulative precipitation counter of the device in mm; ``NaN`` when omitted.
+        battery_v : array_like of float, optional
+            Battery voltage in V; ``NaN`` when omitted.
 
         Returns
         -------
@@ -165,6 +205,14 @@ class MeasurementSeries:
             Column.RH: _column(rh_pct, n_rows, Column.RH, VALUE_DTYPE),
             Column.QC: np.zeros(n_rows, dtype=QC_DTYPE) if qc is None else _qc_column(qc, n_rows),
         }
+        auxiliary = {
+            Column.PRECIP: precip_mm,
+            Column.PRECIP_TOTAL: precip_total_mm,
+            Column.BATTERY: battery_v,
+        }
+        for name, values in auxiliary.items():
+            if values is not None:
+                columns[name] = _column(values, n_rows, name, VALUE_DTYPE)
         if source is not None:
             sources = [source] * n_rows if isinstance(source, str) else list(source)
             if len(sources) != n_rows:
@@ -283,6 +331,40 @@ class MeasurementSeries:
         frame[Column.QC] = np.bitwise_or(frame[Column.QC].to_numpy(), values.astype(QC_DTYPE))
         return self._derived(frame)
 
+    def with_values(self, column: Column, values: npt.ArrayLike) -> Self:
+        """Return a copy with the values of one auxiliary column replaced.
+
+        Quality control uses this to set implausible auxiliary values aside (e.g. a negative
+        precipitation becomes ``NaN``) without flagging the row: a :class:`QcFlag` is row-wide
+        and would also exclude the temperature and humidity of the row. Temperature and
+        humidity are never replaced; they are only flagged (:meth:`with_flags`).
+
+        Parameters
+        ----------
+        column : Column
+            One of :data:`AUXILIARY_COLUMNS`.
+        values : array_like of float
+            One value per row in the unit of the column (mm or V); ``NaN`` = missing.
+
+        Returns
+        -------
+        MeasurementSeries
+            A new series; all other columns are unchanged.
+
+        Raises
+        ------
+        SchemaError
+            If ``column`` is not auxiliary, or the values have the wrong length or are infinite.
+        """
+        if column not in AUXILIARY_COLUMNS:
+            raise SchemaError(
+                f"Only the auxiliary columns {[str(c) for c in AUXILIARY_COLUMNS]} can be "
+                f"replaced, got '{column}'."
+            )
+        frame = self._frame.copy()
+        frame[str(column)] = _column(values, len(self), column, VALUE_DTYPE)
+        return self._derived(frame)
+
     def valid_mask(self, exclude_mask: int) -> pd.Series:
         """Tell which rows are not excluded by the flags in ``exclude_mask``.
 
@@ -307,7 +389,9 @@ class MeasurementSeries:
 
         A measurement is valid only if **both** temperature and humidity are present and no
         flag of ``exclude_mask`` is set (owner decision 2026-10-05, MIGRATION_PLAN §0.5: if one
-        variable is missing at a given time, the whole measurement is invalid).
+        variable is missing at a given time, the whole measurement is invalid). The auxiliary
+        columns (precipitation, counter, battery voltage) play no part: a row without them is
+        still a valid measurement (owner decision Q9, 2026-10-05).
 
         Parameters
         ----------
@@ -329,7 +413,8 @@ class MeasurementSeries:
         Returns
         -------
         pandas.DataFrame
-            A copy with a leading ``sensor_id`` column (string).
+            A copy with a leading ``sensor_id`` column (string), followed by the columns of
+            :attr:`frame` (including the auxiliary columns).
         """
         frame = self._frame.copy()
         sensor_ids = pd.Series(str(self._sensor_id), index=frame.index, dtype="str")
@@ -355,8 +440,11 @@ def _validated_copy(sensor_id: SensorId, frame: pd.DataFrame) -> pd.DataFrame:
             )
         data = data.drop(columns=Column.SENSOR_ID)
     _check_columns(data)
+    for column in AUXILIARY_COLUMNS:
+        if column not in data.columns:
+            data[str(column)] = np.full(len(data), np.nan, dtype=VALUE_DTYPE)
     _check_timestamps(data[Column.TIMESTAMP])
-    for column in (Column.TEMP, Column.RH):
+    for column in VALUE_COLUMNS:
         if data[column].dtype != VALUE_DTYPE:
             raise SchemaError(f"Column '{column}' must be float64, got {data[column].dtype}.")
         if np.isinf(data[column].to_numpy()).any():
@@ -366,14 +454,14 @@ def _validated_copy(sensor_id: SensorId, frame: pd.DataFrame) -> pd.DataFrame:
     _check_flag_values(data[Column.QC].to_numpy())
     if Column.SOURCE in data.columns:
         data[Column.SOURCE] = _checked_source(data[Column.SOURCE])
-    ordered = [str(c) for c in (*REQUIRED_COLUMNS, *OPTIONAL_COLUMNS) if c in data.columns]
+    ordered = [str(c) for c in CANONICAL_ORDER if c in data.columns]
     return data[ordered].reset_index(drop=True)
 
 
 def _check_columns(frame: pd.DataFrame) -> None:
     present = {str(c) for c in frame.columns}
     missing = [str(c) for c in REQUIRED_COLUMNS if c not in present]
-    unknown = sorted(present - {str(c) for c in (*REQUIRED_COLUMNS, *OPTIONAL_COLUMNS)})
+    unknown = sorted(present - {str(c) for c in CANONICAL_ORDER})
     if missing or unknown:
         raise SchemaError(f"Invalid columns: missing {missing}, unknown {unknown}.")
 

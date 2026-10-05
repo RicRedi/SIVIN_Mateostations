@@ -29,7 +29,20 @@ DAILY_COLUMNS: Final = (
     "n_samples",
     "coverage",
 )
-"""Columns of :attr:`DailyWeather.frame`; names follow the site contract (MIGRATION_PLAN §2.6)."""
+"""Temperature and humidity columns of :attr:`DailyWeather.frame` (site contract, §2.6).
+
+These columns are required by the constructor. :data:`AUXILIARY_DAILY_COLUMNS` follow them.
+"""
+
+AUXILIARY_DAILY_COLUMNS: Final = ("precip_sum_mm", "battery_min_v")
+"""Daily aggregates of the auxiliary variables (WP-1.9), after :data:`DAILY_COLUMNS`.
+
+Optional on input: a frame without them gets ``NaN`` columns, so frames built before WP-1.9
+(e.g. ``frame[list(DAILY_COLUMNS)]``) still construct a :class:`DailyWeather`.
+"""
+
+ALL_DAILY_COLUMNS: Final = (*DAILY_COLUMNS, *AUXILIARY_DAILY_COLUMNS)
+"""All columns of :attr:`DailyWeather.frame`, in order."""
 
 COUNT_COLUMNS: Final = ("temp_n_samples", "rh_n_samples", "n_samples")
 """Integer columns (``int64``); all other columns are ``float64``."""
@@ -75,7 +88,18 @@ class DailyWeather:
     ``rh_n_samples``     —      equal to ``n_samples``
     ``temp_coverage``    0-1    equal to ``coverage``
     ``rh_coverage``      0-1    equal to ``coverage``
+    ``precip_sum_mm``    mm     sum of ``precip_mm`` of the valid samples; ``NaN`` if none
+                                of them has a precipitation value
+    ``battery_min_v``    V      minimum of ``battery_v`` of the valid samples; ``NaN`` if
+                                none of them has a battery value
     ===================  =====  ==========================================================
+
+    The two auxiliary aggregates use the same valid samples as temperature and humidity, so a
+    day's precipitation sum covers the same part of the day as ``coverage``. A missing
+    precipitation or battery value does not make a sample invalid (owner decision Q9); it is
+    only left out of the sum or minimum. Precipitation recorded in a sample without
+    temperature or humidity, or in an excluded sample (e.g. ``PRE_DEPLOYMENT``), is not
+    counted.
 
     The per-variable columns ``temp_*``/``rh_*`` of counts and coverage are kept for API
     stability (they were independent before 2026-10-05); under the whole-row rule they always
@@ -89,7 +113,8 @@ class DailyWeather:
     sensor_id : SensorId
         The sensor the aggregates belong to.
     frame : pandas.DataFrame
-        Aggregates with exactly the columns above, indexed by unique increasing local dates.
+        Aggregates with the columns above, indexed by unique increasing local dates. The two
+        auxiliary columns may be omitted (both or either); they are then filled with ``NaN``.
     timezone : str
         IANA zone that defines the local calendar days.
 
@@ -126,7 +151,8 @@ class DailyWeather:
             Nominal sampling interval in seconds (e.g. 1830 s), used for ``coverage``.
         exclude_mask : int
             :class:`~sivin.core.flags.QcFlag` bits that exclude a sample. A sample without
-            temperature or without humidity is excluded regardless of its flags.
+            temperature or without humidity is excluded regardless of its flags; one without
+            precipitation or battery voltage is not.
 
         Returns
         -------
@@ -156,13 +182,18 @@ class DailyWeather:
             grouped = frame.loc[valid, column].groupby(valid_dates)
             for statistic in ("min", "mean", "max"):
                 daily[f"{prefix}_{statistic}"] = grouped.agg(statistic).astype(np.float64)
+        precip = frame.loc[valid, Column.PRECIP].groupby(valid_dates)
+        daily["precip_sum_mm"] = precip.sum(min_count=1).astype(np.float64)
+        daily["battery_min_v"] = (
+            frame.loc[valid, Column.BATTERY].groupby(valid_dates).min().astype(np.float64)
+        )
         counts = valid_dates.groupby(valid_dates).size()
         n_samples = counts.reindex(all_days, fill_value=0).astype(np.int64)
         coverage = np.minimum(1.0, n_samples.to_numpy() * expected_interval_s / day_length_s)
         for prefix in (*_ROW_LEVEL_ALIAS_PREFIXES, ""):
             daily[f"{prefix}n_samples"] = n_samples
             daily[f"{prefix}coverage"] = coverage
-        return cls(series.sensor_id, daily[list(DAILY_COLUMNS)], timezone)
+        return cls(series.sensor_id, daily[list(ALL_DAILY_COLUMNS)], timezone)
 
     @property
     def sensor_id(self) -> SensorId:
@@ -230,7 +261,7 @@ class DailyWeather:
 
 def _empty_daily_frame() -> pd.DataFrame:
     frame = pd.DataFrame(
-        {name: pd.Series(dtype=np.float64) for name in DAILY_COLUMNS},
+        {name: pd.Series(dtype=np.float64) for name in ALL_DAILY_COLUMNS},
         index=pd.Index([], dtype=object, name=DATE_INDEX_NAME),
     )
     for column in COUNT_COLUMNS:
@@ -239,19 +270,27 @@ def _empty_daily_frame() -> pd.DataFrame:
 
 
 def _validated_daily(frame: pd.DataFrame) -> pd.DataFrame:
-    if list(frame.columns) != list(DAILY_COLUMNS):
+    given = [str(column) for column in frame.columns]
+    expected = [*DAILY_COLUMNS, *(c for c in AUXILIARY_DAILY_COLUMNS if c in given)]
+    if given != expected:
         raise SchemaError(
-            f"Daily frame must have columns {list(DAILY_COLUMNS)}, got {list(frame.columns)}."
+            f"Daily frame must have columns {list(DAILY_COLUMNS)}, optionally followed by "
+            f"{list(AUXILIARY_DAILY_COLUMNS)}, got {given}."
         )
+    frame = frame.copy()
+    for column in AUXILIARY_DAILY_COLUMNS:
+        if column not in given:
+            frame[column] = np.full(len(frame), np.nan, dtype=np.float64)
     if not all(type(day) is date for day in frame.index):
         raise SchemaError("Daily frame must be indexed by datetime.date values.")
     if not (frame.index.is_unique and frame.index.is_monotonic_increasing):
         raise SchemaError("Daily frame index must be unique and increasing.")
-    for column in DAILY_COLUMNS:
-        expected = np.int64 if column in COUNT_COLUMNS else np.float64
-        if frame[column].dtype != expected:
+    for column in ALL_DAILY_COLUMNS:
+        expected_dtype = np.int64 if column in COUNT_COLUMNS else np.float64
+        if frame[column].dtype != expected_dtype:
             raise SchemaError(
-                f"Daily column '{column}' must be {np.dtype(expected)}, got {frame[column].dtype}."
+                f"Daily column '{column}' must be {np.dtype(expected_dtype)}, "
+                f"got {frame[column].dtype}."
             )
     if (frame[list(COUNT_COLUMNS)] < 0).to_numpy().any():
         raise SchemaError("Daily sample counts must not be negative.")
@@ -267,7 +306,7 @@ def _validated_daily(frame: pd.DataFrame) -> pd.DataFrame:
                 f"'{prefix}n_samples' and '{prefix}coverage' must equal 'n_samples' and "
                 "'coverage' (whole-row validity)."
             )
-    copy = frame.copy()
-    copy.columns = pd.Index([str(column) for column in frame.columns])
+    copy = frame[list(ALL_DAILY_COLUMNS)].copy()
+    copy.columns = pd.Index(list(ALL_DAILY_COLUMNS))
     copy.index = pd.Index(list(frame.index), dtype=object, name=DATE_INDEX_NAME)
     return copy
