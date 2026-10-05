@@ -365,3 +365,103 @@ Tests compare with hand-computed values (aggregates, coverage on 23/24/25 h days
 instants derived from `zoneinfo`) and are not tautological. Missing: fall-back with a missing
 sample or `NaT` in the repeated hour, multi-year input, the spring-forward collision, a sample
 with valid temperature but missing RH, the browser ` (1)` file name.
+
+### Round 2
+
+Verdict: CHANGES_REQUESTED (round 2)
+
+Reviewer: independent Claude reviewer subagent (did not write this code). Reviewed commits
+`a0199fb..bcde7d9`. Probe scripts were run outside the repository
+(`/tmp/claude-0/review-0.1/` round 1, `/tmp/claude-0/review-0.1/r2/` round 2); nothing in the
+worktree except this file was changed.
+
+#### Gates observed by the reviewer
+
+- `make lint` → `All checks passed!`, `32 files already formatted`.
+- `make type` → `Success: no issues found in 20 source files`. Still no `type: ignore`/`noqa` in
+  `src/`; `Any` only at the YAML boundary and in the registry (unchanged, justified).
+- `make test` → `181 passed`.
+- `make cov` → `TOTAL 825 0 178 0 100%`, threshold 85 % reached.
+- Scope: round 2 touches only WP-0.1 files (`docs/`, `pyproject.toml`, `src/sivin/{config,core/*,analytics/base}.py`,
+  own tests, new `tests/test_gitignore.py`).
+
+#### Round 1 findings re-verified
+
+All six round 1 probe scripts were re-run unchanged (adapted only where the API now requires the
+thresholds).
+
+- **major timeutil (fixed — partly, see R2-1/R2-2):** (a) 2025 + 2026 input: the 2025 rows are now
+  correct and unique; the single 2026 sample is flagged `unresolved` (warning). (b) 1825 s and
+  1800 s data with **one** missing sample in the repeated hour, every position and 7 phases:
+  all correct. Exhaustive check over 73 phases × every drop of ≤ 1 sample (876 patterns): 0 wrong.
+  (c) `NaT` inside the repeated hour: correct, `NaT` stays `NaT`. Multi-year 2021-09 → 2026-12
+  (5 fall-backs), 1825 s ± 20 s jitter, 30 random runs without gaps: 0 wrong, 0 unresolved.
+  With gaps the spacing rule fails silently (R2-1).
+- **major daily (fixed):** `temp_c=[1, 30]`, `rh_pct=[50, NaN]` → `temp_max = 30.0`; per-variable
+  counts/coverage present; `coverage == temp_coverage` enforced by the constructor.
+- **minor spring-forward collision (fixed):** `02:00, 02:15, 03:00, 03:15` → the two colliding
+  suspect rows are `NaT` + `unresolved`, warning logged.
+- **minor ids Unicode digits / ` (1)` suffix (fixed):** `٧٧٦٧٨٢٧١` rejected by `parse` and the
+  constructor; `..._223857 (1).xlsx` → `77678271`.
+- **minor `DailyWeather` validation (fixed):** wrong columns, `coverage = 5.0`, float counts and a
+  diverging alias column are rejected.
+- **minor `IndexContext` (fixed):** other sensor, other zone (also the alias `Europe/Bratislava`),
+  `NaN`/`1.5` thresholds, negative / unknown mask bits are rejected (see R2-5 for leftovers).
+- **minor `params_model` (fixed):** missing `params_model` → clear `TypeError` at `register` and
+  at instantiation.
+- **minor config layering (fixed):** `import sivin.config, sivin.cli` does not load pandas;
+  `sivin.core.flags` alone neither.
+- **minor dev-tool bounds (fixed):** `ruff>=0.16,<0.17`, `mypy>=2.4,<3`. The new
+  `filterwarnings` keeps deprecations attributed to `sivin` as errors — reasonable.
+- **nits (fixed):** `exclude_mask: true` rejected (`StrictInt`); `±inf` → `SchemaError`; mixed
+  offsets in a `Series` → `SchemaError`; column labels are `str` in `frame` and `to_frame()`.
+
+#### Accepted items
+
+- **`from_records` keeps the last duplicate with a warning — agree.** Since round 2, duplicates
+  created by the DST handling become `NaT` in `to_utc` instead of reaching `from_records`, so the
+  remaining duplicates come from the source (overlapping exports), which plan §2.7 assigns to
+  `InputValidator`/the store. The behaviour is now documented in the docstring. Condition: the
+  WP-1.2 and WP-1.4 briefs must say that conflicting duplicates are reconciled *before*
+  `from_records`. See R2-4 for an interaction with `NaT`.
+- **`/data/` ignore rule — agree.** It is the briefed rule; the effect on the `data` branch is a
+  WP-1.4/WP-4.1 concern and is recorded under *Out of scope*. `tests/test_gitignore.py` pins the
+  rules (19 cases, pass).
+
+#### Findings (round 2)
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | `src/sivin/core/timeutil.py:303-336` (rule 2 of `switch_point`) | **R2-1. The spacing heuristic resolves fall-back groups silently wrong, and contradicts the documented contract.** The class docstring (l. 59-61) and `ConversionResult.unresolved` say a group *without exactly one clock jump* is read as standard time and marked `unresolved`; the code instead applies rule 2 (max of the smallest step) and returns `unresolved=False`. Reproduced on 2026-10-25, 1825 s sampling: local `01:58:20, 02:29:35, 03:00:00` (two samples missing, i.e. a ~1 h gap) → `02:29:35` returned as `00:29:35 UTC` (summer) instead of `01:29:35 UTC`, `suspect=True, unresolved=False`, output monotonic, so no later check can see it (the scores differ by only 50 s: 31:15 vs 30:25 min). Second case: `02:01:40` (summer) and `02:32:55` (standard) with neighbours on both sides → both read as summer, one sample 1 h early. Exhaustive count (73 phases × all drops of ≤ 3 of 12 samples): 0/876 wrong with one drop, **8/4818** with two, **482/16056** with three; multi-year random loss 5 % / 20 % / 50 %: 1 / 20 / 54 silently wrong rows over 30 runs × 5 years. This is the same failure class as round 1 major (b), only needing a longer gap. A margin on the score does not fix it (0.5 × 1825 s margin still leaves 146/16056). Verified that the clock-jump rule alone (rule 1) is never wrong on chronological input (0 silent in all patterns). Impact is limited (one or two samples per transition, still `suspect`, local date unchanged so daily aggregates are unaffected), but it breaks sub-daily alignment and the meaning of `unresolved`. Fix: keep the rule-2 guess if wanted, but **mark those rows `unresolved`** (and log), and align the class and `ConversionResult` docstrings and `docs/architecture.md`; add the two examples above as tests. This also answers open question 6. | open |
+| major | `src/sivin/core/timeutil.py:54,104,309` | **R2-2. Input order is assumed but not checked; newest-first or locally sorted input is resolved silently wrong.** "Recorded order" is ambiguous for an export listed newest first (format not verified, Q1/Q2; the legacy `one_variable_plot.py:57` and `two_variable_plot.py:42` sort after reading, so ascending order is not guaranteed). Reproduced: complete 1825 s data across 2026-10-25 reversed (phase 1625 s) → one "backward jump" is found in the reversed sequence and the split is inverted: `02:29:35` → `00:29:35 UTC` (true `01:29:35`), `02:28:45` → `01:28:45` (true `00:28:45`), all `unresolved=False`. 20 of 365 phases wrong with complete data; with ≤ 2 dropped samples 1851/5767 patterns silently wrong for reversed input and 1395/5767 for input sorted by local wall-clock time (the natural thing a parser might do). Fix: document "chronological recorded order, oldest first; do not sort before conversion" and validate it: the non-`NaT`, non-ambiguous rows must be strictly increasing (wall clock or UTC); otherwise raise `ValueError` (or reverse a fully descending input explicitly). Add tests for reversed and sorted input. **API impact:** `to_utc` gains a documented `ValueError`; WP-1.2 parsers must pass rows oldest-first. | open |
+| minor | `src/sivin/core/timeutil.py:309` | **R2-3.** An exactly repeated wall-clock value (`<=`) counts as a clock jump. A duplicated export row inside the repeated hour (complete 1825 s data, row `02:31:15` twice) → two "jumps" → the whole group (5 rows) is read as standard time and `unresolved`, and both copies of the duplicate become `NaT` (the sample is lost although its first copy was unambiguous). Combined with a missing pass it can resolve silently wrong (only "jump" is the duplicate). Suggest: treat equal consecutive wall-clock values as a duplicate, not a jump (`<`), and leave duplicates to the collision check / `InputValidator`; add a test. | open |
+| minor | `src/sivin/core/schema.py:167` + `timeutil.py` `ConversionResult` | **R2-4.** `to_utc` now returns `NaT` rows, and `from_records` rejects `NaT` with `SchemaError` — correct — but first logs `dropped 1 row(s) with a duplicate timestamp` because several `NaT` count as duplicates of each other. Nothing in `ConversionResult` tells the caller to drop the `NaT` rows before building the series. Suggest: check for `NaT` before the duplicate reduction in `from_records`, and state in `ConversionResult.timestamps_utc` that callers drop (and report) `NaT` rows; mention it in the WP-1.2 brief. | open |
+| nit | `src/sivin/analytics/base.py:84,89` | **R2-5.** `IndexContext` accepts `exclude_mask=True` (bool, unlike `AnalyticsConfig` which is `StrictInt`) and any `latitude_deg` (e.g. `200.0`); Huglin's latitude coefficient will rely on it. Suggest `-90 <= latitude_deg <= 90` and rejecting `bool`. | open |
+| nit | `src/sivin/config.py:17-22` | **R2-6.** `DEFAULT_TIMEZONE` and `LEGACY_SAMPLING_INTERVAL_S` moved to `sivin.core.defaults`; `from sivin.config import DEFAULT_TIMEZONE` still runs but fails mypy strict (`does not explicitly export attribute`). All parallel worktrees branch from `bcde7d9`, so nobody depends on the old location; noting it only so the hand-off API (which lists `sivin.core.defaults`) stays the single source. | open |
+
+#### Round 2 design changes (part c)
+
+- **`DailyWeather` per-variable columns:** correct and hand-checkable; no regression found
+  (23 h / 25 h days, all-excluded and all-`NaN` days, RH-only days give `temp_coverage = 0`
+  and valid `rh_*`). The `n_samples`/`coverage` aliases duplicate the temperature columns, but
+  the constructor enforces equality and the site contract (§2.6) only needs `coverage`, so this
+  is acceptable. `complete_days()` filters on temperature coverage only; an RH-based index
+  (WP-2.x disease models) has to filter on `rh_coverage` itself — worth a sentence in those
+  briefs, not a defect.
+- **Required `IndexContext` thresholds:** good; forgetting the configuration is now a
+  `TypeError` instead of a silent default. Consistency checks work (see re-verification).
+- **`sivin.core.defaults`:** right layering (config → core.defaults ← analytics), light import
+  verified. The values are labelled as project defaults, not literature.
+- **Empty `sivin.core.__init__`:** acceptable and documented in the module docstring,
+  `docs/architecture.md` and the hand-off API; it is the only way to keep `sivin.config` free of
+  pandas without lazy imports.
+
+#### API concerns for the parallel workpackages
+
+1. R2-1 changes only the *values* of `ConversionResult.unresolved` (more rows `True`), no signature.
+2. R2-2 adds a `ValueError` to `LocalTimeConverter.to_utc` for non-chronological input. WP-1.2
+   (parsers) must pass rows in chronological order, oldest first, and must not sort by local time
+   before the conversion; reverse a newest-first export first.
+3. R2-4: callers of `to_utc` (WP-1.2) must drop `NaT` rows before `from_records`.
+4. No change is requested to `DailyWeather`, `IndexContext`, `ClimateIndex`, `IndexRegistry`,
+   `MeasurementSeries` or `sivin.core.defaults`.
