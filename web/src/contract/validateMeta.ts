@@ -1,6 +1,9 @@
 import { FieldReader } from './FieldReader';
+import { ContractError } from './ContractError';
 import {
+  MARKED_INTERVAL_EVENT_TYPES,
   OFF_SITE_EVENT_TYPE,
+  POINT_EVENT_TYPES,
   SENSOR_EVENT_TYPES,
   SUPPORTED_SCHEMA_VERSION,
   type EventsFile,
@@ -11,17 +14,46 @@ import {
   type Manifest,
   type ManifestSensor,
   type SensorEvent,
+  type SensorEventType,
 } from './types';
 
 const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** Receives non-fatal contract findings (tolerantly ignored fields). */
+export type ContractWarning = (message: string) => void;
+
+const warnOnConsole: ContractWarning = (message) => {
+  console.warn(message);
+};
+
+/**
+ * An optional field read by `read`: absent (`undefined`) gives `undefined`; a malformed value is
+ * reported to `warn` and also gives `undefined` (tolerant reading of optional fields, plan §0.5).
+ */
+function optionalField<T>(value: unknown, read: (value: unknown) => T, warn: ContractWarning): T | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return read(value);
+  } catch (error) {
+    if (!(error instanceof ContractError)) {
+      throw error;
+    }
+    warn(`${error.message}; optional field ignored`);
+    return undefined;
+  }
+}
 
 function readLabel(reader: FieldReader, value: unknown, path: string): LocalizedLabel {
   return reader.record(value, path, reader.stringItem);
 }
 
-function readManifestSensor(reader: FieldReader, value: unknown, path: string): ManifestSensor {
+function readManifestSensor(reader: FieldReader, value: unknown, path: string, warn: ContractWarning): ManifestSensor {
   const sensor = reader.object(value, path);
+  const status = optionalField(sensor.status, (item) => reader.string(item, `${path}.status`), warn);
   return {
+    ...(status === undefined ? {} : { status }),
     first_t: reader.integer(sensor.first_t, `${path}.first_t`),
     last_t: reader.integer(sensor.last_t, `${path}.last_t`),
     raw_months: reader.list(sensor.raw_months, `${path}.raw_months`, (item, itemPath) => {
@@ -37,9 +69,10 @@ function readManifestSensor(reader: FieldReader, value: unknown, path: string): 
 /**
  * Validate `manifest.json`, the entry point of the contract.
  *
+ * @param warn - Receives warnings about ignored malformed optional fields; default `console.warn`.
  * @throws ContractError if the file does not match `schema_version: 1`.
  */
-export function parseManifest(value: unknown, file = 'manifest.json'): Manifest {
+export function parseManifest(value: unknown, file = 'manifest.json', warn: ContractWarning = warnOnConsole): Manifest {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   reader.literal(root.schema_version, [SUPPORTED_SCHEMA_VERSION], '$.schema_version');
@@ -56,7 +89,7 @@ export function parseManifest(value: unknown, file = 'manifest.json'): Manifest 
       };
     }),
     sensors: reader.record(root.sensors, '$.sensors', (item, path) =>
-      readManifestSensor(reader, item, path),
+      readManifestSensor(reader, item, path, warn),
     ),
     seasons: reader.list(root.seasons, '$.seasons', reader.integerItem),
     indices: reader.list(root.indices, '$.indices', (item, path) => {
@@ -90,16 +123,19 @@ export function parseLatestFile(value: unknown, file = 'latest.json'): LatestFil
   };
 }
 
-/** Receives non-fatal contract findings (tolerantly ignored fields). */
-export type ContractWarning = (message: string) => void;
+const KNOWN_EVENT_TYPES: readonly string[] = SENSOR_EVENT_TYPES;
+const POINT_TYPES: readonly string[] = POINT_EVENT_TYPES;
+const MARKED_INTERVAL_TYPES: readonly string[] = MARKED_INTERVAL_EVENT_TYPES;
 
-const warnOnConsole: ContractWarning = (message) => {
-  console.warn(message);
-};
-
-function readEvent(reader: FieldReader, value: unknown, path: string, warn: ContractWarning, file: string): SensorEvent {
+/** One event; `null` (with a warning) for an event type this frontend does not know. */
+function readEvent(reader: FieldReader, value: unknown, path: string, warn: ContractWarning, file: string): SensorEvent | null {
   const event = reader.object(value, path);
-  const type = reader.literal(event.type, SENSOR_EVENT_TYPES, `${path}.type`);
+  const typeName = reader.string(event.type, `${path}.type`);
+  if (!KNOWN_EVENT_TYPES.includes(typeName)) {
+    warn(`${file}: ${path} skipped: unknown event type "${typeName}"`);
+    return null;
+  }
+  const type = typeName as SensorEventType;
   const t = reader.integer(event.t, `${path}.t`);
   const common = {
     t,
@@ -107,11 +143,18 @@ function readEvent(reader: FieldReader, value: unknown, path: string, warn: Cont
     confidence: reader.nullableNumber(event.confidence ?? null, `${path}.confidence`),
     detail: reader.nullableString(event.detail ?? null, `${path}.detail`),
   };
-  if (type !== OFF_SITE_EVENT_TYPE) {
+  if (POINT_TYPES.includes(type)) {
     if ('t_end' in event) {
-      warn(`${file}: ${path}.t_end ignored: only "${OFF_SITE_EVENT_TYPE}" events have an end, not "${type}"`);
+      warn(`${file}: ${path}.t_end ignored: only interval events have an end, not "${type}"`);
     }
-    return { type, ...common };
+    return { type: type as (typeof POINT_EVENT_TYPES)[number], ...common };
+  }
+  if (MARKED_INTERVAL_TYPES.includes(type)) {
+    const tEnd = reader.integer(event.t_end, `${path}.t_end`);
+    if (tEnd < t) {
+      reader.fail(`${path}.t_end`, `must not be before t (${t}), got ${tEnd}`);
+    }
+    return { type: type as (typeof MARKED_INTERVAL_EVENT_TYPES)[number], ...common, t_end: tEnd };
   }
   if (!('t_end' in event)) {
     reader.fail(`${path}.t_end`, `is required for "${OFF_SITE_EVENT_TYPE}" (a number, or null while still off site)`);
@@ -120,12 +163,14 @@ function readEvent(reader: FieldReader, value: unknown, path: string, warn: Cont
   if (tEnd !== null && tEnd <= t) {
     reader.fail(`${path}.t_end`, `must be greater than t (${t}), got ${tEnd}`);
   }
-  return { type, ...common, t_end: tEnd };
+  return { type: OFF_SITE_EVENT_TYPE, ...common, t_end: tEnd };
 }
 
 /**
- * Validate `events/<sensor_id>.json`. A `t_end` on a point event is ignored with a warning
- * (tolerant reading of optional fields, plan §0.5); `off_site` events require it.
+ * Validate `events/<sensor_id>.json`. An event of an unknown type is skipped and a `t_end` on a
+ * point event is ignored, both with a warning (tolerant reading, plan §0.5 and WP-3.2), so a
+ * pipeline that publishes a new event kind never breaks the chart. `off_site` and the marked
+ * intervals (`low_battery`, `unlogged_off_site`) require `t_end`.
  *
  * @param warn - Receives the warnings; default `console.warn`.
  * @throws ContractError on mismatch.
@@ -135,13 +180,17 @@ export function parseEventsFile(value: unknown, file: string, warn: ContractWarn
   const root = reader.object(value, '$');
   return {
     sensor_id: reader.string(root.sensor_id, '$.sensor_id'),
-    events: reader.list(root.events, '$.events', (item, path) => readEvent(reader, item, path, warn, file)),
+    events: reader
+      .list(root.events, '$.events', (item, path) => readEvent(reader, item, path, warn, file))
+      .filter((event): event is SensorEvent => event !== null),
   };
 }
 
-function readIndexValue(reader: FieldReader, value: unknown, path: string): IndexValue {
+function readIndexValue(reader: FieldReader, value: unknown, path: string, warn: ContractWarning): IndexValue {
   const result = reader.object(value, path);
+  const estimated = optionalField(result.estimated, (item) => reader.boolean(item, `${path}.estimated`), warn);
   return {
+    ...(estimated === undefined ? {} : { estimated }),
     value: reader.nullableNumber(result.value, `${path}.value`),
     unit: reader.string(result.unit, `${path}.unit`),
     coverage: reader.number(result.coverage, `${path}.coverage`),
@@ -150,15 +199,20 @@ function readIndexValue(reader: FieldReader, value: unknown, path: string): Inde
   };
 }
 
-/** Validate `indices/<season>.json`. @throws ContractError on mismatch. */
-export function parseIndicesFile(value: unknown, file: string): IndicesFile {
+/**
+ * Validate `indices/<season>.json`.
+ *
+ * @param warn - Receives warnings about ignored malformed optional fields; default `console.warn`.
+ * @throws ContractError on mismatch.
+ */
+export function parseIndicesFile(value: unknown, file: string, warn: ContractWarning = warnOnConsole): IndicesFile {
   const reader = new FieldReader(file);
   const root = reader.object(value, '$');
   return {
     season: reader.integer(root.season, '$.season'),
     computed_at: reader.string(root.computed_at, '$.computed_at'),
     sensors: reader.record(root.sensors, '$.sensors', (sensor, sensorPath) =>
-      reader.record(sensor, sensorPath, (item, path) => readIndexValue(reader, item, path)),
+      reader.record(sensor, sensorPath, (item, path) => readIndexValue(reader, item, path, warn)),
     ),
   };
 }

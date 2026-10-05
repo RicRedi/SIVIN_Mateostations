@@ -8,8 +8,8 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** Optional columns of `raw/<YYYY-MM>.json` (WP-1.9). */
 const OPTIONAL_RAW_COLUMNS = ['precip_mm', 'battery_v'] as const;
 
-/** Optional columns of `daily.json` (WP-1.9). */
-const OPTIONAL_DAILY_COLUMNS = ['precip_sum_mm', 'battery_min_v'] as const;
+/** Optional columns of `daily.json` (WP-1.9; `precip_n_samples` WP-3.2). */
+const OPTIONAL_DAILY_COLUMNS = ['precip_sum_mm', 'precip_n_samples', 'battery_min_v'] as const;
 
 type NullableColumn = readonly (number | null)[];
 
@@ -90,7 +90,8 @@ export function parseRawMonthFile(value: unknown, file: string, warn: ContractWa
  * @param file - File name used in error messages.
  * @param warn - Receives warnings about ignored malformed optional fields; default `console.warn`.
  * @returns The typed file; all columns have the length of `date`. The optional
- *   `precip_sum_mm` and `battery_min_v` are present only if the file has them well-formed.
+ *   `precip_sum_mm`, `precip_n_samples` and `battery_min_v` are present only if the file has
+ *   them well-formed.
  * @throws ContractError if a required part of the file does not match the contract.
  */
 export function parseDailyFile(value: unknown, file: string, warn: ContractWarning = warnOnConsole): DailyFile {

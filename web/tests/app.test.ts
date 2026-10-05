@@ -122,7 +122,7 @@ describe('ChartDataLoader failure handling', () => {
     const { fetcher } = fakeFetcher(BASE, new Proxy({}, {
       has: (_, path: string) => path !== 'events/77678271.json' && fixtureExists(path),
       get: (_, path: string) =>
-        path === 'events/77680921.json' ? { sensor_id: '77680921', events: [{ type: 'moved', t: 1, source: 'x' }] } : fixtureJson(path),
+        path === 'events/77680921.json' ? { sensor_id: '77680921', events: [{ type: 'step', t: 'x', source: 'x' }] } : fixtureJson(path),
     }));
     const warnings = new Warnings();
     const window = new TimeWindow(utc(2026, 8, 22), utc(2026, 8, 23), 'raw');
@@ -132,7 +132,7 @@ describe('ChartDataLoader failure handling', () => {
     expect(data.sensors.every((s) => s.temp_c.validCount > 0)).toBe(true);
     expect(warnings.messages).toEqual([
       'Events of sensor 77678271 ignored: Cannot load data/events/77678271.json: HTTP 404',
-      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].type must be one of ["deployment","retrieval","step","off_si…, got "moved"',
+      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].t must be a finite number, got "x"',
     ]);
   });
 });

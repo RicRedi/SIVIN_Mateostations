@@ -37,6 +37,8 @@ export const cs = {
   eventRetrieval: 'Odvoz z vinice',
   eventStep: 'Skok úrovně',
   eventOffSite: 'Mimo vinici',
+  eventLowBattery: 'Slabá baterie',
+  eventUnloggedOffSite: 'Možné nezapsané období mimo vinici',
   eventOngoing: 'dosud',
   eventConfidence: 'jistota {pct} %',
   legendTitle: 'Poslední teplota',
