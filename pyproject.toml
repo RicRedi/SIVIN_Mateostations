@@ -1,0 +1,113 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sivin"
+dynamic = ["version"]
+description = "Collection, quality control, analysis and display of vineyard weather-station data."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Richard Redina" }]
+dependencies = [
+    "pandas>=3.0",
+    "numpy>=2.0",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "openpyxl>=3.1",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+ingest = [
+    "selenium>=4.20",
+    "webdriver-manager>=4.0",
+]
+viz = [
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+]
+dev = [
+    # Linters are bounded to the tested release series (ruff also pinned in pre-commit), so
+    # a new upstream release cannot turn CI red without a code change.
+    "ruff>=0.16,<0.17",
+    "mypy>=2.4,<3",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pandas-stubs>=3.0",
+    "types-PyYAML>=6.0",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+sivin = "sivin.cli:app"
+
+[tool.hatch.version]
+path = "src/sivin/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sivin"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# The legacy root scripts are ported and deleted in later workpackages (WP-5.1, WP-5.2);
+# until then they are kept untouched and outside the gates.
+extend-exclude = [
+    "chrome_driver.py",
+    "generate_animation.py",
+    "one_variable_plot.py",
+    "rolling_stats.py",
+    "sampl_freq_basic.py",
+    "two_variable_plot.py",
+    "vineyard_analyst.py",
+]
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF", "NPY", "PT", "PD"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+markers = ["slow: long-running tests, deselect with '-m \"not slow\"'"]
+# Every warning fails a test, except deprecations raised inside third-party packages, which
+# would otherwise make CI depend on upstream releases (runtime deps have no upper bound).
+# Deprecations triggered by our own code (stacklevel points to sivin) still fail.
+filterwarnings = [
+    "error",
+    "default::DeprecationWarning",
+    "default::PendingDeprecationWarning",
+    "error::DeprecationWarning:sivin",
+    "error::PendingDeprecationWarning:sivin",
+]
+
+[tool.coverage.run]
+source = ["sivin"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@overload",
+    "@abstractmethod",
+]

@@ -1,0 +1,21 @@
+# SIVIN Meteostations configuration (MIGRATION_PLAN §1.3).
+# Every key below shows its default. Unknown keys are rejected at start-up.
+# Paths are relative to the project root. Secrets (portal credentials) never go here;
+# they come from the environment variables SIVIN_USER and SIVIN_PASSWORD.
+
+paths:
+  data_dir: data                          # measurement store
+  site_dir: site                          # generated static site data
+  sensors_file: sensors/sensors.geojson   # sensor registry (GeoJSON)
+  output_dir: vystupy                     # plots and other outputs for people
+
+time:
+  source_timezone: Europe/Prague    # zone of the export timestamps (not yet confirmed, Q2)
+  display_timezone: Europe/Prague   # zone for display and local calendar days
+  expected_interval_s: 1825.0       # nominal sampling interval [s], from the legacy configs
+
+analytics:
+  min_daily_coverage: 0.9    # share of a day covered by valid samples [0-1]; project default
+  min_season_coverage: 0.9   # share of complete days in an index period [0-1]; project default
+  exclude_mask: 311          # QcFlag bits excluding a sample: MISSING|OUT_OF_RANGE|SPIKE|
+                             # STUCK|PRE_DEPLOYMENT|MANUAL_EXCLUDE (1+2+4+16+32+256)
