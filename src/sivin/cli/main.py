@@ -23,6 +23,7 @@ from sivin.cli.commands.fetch import fetch
 from sivin.cli.commands.pipeline import indices, ingest, qc, run
 from sivin.cli.commands.sensors import sensors_app
 from sivin.cli.commands.site import build_site
+from sivin.cli.commands.summary import report
 from sivin.cli.console import console
 from sivin.cli.state import CliOverrides, CliState
 from sivin.logging_setup import setup_logging
@@ -43,6 +44,7 @@ app.command("qc")(qc)
 app.command("indices")(indices)
 app.command("run")(run)
 app.command("build-site")(build_site)
+app.command("report")(report)
 
 
 def _print_version(value: bool) -> None:

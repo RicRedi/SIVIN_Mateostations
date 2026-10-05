@@ -1,0 +1,362 @@
+# Daily data pipeline and GitHub Pages deployment (WP-4.1, docs/operations.md).
+#
+# Once a day at 06:00 Europe/Prague: download the exports from the portal, ingest, quality
+# control, indices and site data (`sivin run`), commit the results to the `data` branch, build
+# the web portal with those data and deploy it to GitHub Pages. Also runs on demand
+# (Actions -> pipeline -> Run workflow).
+
+name: pipeline
+
+on:
+  schedule:
+    # GitHub cron is UTC. 06:00 in Prague is 04:00 UTC in summer (CEST) and 05:00 UTC in
+    # winter (CET); the gate job lets exactly one of the two through on every day.
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_fetch:
+        description: "Do not use the portal; process the stored data only."
+        type: boolean
+        default: false
+      full_site_build:
+        description: "Rebuild all site data, ignoring the incremental build state."
+        type: boolean
+        default: false
+
+permissions: {}
+
+env:
+  DATA_BRANCH: data
+  DATA_WORKTREE: .data-branch
+  LOCAL_TIMEZONE: Europe/Prague
+  LOCAL_RUN_HOUR: "6"
+  # Never committed to the data branch, whatever its .gitignore says (enforced in the commit
+  # step as well): downloads are fetched again on every run, rejected exports would pile up
+  # daily (their reports go into the run artifact), temporary files of interrupted writes,
+  # and any .env file.
+  DATA_BRANCH_GITIGNORE: |
+    # Written by .github/workflows/pipeline.yml; the workflow also enforces these rules.
+    /data/downloads/
+    /data/quarantine/
+    *.tmp
+    .env
+
+jobs:
+  gate:
+    name: local-time gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Continue only for the cron that is 06:00 in Prague today
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          local_hour=$(TZ="$LOCAL_TIMEZONE" date +%H)
+          offset=$(TZ="$LOCAL_TIMEZONE" date +%z)
+          offset_h=$((10#${offset:1:2}))
+          expected="0 $((LOCAL_RUN_HOUR - offset_h)) * * *"
+          echo "Local time: ${local_hour}h (UTC${offset}); fired by '${SCHEDULE}', today's run is '${expected}'."
+          if [ "$SCHEDULE" = "$expected" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not the 06:00 local cron today; nothing to do."
+          fi
+
+  collect:
+    name: collect data
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Concurrency is set on the jobs after the gate, not on the workflow, so the no-op run of
+    # the other cron (and its gate job) never enters a group. GitHub runs one job of a group
+    # at a time and keeps at most ONE pending job per group: a newly queued job cancels the
+    # pending one (never the running one, cancel-in-progress: false). Each job has its own
+    # group (pipeline-data, pipeline-pages, pipeline-deploy): with one shared group the next
+    # job of a run (queued when its predecessor ends) would cancel a waiting job of a newer
+    # run. The order of the runs is kept because each job only becomes ready after the previous
+    # job of its run. A cancelled pending job is usually superseded by the newer run, except:
+    # a manual skip_fetch run cancels a waiting scheduled collect (that day's fetch is skipped:
+    # run again without skip_fetch), and a later run cancels a waiting manual full_site_build
+    # (run again with full_site_build). See docs/operations.md, "Overlapping runs".
+    concurrency:
+      group: pipeline-data
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      data_sha: ${{ steps.commit.outputs.data_sha }}
+    steps:
+      # No ref: the triggering ref, which for schedule is always the default branch (main).
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Check out the data branch (create it if missing)
+        run: |
+          set -euo pipefail
+          set +e
+          git ls-remote --exit-code --heads origin "refs/heads/$DATA_BRANCH" > /dev/null
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            git fetch --no-tags --depth=1 origin "+refs/heads/$DATA_BRANCH:refs/remotes/origin/$DATA_BRANCH"
+            git worktree add --detach "$DATA_WORKTREE" "origin/$DATA_BRANCH"
+          elif [ "$status" -eq 2 ]; then
+            echo "::notice::Branch '$DATA_BRANCH' does not exist yet; creating it as an orphan branch."
+            git worktree add --detach "$DATA_WORKTREE"
+            git -C "$DATA_WORKTREE" checkout -q --orphan "$DATA_BRANCH"
+            git -C "$DATA_WORKTREE" rm -r -q -f .
+            cat > "$DATA_WORKTREE/README.md" <<'EOF'
+          # SIVIN Meteostations: measured data
+
+          This branch holds the measurements and pipeline results of the SIVIN vineyard weather
+          sensors. It has no common history with `main` and is written only by the workflow
+          `.github/workflows/pipeline.yml` (see `docs/operations.md` on `main`).
+
+          - `data/raw/<sensor_id>/<YYYY>.csv`: measurement store (docs/storage.md)
+          - `data/runs/<YYYY-MM-DD>.jsonl`: one record per pipeline run
+          - `data/derived/`: QC events, index results, incremental site build state
+          - `site/data/`: the static site data deployed to GitHub Pages (docs/site.md)
+
+          The data are public by decision of the owner.
+          EOF
+            printf '%s' "$DATA_BRANCH_GITIGNORE" > "$DATA_WORKTREE/.gitignore"
+          else
+            echo "::error::Cannot list the branches of origin (git exit code $status)."
+            exit 1
+          fi
+          rm -rf data site
+          mkdir -p data
+          if [ -d "$DATA_WORKTREE/data" ]; then cp -a "$DATA_WORKTREE/data/." data/; fi
+          if [ -d "$DATA_WORKTREE/site" ]; then cp -a "$DATA_WORKTREE/site" site; fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install sivin
+        run: python -m pip install ".[ingest]"
+
+      - name: Run the pipeline
+        id: run
+        env:
+          SIVIN_USER: ${{ secrets.SIVIN_USER }}
+          SIVIN_PASSWORD: ${{ secrets.SIVIN_PASSWORD }}
+          SKIP_FETCH: ${{ inputs.skip_fetch }}
+          FULL_SITE_BUILD: ${{ inputs.full_site_build }}
+        run: |
+          set +e -uo pipefail
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          args=(--log-level INFO run)
+          if [ "$SKIP_FETCH" = "true" ]; then args+=(--skip-fetch); fi
+          if [ "$FULL_SITE_BUILD" = "true" ]; then args+=(--skip-site); fi
+          sivin "${args[@]}"
+          code=$?
+          if [ "$FULL_SITE_BUILD" = "true" ] && { [ "$code" -eq 0 ] || [ "$code" -eq 1 ] || [ "$code" -eq 4 ]; }; then
+            sivin --log-level INFO build-site --full
+            site_code=$?
+            if [ "$site_code" -gt "$code" ]; then code=$site_code; fi
+          fi
+          echo "Pipeline exit code: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        env:
+          SIVIN_USER: ${{ secrets.SIVIN_USER }}
+          SIVIN_PASSWORD: ${{ secrets.SIVIN_PASSWORD }}
+          STARTED: ${{ steps.run.outputs.started }}
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          set +e -uo pipefail
+          summary=run-summary/run-summary.md
+          mkdir -p "$(dirname "$summary")"
+          args=(--log-level INFO report --format markdown --run latest)
+          if [ -n "$STARTED" ]; then args+=(--since "$STARTED"); fi
+          if [ -n "$CODE" ]; then args+=(--outcome "$CODE"); fi
+          if ! sivin "${args[@]}" > "$summary"; then
+            printf '## SIVIN pipeline run\n\nNo summary available (exit code of the run: %s); see the job log.\n' "${CODE:-none}" > "$summary"
+          fi
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Judge the exit code
+        id: judge
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          case "$CODE" in
+            0) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "::warning::Partial failure (exit code 1): see the job summary."
+               echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            4) echo "::warning::Portal unavailable (exit code 4): the stored data were processed and are published again."
+               echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::The pipeline failed (exit code ${CODE:-none}); nothing is committed or deployed."
+               echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Commit and push the data branch
+        id: commit
+        if: steps.judge.outputs.publish == 'true'
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+          STARTED: ${{ steps.run.outputs.started }}
+        run: |
+          set -euo pipefail
+          counts=""
+          if json=$(sivin --log-level INFO report --format json --run latest --since "$STARTED" 2> /dev/null); then
+            counts=$(jq -r 'select(.record) | "\(.new_rows) new rows from \(.files) files, \(.rejected_files) rejected, \(.failures) other failures"' <<< "$json" 2> /dev/null) || counts=""
+          fi
+          rm -rf "${DATA_WORKTREE:?}/data" "${DATA_WORKTREE:?}/site"
+          cp -a data "$DATA_WORKTREE/data"
+          if [ -d site/data ]; then
+            mkdir -p "$DATA_WORKTREE/site"
+            cp -a site/data "$DATA_WORKTREE/site/data"
+          fi
+          cd "$DATA_WORKTREE"
+          rm -rf data/downloads data/quarantine
+          find . -path ./.git -prune -o \( -name '*.tmp' -o -name '.env' \) -type f -print -exec rm -f -- {} +
+          if [ ! -f .gitignore ]; then printf '%s' "$DATA_BRANCH_GITIGNORE" > .gitignore; fi
+          git add -A -- . ':(exclude)data/downloads' ':(exclude)data/quarantine' ':(exclude,glob)**/*.tmp' ':(exclude,glob)**/.env'
+          git rm -r -q --cached --ignore-unmatch -- data/downloads data/quarantine ':(glob)**/*.tmp' ':(glob)**/.env'
+          if git diff --cached --quiet; then
+            echo "No changes in the data; nothing to commit."
+          else
+            message="data: run of $(date -u +%Y-%m-%d)${counts:+, $counts} (exit code ${CODE})"
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -q -m "$message"
+            if ! git push origin "HEAD:refs/heads/$DATA_BRANCH"; then
+              echo "::error::The push to '$DATA_BRANCH' was rejected: the branch changed after this run checked it out (another push). Nothing was lost; run the workflow again (Actions -> pipeline -> Run workflow, or re-run this run)."
+              exit 1
+            fi
+            echo "Pushed: $message"
+          fi
+          echo "data_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the summary and the quarantine reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            run-summary/run-summary.md
+            data/quarantine/*.report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Fail on a broken run
+        if: steps.judge.outputs.publish != 'true'
+        run: exit 1
+
+  build-site:
+    name: build site
+    needs: collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: pipeline-pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out the data committed by this run
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.collect.outputs.data_sha }}
+          path: ${{ env.DATA_WORKTREE }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install sivin
+        run: python -m pip install .
+
+      - name: Site data
+        run: |
+          set -euo pipefail
+          rm -rf data site
+          mkdir -p data
+          if [ -d "$DATA_WORKTREE/data" ]; then cp -a "$DATA_WORKTREE/data/." data/; fi
+          if [ -d "$DATA_WORKTREE/site" ]; then cp -a "$DATA_WORKTREE/site" site; fi
+          code=0
+          sivin --log-level INFO build-site || code=$?
+          case "$code" in
+            0) ;;
+            1) echo "::warning::Some sensors or indices failed; their last good site data are published." ;;
+            *) echo "::error::sivin build-site failed (exit code $code)."; exit 1 ;;
+          esac
+          rm -rf web/public/data
+          cp -a site/data web/public/data
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the web portal
+        working-directory: web
+        env:
+          VITE_DEMO_DATA: "false"
+        run: |
+          # Project Pages serve https://<owner>.github.io/<repository>/; the repository name comes
+          # from GITHUB_REPOSITORY (owner/name, set on every runner for every event), not from the
+          # event payload, which a scheduled run does not carry.
+          name="${GITHUB_REPOSITORY#*/}"
+          if [ -z "${GITHUB_REPOSITORY:-}" ] || [ -z "$name" ] || [ "$name" = "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Cannot derive the Pages base path from GITHUB_REPOSITORY='${GITHUB_REPOSITORY:-}'."
+            exit 1
+          fi
+          export SITE_BASE="/${name}/"
+          echo "Base path: $SITE_BASE"
+          npm ci
+          npm run build
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: deploy
+    needs: build-site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: pipeline-deploy
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
