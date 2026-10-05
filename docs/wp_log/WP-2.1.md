@@ -146,7 +146,116 @@ All commands in `/home/user/wt/wp-2.1` with `.venv` (Python 3.12, ruff 0.16.10, 
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer session, 2026-10-05. Reviewed `git diff bcde7d9...HEAD` (4 commits).
+
+### Gates observed
+
+- `make lint`: `All checks passed!`, `49 files already formatted`.
+- `make type`: `Success: no issues found in 31 source files`.
+- `make test`: `244 passed`.
+- `make cov`: `TOTAL 1295 0 220 0 100%`, every module of `sivin.analytics.thermal` at 100 % line and branch.
+- Scope: every changed file is in `src/sivin/analytics/thermal/**`, `tests/analytics/thermal/**`,
+  `docs/indices/{gdd_winkler,huglin,gst,bedd,budburst,gfv,gsr}.md` or this note. No shared file touched.
+  No `type: ignore`, `Any`, `noqa` or `print` in the package or its tests.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `src/sivin/analytics/thermal/phenology.py:262-268`, `:451-462`, `:474` | GFV general-model critical sums 1282 / 2528 °C·d are shipped as active defaults. The `[to be verified]` marker exists only in docstrings and docs. Results carry no runtime marker (`estimated=False`, no detail), so the site would publish flowering and véraison dates from unverified constants. | open |
+| major | `gdd.py:104`, `huglin.py:303`, `phenology.py:367` (design shared with `bedd.py`) | Sum-type indices skip incomplete days (they contribute 0), but they are still `complete=True` and get a class when coverage ≥ 0.9. Up to 10 % of the heat sum can be missing while the result is labelled complete and classified. Phenology dates are delayed by the same mechanism. | open |
+| minor | `phenology.py:363-369` | Phenology returns a date `value` even when days at the start of accumulation are missing, for example a sensor deployed after March 1. The sum then lacks the spring, so the predicted date is systematically late, and only `complete=False` signals it. | open |
+| minor | `docs/indices/huglin.md:66-70` | The note says package values are "about 1 % higher than legacy". That explains only the K change. The default daily mean also changed (`minmax` vs. the legacy sample mean), and that can move HI by tens of °C·d per season in either direction. | open |
+| minor | `gst.py:17-26`, `docs/indices/gst.md` | Jones et al. (2010), which is cited on the page, splits the hot range into hot 19–21 °C and very hot 21–24 °C. As far as I know this is a 7-class scheme: too cool < 13, cool, intermediate, warm, hot, very hot, too hot > 24. The shipped 6 classes follow Jones (2006). Say which scheme is used, and make the Jones (2010) split available or mention it. Not certain, so verify. | open |
+| nit | `docs/indices/gst.md:22-24` | "averaging the daily values directly gives the same mean" is not exact. A mean of 7 monthly means weights 30-day and 31-day months equally per month, so it differs from the daily mean, by hundredths of a °C. Say "nearly the same". | open |
+| nit | `huglin.py:170`, `huglin.md` band table | The band table as it is commonly reproduced from Huglin (1978) reads 40°01'–42° → 1.02, …, 48°01'–50° → 1.06, i.e. lower-exclusive and upper-inclusive. The code uses `[min, max)`. This only matters at exact integer latitudes and has no effect at 48.88° N. Both are fine while marked `[to be verified]`. Mention that some authors interpolate K linearly between 1.02 (40°) and 1.06 (50°), which gives ≈ 1.056 at 48.88° N. | open |
+| nit | `phenology.py:385-386` | The value is a DOY. In leap years every date after February is +1 DOY, so comparing DOY values across years has a 1-day artefact. The ISO dates in `details` are unaffected. Document it or add the date offset from the period start. | open |
+| nit | `bedd.py` / `bedd.md` | The documented consequence that a day with T_mean ≤ 10 °C and DTR > 13 °C contributes > 0 follows from the cap-after-adjustment form. Gladstones' own monthly formulation caps the mean at 19 °C before the adjustment. Consider making the order a parameter (`cap_before_adjustment`) since both variants circulate. | open |
+| nit | out of scope (`sivin.analytics.base.IndexContext`) | The thermal indices use `ctx.daily` only. Nothing checks that `ctx.daily` was built with `ctx.exclude_mask`. A probe with spikes (60 °C, flagged `SPIKE`) gave GDD 1394 with the mask and 3351 without it. This is a contract matter for the integration WP, not a defect of this WP. | open |
+
+#### Details and suggested fixes
+
+1. **GFV F\* defaults (major).** I recall 1282 °C·d (flowering) and 2528 °C·d (véraison) being reported for the general GFV model of
+   Parker et al. (2011), but I **cannot confirm them with certainty**. I can confirm the model structure: Spring Warming,
+   T_base = 0 °C, t0 = DOY 60 (March 1), Parker et al. (2011). Values that may be wrong should not drive published dates
+   silently. **Decision: unset by default.** Make `flowering_f_star_c_d` and `veraison_f_star_c_d` `float | None = None`, so
+   that without them the result is `status: "not configured"` like `gsr` and `budburst`. Keep 1282 / 2528 in `gfv.md` as
+   "candidate values from Parker et al. (2011) to be verified by the owner". If the owner prefers them active, set
+   `estimated=True` for `gfv`, add `details["parameter_status"] = "unverified"` and log a warning once per compute.
+   *Input → behaviour:* default `GfvIndex().compute(ctx)` on a synthetic year → `value=229.0, complete=True,
+   estimated=False`, with no sign that the constants are unverified.
+2. **Biased sums labelled complete (major).** *Probe:* a synthetic 2025 series at 1825 s steps, with May 1–19 removed
+   (coverage 0.911) → `gdd_winkler = 1304 °C·d, complete=True, region_i`. The same series without the gap gives
+   1394 °C·d, region II. GFV véraison moves from 08-17 to 08-31; there it was `complete=False` (0.897) only because of
+   the window, and an 18-day gap would be "complete". For a mean (`gst`) skipping days is harmless. For a sum or a
+   threshold date it is not. Suggested fix, smallest first:
+   - (a) Add `n_missing_days` (period days without a complete day, up to the evaluation date) to `details` for every
+     sum index.
+   - (b) Classify a sum index only when there are no missing days, or when the missing heat is bounded, e.g. classify
+     both "sum as observed" and "sum + missing_days × max daily contribution". Assign the class only if both fall in
+     the same class.
+   - (c) Optionally fill short gaps by interpolating daily Tmin/Tmax and mark the result `estimated`.
+   The owner should choose. At the very least, the docs must state that "complete" does not mean unbiased for sums.
+3. **Late-deployment phenology (minor).** *Probe:* the same series starting June 1 → `gfv value=285` (true 229),
+   `complete=False`. Suggest `value=None` with `status: "accumulation start not covered"` when the first complete day is
+   later than the period start plus a small tolerance.
+
+### Science check (reviewer's knowledge; "certain" only where stated)
+
+- **Winkler conversion:** correct. 2500/3000/3500/4000 °F·d × 5/9 = 1388.9/1666.7/1944.4/2222.2 °C·d, with no offset because these are sums
+  of temperature differences. Base 50 °F = 10 °C and April 1–October 31 are correct. Inclusive upper bounds match the original
+  "≤ 2500, 2501–3000, …". Hand-computed check of `test_gdd_full_season_region`: 8 °C·d × 214 = 1712 → region III. Correct.
+- **Huglin formula, period and classes:** correct and consistent with Tonietto & Carbonneau (2004). The formula is
+  Σ K·((T−10)+(Tx−10))/2 over April 1–September 30. The classes are HI-3 ≤ 1500 < HI-2 ≤ 1800 < HI-1 ≤ 2100 < HI+1 ≤ 2400 < HI+2 ≤ 3000 < HI+3, and the
+  inclusive upper bounds are right. The English name of HI+1 is "warm temperate". T is the daily mean air temperature of station climatology. The paper
+  does not prescribe sub-daily sampling, so `minmax` as the default is defensible and correctly marked.
+- **Huglin K:** "K from 1.02 to 1.06 between 40° and 50°" is the statement of Tonietto & Carbonneau (2004). The 2° band table
+  agrees with how it is usually reproduced from Huglin (1978), so **K = 1.06 at 48.88° N is consistent with that table**, and
+  legacy 1.05 is the 46–48° value. Not certain at band edges (see nit). Keeping it `[to be verified]` is right.
+- **GST:** April–October mean, and the bounds 13/15/17/19/24 °C of Jones (2006), match my knowledge. See the minor finding on the
+  Jones et al. (2010) split.
+- **BEDD:** the base 10 °C, the 19 °C cap (9 °C·d), the DTR band 10–13 °C and the factor 0.25 match the form quoted from Gladstones (1992) in the
+  literature, summed over April–October. I am not certain whether Gladstones caps before or after the DTR and day-length adjustment, because both
+  variants circulate. The worker marks all of it `[to be verified]`, which is appropriate. The day-length coefficient is off by default, which is correct, since no values
+  are certain.
+- **GSR:** T_base 0 °C and start DOY 91 (April 1) match Parker et al. (2020). No cultivar values are shipped. Correct.
+- **Budburst:** no F\* is claimed and `estimated=True`. García de Cortázar-Atauri et al. (2009) is cited only as background. Correct.
+- **References:** every citation in `docs/indices/*.md` matches the real publication as far as I know: authors, title, venue,
+  volume and pages. That covers Amerine & Winkler 1944 (Hilgardia 15(6) 493–675), Huglin 1978 (C. R. Acad. Agric. Fr. 64, 1117–1126), Tonietto &
+  Carbonneau 2004 (AFM 124, 81–97), Jones 2006 (Geoscience Canada Reprint Series 9; pages flagged), Jones et al. 2010 (AJEV 61(3)
+  313–326), Gladstones 1992 (Winetitles), Parker et al. 2011 (AJGWR 17, 206–216), 2013 (AFM 180, 249–264), 2020 (AFM 285–286,
+  107902), García de Cortázar-Atauri et al. 2009 (IJB 53, 317–326) and Winkler et al. 1974. **No DOI is given anywhere; nothing is invented.**
+  I am not certain that Jones et al. (2010) reproduces the BEDD formula, but it is cited only as "for example" next to a
+  `[to be verified]`.
+
+### Tests recomputed by hand
+
+- `test_huglin_hand_computed`: (2+6)/2·1.06 = 4.24; (−2+2)/2 = 0; (7+12)/2·1.06 = 10.07; Σ = 14.31. Correct.
+- `test_gfv_both_stages_reached`: 12 °C·d/d; ⌈1282/12⌉ = 107 → March 1 + 106 d = June 15 = DOY 166; ⌈2528/12⌉ = 211 →
+  September 27 = DOY 270. Correct.
+- `test_bedd_hand_computed`: 2−0.5 = 1.5; max(0, −0.5) = 0; 7; min(9, 14+1.75) = 9; 8+0.75 = 8.75; Σ = 26.25. Correct.
+- `test_gst_hand_computed`: 79/5 = 15.8. Correct. Huglin full season: 11·1.06·183 = 2133.78 → warm temperate. Correct.
+- Legacy parity re-implementations match `vineyard_analyst.calculate_gdd` / `calculate_huglin_index` line by line.
+
+### Other probes
+
+The probes are in `/tmp/claude-0/review-2.1/probe.py` (synthetic data, not committed).
+
+- **Full leap year 2024 and common year 2025:** every index ran with coverage 1.0, including the DST transition days.
+- **GFV and GSR start dates in leap years:** both start on March 1 and April 1 as defined.
+- **QC exclusion:** with flagged spikes and the default mask the indices are unchanged within noise. See the out-of-scope nit.
+
+### Deviations assessment
+
+- **No `SampleDurations`:** accepted. No WP-2.1 index is hour-based.
+- **Huglin K = 1.06 by lookup, `k_override` for legacy 1.05:** accepted and well documented. The owner should decide (open question 3).
+- **Huglin default `minmax` vs. legacy sample mean:** accepted, but fix the "about 1 %" wording (minor).
+- **Fixed periods, complete days only (legacy differences):** accepted in principle. See major finding 2 for the
+  consequence on sums.
+- **Phenology value as DOY:** accepted, with ISO dates in `details`. See the leap-year nit.
+- **Phenology coverage from the period start to the predicted stage:** sensible. It is the window the prediction actually
+  depends on, and it avoids calling an August véraison incomplete in a running season. It inherits major finding 2 (skipped
+  days delay the date) and the minor late-deployment case.
+- **Huglin without K → `None`:** accepted. Better than silently using K = 1.
