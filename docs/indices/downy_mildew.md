@@ -63,5 +63,5 @@ None. If one is added later, it would be a new `ClimateIndex` subclass in
   e Laboratorio Crittogamico dell'Università di Pavia*, 8, 45-85. (No DOI; volume and pages
   as quoted by secondary sources, the series number given before could not be confirmed.)
 - Rossi, V., Caffi, T., Giosuè, S., Bugiani, R. (2008). A mechanistic model simulating primary
-  infections of downy mildew in grapevine. *Ecological Modelling*, 212(3–4), 480-491.
+  infections of downy mildew in grapevine. *Ecological Modelling*, 212(3), 480-491.
   https://doi.org/10.1016/j.ecolmodel.2007.10.046

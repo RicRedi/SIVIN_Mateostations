@@ -160,10 +160,10 @@ regression intercept and has no meaning outside the wetness durations the model 
 
 - Broome, J. C., English, J. T., Marois, J. J., Latorre, B. A., Aviles, J. C. (1995).
   Development of an infection model for Botrytis bunch rot of grapes based on wetness duration
-  and temperature. *Phytopathology*, 85(1), 97-102. https://doi.org/10.1094/Phyto-85-97
+  and temperature. *Phytopathology*, 85, 97-102. https://doi.org/10.1094/Phyto-85-97
 - Sentelhas, P. C., Dalla Marta, A., Orlandini, S., Santos, E. A., Gillespie, T. J.,
   Gleason, M. L. (2008). Suitability of relative humidity as an estimator of leaf wetness
-  duration. *Agricultural and Forest Meteorology*, 148(3), 392-400.
+  duration. *Agricultural and Forest Meteorology*, 148, 392-400.
   https://doi.org/10.1016/j.agrformet.2007.09.011
 - UC IPM. *Models: Botrytis Bunch Rot of Grape* (online),
   https://ipm.ucanr.edu/DISEASE/DATABASE/grapebotrytis.html (secondary source of the
