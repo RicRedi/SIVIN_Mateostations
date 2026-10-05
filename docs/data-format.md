@@ -277,10 +277,12 @@ configuration section `ingest.validation`. The defaults are project defaults
 | `humidity-fraction` | share of humidity values ≤ `rh_fraction_max_pct` (1 %) > `max_out_of_bounds_share` → humidity given as a 0–1 fraction | ERROR |
 
 **Short files.** A share threshold gives an ERROR only when more than `min_error_rows` (3)
-rows are affected, or all of them. So one footer or comment row in a ten-row file is a
-WARNING (the row is dropped), while a file whose every timestamp is unreadable is still an
-ERROR. This applies to `numbers-parseable`, `timestamps-parseable`, `timestamps-plausible`,
-`out-of-sequence`, the temperature and humidity bounds rules and `humidity-fraction`.
+rows are affected, or all of them. So one unreadable value in a ten-row file is a WARNING.
+This applies to `numbers-parseable`, `timestamps-plausible`, `out-of-sequence`, the
+temperature and humidity bounds rules and `humidity-fraction`. It does **not** apply to
+`timestamps-parseable` (since the WP-1.7 review): any share of unreadable timestamps above
+the limit is an ERROR, so a truncated export whose last line is cut inside the timestamp is
+rejected, and so is a short file with a footer row.
 
 These gross bounds only guard against unit and column mix-ups. Values outside the bounds
 that stay below the share threshold are reported but kept: the climatological range check

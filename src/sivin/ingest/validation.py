@@ -968,8 +968,10 @@ class NumbersParseableRule(TableRule):
 class TimestampsParseableRule(TableRule):
     """Every data row needs a readable timestamp.
 
-    A share of unreadable timestamps above ``max_unparseable_timestamp_share`` is an ERROR; a
-    smaller share is a WARNING and the rows are dropped.
+    A share of unreadable timestamps above ``max_unparseable_timestamp_share`` is an ERROR, also
+    when only a few rows are affected (``min_error_rows`` does not apply: a truncated export,
+    whose last line is cut inside the timestamp, must be rejected; WP-1.7 review). A smaller
+    share is a WARNING and the rows are dropped.
     """
 
     rule_id = "timestamps-parseable"
@@ -984,7 +986,7 @@ class TimestampsParseableRule(TableRule):
             return
         share = _share(count, table.n_data_rows)
         limit = self.settings.max_unparseable_timestamp_share
-        severity = _share_severity(count, table.n_data_rows, limit, self.settings)
+        severity = Severity.ERROR if share > limit else Severity.WARNING
         consequence = "file rejected" if severity is Severity.ERROR else "rows dropped"
         yield self._issue(
             severity,
