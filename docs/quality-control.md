@@ -1,0 +1,517 @@
+# Quality control and transition detection
+
+Package `sivin.quality` (WP-1.5) checks the measurements of one sensor, sets
+[`QcFlag`](../src/sivin/core/flags.py) bits in the `qc` column and reports events (deployments,
+retrievals, steps, gaps). The binding design is
+[MIGRATION_PLAN.md §2.7](../MIGRATION_PLAN.md#27-kvalita-dat-validace-vstupu-párování-a-přechody).
+
+All numeric thresholds below are **project defaults for ~30 min data, not values quoted from
+literature**, unless the table says otherwise. They are marked *[to be tuned]* and must be
+checked against real data once it is available (owner questions Q1–Q3). The methodology of the
+range, step (rate-of-change) and persistence tests follows Zahumenský (2004).
+
+## Contents
+
+- [Flags and events](#flags-and-events)
+- [Pipeline order](#pipeline-order)
+- [Checks](#checks)
+- [Deployment detection](#deployment-detection)
+- [Configuration](#configuration)
+- [Limitations](#limitations)
+- [Implementation](#implementation)
+- [References](#references)
+
+## Flags and events
+
+| Flag | Set by | Excluded from indices by default |
+|---|---|---|
+| `MISSING` (1) | `missing` | yes |
+| `OUT_OF_RANGE` (2) | `range` | yes |
+| `SPIKE` (4) | `spike` | yes |
+| `STEP` (8) | `step` | no (informative) |
+| `STUCK` (16) | `persistence` | yes |
+| `PRE_DEPLOYMENT` (32) | deployment detector | yes |
+| `TIMESTAMP_SUSPECT` (128) | `sampling` (also set by the parsers for DST, WP-1.2) | no |
+
+`NEIGHBOR_OUTLIER` (64) needs the sensor alignment of WP-1.6 and `MANUAL_EXCLUDE` (256) is set
+by the owner; neither is produced here. Existing flags of the input are kept (all flags are
+OR-ed).
+
+Events (`QualityEvent`, `DeploymentEvent`) carry `kind`, `t_utc`, `detail`, `severity`
+(`info`/`warning`), `source` (`detected`/`registry`), an optional `confidence` (0–1) and, for
+intervals, `end_utc`. Kinds: `deployment`, `retrieval`, `step`, `gap`, `irregular_sampling`,
+`non_positive_interval`, `deployment_mismatch`, `unconfirmed_transition`. The first three are
+the `type` values of the site contract (`events/<id>.json`, plan §2.6).
+
+**`confidence` is a heuristic evidence score, not a calibrated probability.** For a detected
+transition it is the share of the relative criteria that hold (see
+[Relative confirmation](#4-relative-confirmation)); for a registry event it is 1. Read it as
+"how many independent signs agree", not as "probability that the event is real". The field
+keeps the name of the site contract.
+
+The `qc` field is one bit field per row (frozen contract, plan §2.5). A finding in humidity
+therefore flags the whole row, temperature included; see [Limitations](#limitations).
+
+## Pipeline order
+
+`QualityPipeline.run(series, known_deployments=())` runs three stages:
+
+1. **Screening checks on the whole series** — default `missing`, `sampling`, `range`. These are
+   wrong wherever the sensor is. Their `MISSING` and `OUT_OF_RANGE` flags are passed on, so the
+   detector ignores a gross error (e.g. a −999 sentinel) instead of seeing a regime change.
+2. **Deployment detection on the whole series** — `deployment`/`retrieval` events and
+   `PRE_DEPLOYMENT` for every sample recorded indoors.
+3. **Deployed checks on every continuous outdoor stretch separately** — default `spike`, `step`,
+   `persistence`. Indoor data are not judged by outdoor expectations (a stable office
+   temperature is not "stuck"), and the jump at a deployment or retrieval is never reported as
+   a spike or a step, because no stretch spans it.
+
+With `detect_deployment: false` the whole series is one outdoor stretch.
+
+The result (`QualityResult`) holds the flagged series, all events in time order, the number of
+rows per single flag (`flag_counts`) and the detector details (segments, regimes, features).
+
+## Checks
+
+Every check is a subclass of `QualityCheck` registered under a name in `check_registry`; its
+settings are a frozen pydantic model (`extra="forbid"`). A new check is a new registered class.
+All checks use the real timestamps of the series; they never assume a regular grid. `NaN`
+values are skipped by every check except `missing`.
+
+Notation: $x_i$ value, $t_i$ time of sample $i$ (s), $\Delta t_i = t_i - t_{i-1}$,
+$\Delta t_0 = 1825$ s the nominal interval.
+
+### `missing` — missing values → `MISSING`
+
+A row is missing if **all** checked variables are `NaN` (`rule: all`, default) or if **any** is
+(`rule: any`).
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `variables` | `[temp_c, rh_pct]` | — | both measured variables |
+| `rule` | `all` | — | project choice: the row flag is shared, `any` would discard a valid temperature whenever only humidity is missing; aggregates ignore a single `NaN` anyway |
+
+### `range` — plausible values → `OUT_OF_RANGE`
+
+Temperature is flagged outside $[\max(T^{phys}_{min}, T^{clim}_{min}),\ \min(T^{phys}_{max},
+T^{clim}_{max})]$, humidity outside $[h_{min}, h_{max}]$. A climatological limit set to `null`
+falls back to the physical one.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `temp_physical_min_c` / `temp_physical_max_c` | −50 / 60 | °C | project default *[to be verified against the sensor data sheet]* |
+| `temp_climate_min_c` / `temp_climate_max_c` | −30 / 42 | °C | project default for South Moravia *[to be verified against station records]* |
+| `rh_min_pct` / `rh_max_pct` | 0 / 100 | % | physical limits of relative humidity |
+
+### `spike` — isolated departure that returns → `SPIKE`
+
+With $d^- = x_i - x_{i-1}$, $d^+ = x_{i+1} - x_i$ (previous and next *valid* samples), rate
+limit $r$ and $\tau^\pm = \max(\Delta t^\pm, \Delta t_{min})$ in hours, sample $i$ is a spike if
+
+$$
+d^- d^+ < 0, \qquad |d^-| > r\,\tau^-, \qquad |d^+| > r\,\tau^+, \qquad \Delta t^\pm \le \Delta t_{max}.
+$$
+
+The threshold grows with the actual interval, so a longer interval tolerates a larger change;
+$\Delta t_{min}$ keeps closely spaced samples from getting a tiny threshold, and a neighbour more
+than $\Delta t_{max}$ away cannot confirm a spike. A row gets `SPIKE` if either variable spikes.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `temp_max_rate_c_per_h` | 8 (≈ 4.06 °C per 1825 s) | °C/h | project default *[to be tuned]*; method Zahumenský (2004) |
+| `rh_max_rate_pct_per_h` | 40 (≈ 20.3 % per 1825 s) | %/h | project default *[to be tuned]* |
+| `min_interval_s` | 1825 | s | nominal interval |
+| `max_interval_s` | 5475 | s | project default, 3 × nominal interval |
+
+### `step` — sudden persistent level shift → `STEP` + `step` event
+
+For consecutive valid samples with $|x_k - x_{k-1}| \ge J$ and $\Delta t_k \le \Delta t_{max}$,
+let $m^-$ be the median over $[t_{k-1} - W, t_{k-1}]$ and $m^+$ over $[t_k, t_k + W]$ (each
+needs at least `min_window_samples`). Sample $k$ is a step if
+
+$$
+\operatorname{sign}(m^+ - m^-) = \operatorname{sign}(x_k - x_{k-1}), \qquad
+|m^+ - m^-| \ge f\,|x_k - x_{k-1}|, \qquad
+|x_{k-1} - x_{k-2}|,\ |x_{k+1} - x_k| \le a\,|x_k - x_{k-1}|.
+$$
+
+A spike returns, so its medians agree and it is not a step. A sensor step happens within one
+interval; a weather front spreads over several, so the last condition (neighbouring intervals
+change by at most a share $a$ of the jump) keeps fronts such as −10 °C within 1 h (two jumps of
+about −5 °C) unflagged. A gradual change (−8 °C in 2 h) has small single-interval jumps and is
+not examined at all. **Known limitation:** a front faster than one sampling interval (≥ 5 °C
+within one 1825 s interval) cannot be told from a sensor step and is flagged `STEP`; the flag is
+informative and does not exclude data.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `temp_min_jump_c` | 5 | °C | project default *[to be tuned]* |
+| `rh_min_jump_pct` | 25 | % | project default *[to be tuned]* |
+| `window_s` | 10 800 (3 h) | s | project default |
+| `min_window_samples` | 3 | count | project default |
+| `persistence_fraction` | 0.5 | — | project default |
+| `max_adjacent_fraction` | 0.4 | — | project default |
+| `max_interval_s` | 5475 | s | project default, 3 × nominal interval |
+
+### `persistence` — unchanged value → `STUCK`
+
+Valid values are scanned left to right; a run grows while $\max - \min \le \varepsilon$. A run
+whose first and last samples are at least $D$ apart gets `STUCK` on all its samples — unless at
+least `saturation_share` of the run's samples have a relative humidity at or above
+`rh_saturation_pct`. In fog or a temperature inversion both readings legitimately stay constant
+for many hours, so the exemption applies to temperature runs too. The temperature duration is
+12 h, longer than a calm isothermal night.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `temp_tolerance_c` | 0.05 | °C | half of an assumed 0.1 °C resolution *[to be verified]* |
+| `temp_min_duration_s` | 43 200 (12 h) | s | project default *[to be tuned]*; method Zahumenský (2004) |
+| `rh_tolerance_pct` | 0.5 | % | half of an assumed 1 % resolution *[to be verified]* |
+| `rh_min_duration_s` | 43 200 (12 h) | s | project default *[to be tuned]* |
+| `rh_saturation_pct` | 97 | % | project default; `null` disables the exemption |
+| `saturation_share` | 0.5 | — | project default |
+
+### `sampling` — gaps and irregular intervals → `TIMESTAMP_SUSPECT` + events
+
+Each interval $\Delta t_i$ is
+
+- **non-positive** if $\Delta t_i \le 0$ (impossible in a valid `MeasurementSeries`; checked
+  for raw arrays by `classify_intervals`),
+- a **gap** if $\Delta t_i > k\,\Delta t_0$ → `gap` event from $t_{i-1}$ to $t_i$, no flag,
+- **regular** if $|\Delta t_i - n\,\Delta t_0| \le \varepsilon\,\Delta t_0$ with
+  $n = \max(\operatorname{round}(\Delta t_i / \Delta t_0), 1)$ ($n \ge 2$ = missed samples),
+- **irregular** otherwise → `TIMESTAMP_SUSPECT` on sample $i$.
+
+Irregular and non-positive intervals are summarised in one warning event each.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `expected_interval_s` | 1825 | s | legacy configs (`time.expected_interval_s`) |
+| `gap_factor` | 3 | — | project default *[to be tuned]* |
+| `tolerance_fraction` | 0.25 | — | project default, tolerates clock drift *[to be tuned]* |
+
+## Deployment detection
+
+A sensor is switched on in the office (stable temperature, small daily range, steady and fairly
+dry air), carried into the vineyard (a level change, a much larger daily range, humidity that
+follows the daily cycle) and possibly brought back for service and redeployed.
+`DeploymentDetector` finds these transitions in six steps.
+
+**Guiding principle: when the evidence is not clear, do not exclude data.** Wrongly flagging
+vineyard data `PRE_DEPLOYMENT` is worse than missing a short service visit. Every step below
+therefore needs positive evidence before samples are flagged, and incomplete evidence produces a
+warning event instead of flags.
+
+### 1. Change points in level and variance
+
+Rows without temperature and rows flagged by `ignore_mask` (default
+`MISSING | OUT_OF_RANGE | MANUAL_EXCLUDE`) are not used. Humidity is used as a second variable if
+at least `min_rh_fraction` of the usable rows have it; otherwise the detector works on
+temperature alone.
+
+Within a segment each variable $v$ is modelled as independent Gaussian with its own mean and
+variance. For a segment $[a, b)$ with $m = b - a$ samples and maximum-likelihood variance
+$\hat\sigma^2_v(a, b)$, twice the negative maximised log-likelihood is, up to terms that cancel,
+
+$$
+C(a, b) = m \sum_v \ln\!\left(\hat\sigma^2_v(a, b) + \sigma^2_{v,0}\right),
+$$
+
+where $\sigma^2_{v,0}$ is a variance floor (quantised indoor data can have zero variance).
+Splitting at $\tau$ gains the log-likelihood-ratio statistic of one change in mean and variance
+
+$$
+G(\tau) = C(a, b) - C(a, \tau) - C(\tau, b) = 2 \ln \Lambda(\tau).
+$$
+
+With prefix sums $S_1(j) = \sum_{i<j} x_i$ and $S_2(j) = \sum_{i<j} x_i^2$,
+$\hat\sigma^2(a, b) = \frac{S_2(b) - S_2(a)}{m} - \left(\frac{S_1(b) - S_1(a)}{m}\right)^2$, so
+each $C$ costs O(1) and one scan over all $\tau$ of a segment is O(m) (data are centred first
+for numerical stability).
+
+**Binary segmentation** (greedy, largest gain first) splits the segment whose best split has the
+largest gain, as long as that gain reaches the penalty
+
+$$
+\beta = c\,(p + 1)\ln n,
+$$
+
+with $p = 2 \times$ (number of variables) parameters per segment, $+1$ for the location, $n$
+samples and factor $c$ (1 = Schwarz/BIC weight, Schwarz 1978), and at most `max_change_points`
+times. Both sides of a split must last at least `min_segment_s` and contain at least 3 samples.
+This is the change-point family of CUSUM-type likelihood tests (Page 1954) and penalised-cost
+segmentation (Killick et al. 2012 give the optimal, linear-time PELT search; here the simpler
+binary segmentation of Scott & Knott 1974 is used to avoid a new dependency).
+
+**Local search.** The search does not run over the whole history, because then $\ln n$ and the
+cap on change points would make the result depend on the series length. It runs in windows of
+fixed length $W$ (`window_s`, 30 days) that start every $S$ seconds (`stride_s`, 15 days) **on a
+grid anchored at the Unix epoch**: window $k$ covers $[kS, kS + W)$, so a window sees the same
+data whether the series is one or five years long. The change points of all windows are pooled;
+of two change points closer than `min_segment_s` the one with the larger gain is kept. Outdoor
+weather is not i.i.d. Gaussian, so outdoor data produce many change points; that is expected —
+the following steps decide which of them matter.
+
+### 2. Absolute rules: indoor-like segments
+
+For a stretch of samples `RegimeClassifier` computes robust features:
+
+- median temperature $\tilde T$ (°C);
+- daily temperature spread $s$: the median over consecutive 24-h windows (counted from the
+  stretch start; windows with fewer than `min_window_samples` samples skipped, the whole
+  stretch if none is left) of $P_{95} - P_5$ — percentiles so that one spike does not matter;
+- median relative humidity $\tilde h$ (%) and daily humidity spread $r$ (%), computed like $s$.
+
+A stretch is **indoor-like** if all absolute criteria hold (humidity criteria only with
+humidity):
+
+$$
+T_{room,min} \le \tilde T \le T_{room,max}, \qquad s \le s_{max}, \qquad
+\tilde h \le h_{max}, \qquad r \le r_{max}.
+$$
+
+The room band is wide (5–35 °C) so that an unheated store or a hot office is still indoor-like;
+the steady-humidity criterion $r \le r_{max}$ is what separates an office from a cloudy summer
+day, whose humidity still follows the daily temperature cycle. Consecutive indoor-like segments
+form an **indoor run** (a candidate office stay or service visit).
+
+### 3. Exact boundaries and transport
+
+Each boundary of a run is **refined**: within at most `min_segment_s` of the first estimate and
+between the neighbouring runs, the position with the largest $G(\tau)$ wins. The minimum
+segment duration thus limits the search but not the final boundary. The radius is measured
+from the last sample before and the first sample after the boundary, so a gap in the data at
+the boundary does not shrink the search to one side.
+
+**Transport trimming (optional, off by default: `transport.enabled: false`).** When enabled, a
+**transport transient** (the sensor in a car between office and vineyard) is moved to the
+indoor side, so that it becomes `PRE_DEPLOYMENT`. Starting at the boundary on the outdoor
+side, samples are moved while their temperature lies outside both reference ranges,
+
+$$
+T \notin \left[\min(P_5^{in}, P_5^{out}) - m,\ \max(P_{95}^{in}, P_{95}^{out}) + m\right],
+$$
+
+for at most `transport.max_duration_s` (3 h). The outdoor reference is the day of outdoor data
+after the maximum transport duration, the indoor reference the day of indoor data next to the
+boundary. A transient within the reference ranges (a car at 20 °C) is not detectable and stays
+on the side the likelihood put it.
+
+*Trade-off.* With trimming, a 35 °C car phase becomes `PRE_DEPLOYMENT` and the deployment is
+placed at the arrival in the vineyard. But if the weather changes within the outdoor reference
+day (a warm afternoon followed by rain), real vineyard samples fall outside the reference range
+and up to 3 h of them are excluded (review round 2: deployment +1 to +6 samples late in a
+heavy-rain scenario at 21 °C). Without trimming no vineyard sample is lost, and the car phase
+(typically ≤ 3 samples) usually stays on the outdoor side (review: boundary 3 samples before
+arrival), where the `range`, `spike` and `step` checks may flag it. Following the rule "when in
+doubt, do not exclude data", trimming is off by default. Whether trimming is on or off, the
+indoor comparison windows keep `transport.max_duration_s` away from the boundary.
+
+### 4. Relative confirmation
+
+Each boundary is confirmed by comparing **local windows next to it**: up to
+`contrast.window_s` (2 days) of the run on the indoor side — ending (or starting) one maximum
+transport duration away from the boundary, so that a transient cannot distort it — and up to
+2 days of outdoor data on the other side (not crossing another run). With features $I$ (indoor
+window) and $O$ (outdoor window) there are four relative criteria ("votes"):
+
+$$
+\begin{aligned}
+\text{spread ratio:}\quad & s_O \ge k_s \max(s_I, s_0) \\
+\text{level difference:}\quad & |\tilde T_O - \tilde T_I| \ge \Delta T \\
+\text{humidity excess:}\quad & \tilde h_O - \tilde h_I \ge \Delta h \\
+\text{humidity spread ratio:}\quad & r_O \ge k_r \max(r_I, r_0)
+\end{aligned}
+$$
+
+A boundary is **confirmed** if the indoor window is indoor-like, the outdoor window is not
+(absolute), **and** at least $\min(V, \text{available votes})$ votes hold (relative; $V = 2$, so
+temperature-only data need both temperature votes). Examples on synthetic data: an overcast
+winter deployment has no spread contrast but a large level and humidity difference; a 12 °C
+unheated store or a 30 °C office have a much smaller daily range and drier, steadier air than
+outdoors; a cloudy summer day amid clear days is not indoor-like ($r > r_{max}$) and is never
+confirmed.
+
+The four votes are two correlated pairs (spread ratios: the daily cycle; level difference and
+humidity excess: the step), so two votes can be one physical signal counted twice.
+
+The event `confidence` is the share of available votes that hold (0.5–1 for a confirmed
+transition). It is a transparent heuristic, **not a calibrated probability**.
+
+### 5. Which runs count as indoor
+
+- a run at the **start of the data** counts if its deployment is confirmed (office stay);
+- a run **between outdoor data** counts only if both its retrieval and its redeployment are
+  confirmed (service visit);
+- a run at the **end of the data** (retrieval without a later redeployment) never counts: it
+  would exclude all later data on uncertain grounds;
+- a run covering **all data** (sensor still in the office) has nothing to compare with and does
+  not count.
+
+A run with some but not all needed boundaries confirmed produces an `unconfirmed_transition`
+warning and no flags. A confirmed deployment is reported as `deployment`, a confirmed retrieval
+as `retrieval`, at the first sample of the new regime; the detail gives the local numbers, e.g.
+`indoor → outdoor: level -13.6 °C, daily spread x11.4, humidity +33 %, votes 4/4`.
+
+Level shifts *within* the outdoor regime are reported by the `step` check, not by the detector.
+
+### 6. Known deployments and `PRE_DEPLOYMENT`
+
+Known deployment times (e.g. `placement.from` of the sensor registry, plan §2.4) override
+detection **only near themselves** (`known_tolerance_s`, 6 h):
+
+1. a detected deployment within the tolerance of a known time is moved to the known time
+   (source `registry`, confidence 1). The registry is ground truth: if the known time is
+   *later* than the detected deployment, the samples in between (classified outdoor by
+   detection, at most `known_tolerance_s`) become `PRE_DEPLOYMENT`, and a `deployment_mismatch`
+   warning names the excluded duration;
+2. a detected deployment with no known time within the tolerance is still applied, with a
+   `deployment_mismatch` warning — e.g. a service visit missing in the registry (returning to
+   the same placement adds no `placement.from`);
+3. a known time *inside* the detected office stay at the start of the data ends that stay at
+   the known time (data after a known deployment are never `PRE_DEPLOYMENT` unless a detected
+   retrieval with a later redeployment brackets them), with a warning; a known time inside a
+   detected service visit keeps the visit, with a warning;
+4. a known time not matched by a detected deployment becomes a registry `deployment` event
+   without flags. Only the *first* known time warns, and only if data exist before it (they
+   look like vineyard data and are not flagged). A later known time follows an earlier
+   placement — a **relocation** — and raises no warning.
+
+Every row inside an applied indoor interval — the office stay before the first deployment and
+each confirmed service visit — gets `PRE_DEPLOYMENT`; rows without values take the state of
+their timestamp.
+
+| Setting | Default | Unit | Origin |
+|---|---|---|---|
+| `change_points.min_segment_s` | 86 400 (1 day) | s | project default; also the shortest detectable stay, the change-point separation and the refinement radius |
+| `change_points.window_s` / `stride_s` | 30 / 15 days | s | project default |
+| `change_points.penalty_factor` | 1 | — | BIC weight (Schwarz 1978) |
+| `change_points.max_change_points` | 30 per window | count | project default |
+| `change_points.temp_variance_floor_c2` | 0.01 | °C² | (0.1 °C)², project default |
+| `change_points.rh_variance_floor_pct2` | 0.25 | %² | (0.5 %)², project default |
+| `change_points.min_rh_fraction` | 0.5 | — | project default |
+| `regime.room_min_c` / `room_max_c` | 5 / 35 | °C | project default *[to be tuned]* |
+| `regime.indoor_max_daily_spread_c` | 4 | °C | project default *[to be tuned]* |
+| `regime.indoor_max_rh_pct` | 75 | % | project default *[to be tuned]* |
+| `regime.indoor_max_rh_spread_pct` | 8 | % | project default *[to be tuned]* |
+| `regime.min_window_samples` | 12 | count | a quarter of a day at 1825 s |
+| `contrast.min_spread_ratio` / `spread_floor_c` | 2 / 0.5 | — / °C | project default |
+| `contrast.min_level_difference_c` | 5 | °C | project default |
+| `contrast.min_rh_excess_pct` | 15 | % | project default |
+| `contrast.min_rh_spread_ratio` / `rh_spread_floor_pct` | 2 / 2 | — / % | project default |
+| `contrast.min_votes` | 2 | count | project default |
+| `contrast.window_s` / `min_window_samples` | 2 days / 24 | s / count | project default |
+| `transport.enabled` | false | — | off: trimming can exclude real vineyard data (see step 3) |
+| `transport.max_duration_s` | 10 800 (3 h) | s | project default |
+| `transport.margin_c` | 3 | °C | project default |
+| `transport.reference_s` / `min_reference_samples` | 1 day / 12 | s / count | project default |
+| `known_tolerance_s` | 21 600 (6 h) | s | project default *[to be tuned with Q3]* |
+| `ignore_mask` | 259 | bit mask | `MISSING \| OUT_OF_RANGE \| MANUAL_EXCLUDE` |
+
+## Configuration
+
+The settings are pydantic models inside `sivin.quality` and are not yet part of
+`config/sivin.yaml`. Proposed section (wired in by the integration workpackage):
+
+```yaml
+quality:
+  screening_checks: [missing, sampling, range]
+  deployed_checks: [spike, step, persistence]
+  check_settings:
+    range: { temp_climate_min_c: -30.0, temp_climate_max_c: 42.0 }
+  detect_deployment: true
+  deployment:
+    known_tolerance_s: 21600
+    change_points: { min_segment_s: 86400, window_s: 2592000, stride_s: 1296000 }
+    regime: { room_min_c: 5.0, room_max_c: 35.0, indoor_max_rh_spread_pct: 8.0 }
+    contrast: { min_votes: 2, window_s: 172800 }
+    transport: { enabled: false, max_duration_s: 10800 }
+```
+
+## Limitations
+
+- **Not verified on real data.** All tests use the synthetic generator in
+  `tests/quality/synthetic.py`, and the review used an independent synthetic generator; the
+  thresholds are project defaults to be tuned once real exports (Q1) and known deployment dates
+  (Q3) are available. Detection and false-alarm rates measured on synthetic data describe
+  failure modes, not field error rates.
+- **One flag field per row.** A humidity finding (`range`, `spike`, `persistence`) also
+  excludes the row's temperature, because the contract has a single `qc` column (plan §2.5).
+- **Short indoor stays** (shorter than `min_segment_s`, default one day) are not detected, and
+  stays of about one day only partly (owner question Q2). Their rows count as vineyard data.
+- **Office stays without contrast** are not flagged: a sensor whose data are all indoor (still in
+  the office) or an office whose daily range exceeds 4 °C (e.g. a sunny window sill) is not
+  recognised. Known deployment times then still produce registry events and warnings.
+- **Transport** stays on the side the likelihood puts it by default (trimming is off); a car
+  phase then usually counts as vineyard data. With trimming on, it is moved to the indoor side
+  only if it lies outside both temperature ranges (± 3 °C) and lasts at most 3 h, at the risk of
+  excluding up to 3 h of real vineyard data after a weather change.
+- **Offices that are not recognised, without a warning.** Besides the sunny window sill, the
+  absolute rules miss a humid basement (RH ≈ 80 %, above `indoor_max_rh_pct` = 75 %) and an
+  office with a strong night setback (16 → 22 °C, daily spread above
+  `indoor_max_daily_spread_c` = 4 °C): 0/15 detected each on the reviewer's second generator,
+  and no warning is raised. Their rows enter the indices (a January office adds about 12
+  growing degree days per day). Raising the spread threshold to 6 °C found only 4/15 setback
+  offices and raised false transitions from 0.40 to 0.60 per sensor-year.
+- **The "steady humidity" assumption.** Cloudy days are kept from looking indoor because outdoor
+  humidity either exceeds 75 % or follows the daily temperature cycle (daily RH spread > 8 %).
+  Where overcast weather is dry and humidity stays steady, outdoor stretches look indoor and
+  create false service visits. On the reviewer's second generator: 0.30 false transitions per
+  sensor-year (mean 11 `PRE_DEPLOYMENT` rows per year, max 94 ≈ 2 days) with ordinary weather,
+  but 3.5 per sensor-year with up to 1340 rows (≈ 28 days) excluded in a dry-overcast stress
+  variant. The assumption must be checked on real exports before service-visit
+  `PRE_DEPLOYMENT` flags are trusted.
+- **Summer offices merging with overcast days.** In summer an overcast day with RH ≤ 75 % can be
+  indoor-like itself and merge with an adjacent office stay; the merged run's boundary then
+  fails the relative confirmation, the office stay is not flagged and only an
+  `unconfirmed_transition` warning remains (reviewer's second generator: 2/15 three-day summer
+  offices missed; 3/15 first offices missed in a service-plus-front scenario).
+- **The 2-of-4 votes are two correlated pairs.** The temperature and humidity spread ratios both
+  measure the daily cycle; the level difference and the humidity excess both measure the step.
+  "2 of 4" can therefore be one physical signal counted twice. It is a heuristic, like the
+  confidence derived from it.
+- **Known deployments override detection only near themselves.** Data before the first known
+  deployment are flagged only if an office stay is detected; a registry time that the data do
+  not confirm produces a warning, not flags. A registry time up to `known_tolerance_s` (6 h) *later* than the
+  detected deployment does exclude the samples in between (registry as ground truth); this is
+  always reported by a `deployment_mismatch` warning with the excluded duration.
+- **Very fast fronts** (≥ 5 °C within one sampling interval) are flagged `STEP` (informative).
+- **Persistence** uses greedy left-to-right runs; a run that starts in the middle of an earlier
+  run within the tolerance can be split. Runs in saturated air (fog) are never `STUCK`, so a
+  humidity sensor stuck at 100 % is not detected while it reads saturation, and a temperature
+  sensor that sticks during fog (≥ 50 % of the run at RH ≥ 97 %) is not detected either.
+- **Greedy binary segmentation** is not guaranteed optimal (PELT would be); boundary refinement
+  and the relative confirmation make the reported boundaries insensitive to that in the tested
+  cases.
+
+## Implementation
+
+| Concept | Module | Tests |
+|---|---|---|
+| `QualityCheck`, `CheckOutcome`, `check_registry` | `sivin/quality/checks/base.py` | `tests/quality/test_base_and_events.py` |
+| checks `missing`, `range`, `spike`, `step`, `persistence`, `sampling` | `sivin/quality/checks/*.py` | `tests/quality/test_checks.py` |
+| `GaussianSegmentCost`, `BinarySegmentation` | `sivin/quality/changepoint.py` | `tests/quality/test_changepoint_regime.py` |
+| `WindowedChangePoints` (local search) | `sivin/quality/windows.py` | `tests/quality/test_changepoint_regime.py` |
+| `RegimeClassifier` (absolute rules) | `sivin/quality/regime.py` | `tests/quality/test_changepoint_regime.py` |
+| `TransitionContrast` (relative confirmation) | `sivin/quality/contrast.py` | `tests/quality/test_changepoint_regime.py` |
+| `BoundaryRefiner`, `TransportTrimmer` | `sivin/quality/boundaries.py` | `tests/quality/test_changepoint_regime.py` |
+| `RegimeSegmenter`, `IndoorRun` | `sivin/quality/segmentation.py` | `tests/quality/test_changepoint_regime.py`, `tests/quality/test_deployment.py` |
+| `KnownDeploymentReconciler`, `indoor_mask` | `sivin/quality/timeline.py` | `tests/quality/test_deployment.py` |
+| `DeploymentDetector`, `DeploymentResult` | `sivin/quality/deployment.py` | `tests/quality/test_deployment.py` |
+| `QualityEvent`, `DeploymentEvent` | `sivin/quality/events.py` | `tests/quality/test_base_and_events.py` |
+| `QualityPipeline`, `QualityResult` | `sivin/quality/pipeline.py` | `tests/quality/test_pipeline.py` |
+| synthetic generator | `tests/quality/synthetic.py` | `tests/quality/test_pipeline.py` |
+
+## References
+
+- Killick, R., Fearnhead, P., Eckley, I. A. (2012). Optimal detection of changepoints with a
+  linear computational cost. *Journal of the American Statistical Association*, 107(500),
+  1590–1598. [DOI not verified]
+- Page, E. S. (1954). Continuous inspection schemes. *Biometrika*, 41(1/2), 100–115.
+  [DOI not verified]
+- Schwarz, G. (1978). Estimating the dimension of a model. *The Annals of Statistics*, 6(2),
+  461–464. [DOI not verified]
+- Scott, A. J., Knott, M. (1974). A cluster analysis method for grouping means in the analysis
+  of variance. *Biometrics*, 30(3), 507–512. [DOI not verified]
+- Zahumenský, I. (2004). *Guidelines on Quality Control Procedures for Data from Automatic
+  Weather Stations.* World Meteorological Organization, Geneva.
