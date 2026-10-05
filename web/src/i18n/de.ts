@@ -40,6 +40,8 @@ export const de: Dictionary = {
   eventRetrieval: 'Abholung aus dem Weinberg',
   eventStep: 'Niveausprung',
   eventOffSite: 'Nicht im Weinberg',
+  eventLowBattery: 'Schwache Batterie',
+  eventUnloggedOffSite: 'Möglicher nicht eingetragener Zeitraum außerhalb des Weinbergs',
   eventOngoing: 'bis heute',
   eventConfidence: 'Konfidenz {pct} %',
   legendTitle: 'Letzte Temperatur',

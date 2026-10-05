@@ -12,6 +12,7 @@ from sivin.config.sections import AnalyticsConfig, IngestConfig, PathsConfig, Se
 from sivin.quality.pipeline import QualityPipelineSettings
 from sivin.registry.offsite.settings import OffSiteLogSettings
 from sivin.registry.settings import RegistrySettings
+from sivin.site.settings import SiteSettings
 from sivin.storage.config import StorageConfig
 
 
@@ -56,6 +57,13 @@ class SivinConfig(Section):
     analytics: AnalyticsConfig = Field(
         default_factory=AnalyticsConfig,
         description="Completeness rules, exclusion masks and index parameters.",
+    )
+    site: SiteSettings = Field(
+        default_factory=SiteSettings,
+        description=(
+            "Static site data for the web portal (sivin build-site, written to "
+            "<paths.site_dir>/data; docs/site.md)."
+        ),
     )
 
     @model_validator(mode="before")

@@ -62,6 +62,29 @@ describe('EventMarkers', () => {
   });
 });
 
+describe('EventMarkers with advisory intervals', () => {
+  it('draws low_battery and unlogged_off_site as amber markers whose label names the end', () => {
+    const markers = new EventMarkers(new I18n({ cs, de, en }, 'en'), catalog, new TimeZone('Europe/Prague'));
+    markers.setEvents([
+      { sensorId: '77799986', event: { type: 'low_battery', t: T, t_end: T + 1800, source: 'detected', confidence: null, detail: 'low battery: 2 reading(s) below 3.3 V' } },
+      { sensorId: '77799986', event: { type: 'unlogged_off_site', t: T + 600, t_end: T + 7200, source: 'detected', confidence: 0.8, detail: null } },
+      { sensorId: '77799986', event: { type: 'step', t: T + 1200, source: 'detected', confidence: null, detail: null } },
+    ]);
+    const { plot, ctx } = fakePlot();
+    markers.attach(plot);
+    markers.drawLines(plot);
+    const buttons = [...plot.over.querySelectorAll<HTMLButtonElement>('button.event-marker')];
+    expect(buttons.map((b) => b.classList.contains('event-marker--warning'))).toEqual([true, true, false]);
+    expect(buttons[0]?.getAttribute('aria-label')).toBe(
+      'Low battery – 77799986 (VUT) · 3 Jun 2026, 10:00 – 3 Jun 2026, 10:30 · low battery: 2 reading(s) below 3.3 V',
+    );
+    expect(buttons[1]?.getAttribute('aria-label')).toBe(
+      'Possible unlogged off-site period – 77799986 (VUT) · 3 Jun 2026, 10:10 – 3 Jun 2026, 12:00 · confidence 80 %',
+    );
+    expect(ctx.moveTo.mock.calls).toHaveLength(3);
+  });
+});
+
 const HOUR = 3600;
 const offSite = (t: number, tEnd: number | null, detail: string | null = 'service: battery'): ChartEvent => ({
   sensorId: '77799986',

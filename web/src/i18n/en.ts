@@ -39,6 +39,8 @@ export const en: Dictionary = {
   eventRetrieval: 'Retrieved from the vineyard',
   eventStep: 'Level step',
   eventOffSite: 'Not in the vineyard',
+  eventLowBattery: 'Low battery',
+  eventUnloggedOffSite: 'Possible unlogged off-site period',
   eventOngoing: 'ongoing',
   eventConfidence: 'confidence {pct} %',
   legendTitle: 'Latest temperature',

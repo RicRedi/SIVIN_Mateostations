@@ -13,6 +13,7 @@ from sivin.app.outcome import Outcome
 from sivin.app.period import TimeBounds
 from sivin.cli.commands.fetch import SENSOR_HELP
 from sivin.cli.commands.report import echo_indices, echo_ingest, echo_quality
+from sivin.cli.commands.site import echo_site
 from sivin.cli.common import echo_failures, finish, handled, sensor_ids, state_of
 from sivin.cli.console import console
 
@@ -154,9 +155,13 @@ def run(
         ),
     ] = False,
     headed: Annotated[bool, typer.Option("--headed", help="Show the browser window.")] = False,
+    skip_site: Annotated[
+        bool,
+        typer.Option("--skip-site", help="Do not build the site data (sivin build-site)."),
+    ] = False,
     dry_run: DryRunOption = False,
 ) -> None:
-    """Fetch, ingest, QC and indices in one go (used by the scheduled workflow).
+    """Fetch, ingest, QC, indices and site data in one go (used by the scheduled workflow).
 
     Goes on past a failed device, file or sensor, and past a failed portal login (the stored
     data stay). Exit code 1 if anything failed, 0 otherwise.
@@ -166,12 +171,17 @@ def run(
         services = state_of(ctx).services()
         zone = ZoneInfo(services.workspace.config.time.display_timezone)
         year = season if season is not None else services.clock().astimezone(zone).year
-        report = services.run_service(dry_run, skip_fetch, headed).run(year, wanted)
+        report = services.run_service(dry_run, skip_fetch, headed, skip_site).run(year, wanted)
     if report.fetch_note is not None:
         console.echo(f"Note: {report.fetch_note}.")
     echo_failures(report.fetch_failures)
     echo_ingest(report.ingest)
     echo_quality(report.quality)
     echo_indices(report.indices)
+    if report.site is not None:
+        echo_site(report.site)
+    elif not report.site_failures:
+        console.echo("Site data not built (--skip-site or --dry-run).")
+    echo_failures(report.site_failures if report.site is None else ())
     console.echo(f"Run finished: {Outcome(report.outcome).name}.")
     finish(report.outcome)

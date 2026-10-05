@@ -1,6 +1,6 @@
 import uPlot from 'uplot';
 import type { SensorCatalog } from '../app/SensorCatalog';
-import { isOffSiteEvent, type OffSiteEvent, type PointSensorEvent, type SensorEvent } from '../contract';
+import { isMarkedIntervalEvent, isOffSiteEvent, type MarkerEvent, type OffSiteEvent, type SensorEvent } from '../contract';
 import { TimeSeries } from '../domain/TimeSeries';
 import type { TimeZone } from '../domain/TimeZone';
 import type { MessageKey } from '../i18n/cs';
@@ -19,11 +19,18 @@ const HANDLE_SIZE_PX = 14;
 /** Top of the first handle, as `.event-marker` in styles.css; each stacked one moves down by its size. */
 const HANDLE_TOP_PX = -2;
 const PERCENT = 100;
+/**
+ * Button colour of the advisory interval markers (`low_battery`, `unlogged_off_site`): amber,
+ * 5.0:1 against white (≥ 3:1, WCAG 1.4.11), so a warning is told apart from a transition.
+ */
+const WARNING_MARKER_COLOR = '#b45309';
 
-const EVENT_LABELS: Readonly<Record<PointSensorEvent['type'], MessageKey>> = {
+const EVENT_LABELS: Readonly<Record<MarkerEvent['type'], MessageKey>> = {
   deployment: 'eventDeployment',
   retrieval: 'eventRetrieval',
   step: 'eventStep',
+  low_battery: 'eventLowBattery',
+  unlogged_off_site: 'eventUnloggedOffSite',
 };
 
 /** An event together with the sensor it belongs to. */
@@ -32,10 +39,10 @@ export interface ChartEvent {
   readonly event: SensorEvent;
 }
 
-/** A point event together with the sensor it belongs to. */
+/** A marker event (point event or marked interval) together with the sensor it belongs to. */
 interface ChartPointEvent {
   readonly sensorId: string;
-  readonly event: PointSensorEvent;
+  readonly event: MarkerEvent;
 }
 
 /**
@@ -98,7 +105,9 @@ export function withoutBands(series: TimeSeries, bands: readonly { startT: numbe
 
 /**
  * Sensor events on a uPlot chart:
- * - point events: dashed vertical lines on the canvas plus one focusable button each,
+ * - point events and the advisory intervals `low_battery` / `unlogged_off_site`: dashed vertical
+ *   lines on the canvas plus one focusable button each (amber for the advisory intervals, whose
+ *   label also names the end; they hide no data),
  * - `off_site` periods: grey bands across the plotting area (drawn under the series) plus one
  *   focusable handle each, labelled "Not in the vineyard: <detail>".
  * Every button has an accessible name and a hover/focus tooltip (type, sensor, time, detail).
@@ -115,7 +124,7 @@ export class EventMarkers {
     private readonly zone: TimeZone,
   ) {}
 
-  /** Set the point events; `off_site` events are ignored here (see {@link setBands}). */
+  /** Set the marker events; `off_site` events are ignored here (see {@link setBands}). */
   setEvents(events: readonly ChartEvent[]): void {
     this.points = events.filter((item): item is ChartPointEvent => !isOffSiteEvent(item.event));
   }
@@ -164,9 +173,14 @@ export class EventMarkers {
 
   /** Position the buttons; also the uPlot `setSize` hook. */
   place(plot: uPlot): void {
-    const markers = this.points.map(({ event, sensorId }) =>
-      this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x')),
-    );
+    const markers = this.points.map(({ event, sensorId }) => {
+      const button = this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x'));
+      if (isMarkedIntervalEvent(event)) {
+        button.classList.add('event-marker--warning');
+        button.style.background = WARNING_MARKER_COLOR;
+      }
+      return button;
+    });
     const placed: number[] = [];
     const handles = this.bands.map((band) => {
       const leftPx = plot.valToPos((band.startT + band.endT) / 2, 'x');
@@ -192,10 +206,11 @@ export class EventMarkers {
     return this.catalog.get(sensorId)?.label ?? sensorId;
   }
 
-  private describePoint(event: PointSensorEvent, sensorId: string): string {
+  private describePoint(event: MarkerEvent, sensorId: string): string {
+    const start = this.i18n.formatDateTime(event.t, this.zone.name);
     const parts = [
       `${this.i18n.t(EVENT_LABELS[event.type])} – ${this.sensorLabel(sensorId)}`,
-      this.i18n.formatDateTime(event.t, this.zone.name),
+      isMarkedIntervalEvent(event) ? `${start} – ${this.i18n.formatDateTime(event.t_end, this.zone.name)}` : start,
     ];
     if (event.confidence !== null) {
       parts.push(this.i18n.t('eventConfidence', { pct: Math.round(event.confidence * PERCENT) }));

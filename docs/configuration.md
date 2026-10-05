@@ -34,6 +34,7 @@ apply.
 | `quality` | `QualityPipelineSettings` (`sivin.quality`) | enabled checks, `check_settings` per check, deployment detector ([quality-control.md](quality-control.md)) |
 | `alignment` | `AlignmentConfig` (`sivin.alignment`) | strategy, its `params`, grid step, span ([alignment.md](alignment.md)) |
 | `analytics` | `AnalyticsConfig` (`sivin.config.sections`) | coverage thresholds, exclusion masks, `indices` parameters per index ([indices](indices/)) |
+| `site` | `SiteSettings` (`sivin.site.settings`) | staleness threshold of `latest.json`, published event kinds; output in `<paths.site_dir>/data` ([site.md](site.md)) |
 
 The models of the subsystems live in their packages; `SivinConfig` (`sivin.config.model`)
 composes them. `sivin.config` imports the subsystems, so importing it loads pandas; the CLI
@@ -467,5 +468,12 @@ equal to the generated text. `= time.<key>` marks a value set from the `time` se
 | `analytics.indices.winter_freeze.dormant_end` | `"03-31"` | Last day of the dormant season in the season year (MM-DD); March 31, project default [to be tuned]. |
 | `analytics.indices.winter_freeze.damage_threshold_c` | `-15.0` | Winter-injury threshold in °C (daily T_min below it). Project default (plan §3.2), not a literature value; background Zabadal et al. (2007). |
 | `analytics.indices.winter_freeze.severe_threshold_c` | `-20.0` | Severe winter-injury threshold in °C (daily T_min below it). Project default (plan §3.2), not a literature value; background Zabadal et al. (2007). |
+
+#### `site`
+
+| Key | Default | Description |
+|---|---|---|
+| `site.stale_after_s` | `129600.0` | Age in seconds of a sensor's last valid sample, relative to generated_at, above which latest.json marks it stale (default 36 h = 129600 s: one daily run at 06:00 plus a missed or late run; project default). |
+| `site.events` | `["off_site", "deployment", "retrieval", "step", "low_battery"]` | QC event kinds (no unit) published in events/<sensor_id>.json. 'off_site' is the off-site log period, 'deployment'/'retrieval'/'step' are point markers, 'low_battery' is an advisory interval; 'unlogged_off_site' (advisory interval, an unconfirmed detector guess) can be added. The other kinds (gap, irregular_sampling, precip_*, ...) stay in the derived events (docs/site.md). |
 
 <!-- END GENERATED REFERENCE -->

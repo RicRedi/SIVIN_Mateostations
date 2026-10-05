@@ -23,6 +23,7 @@ def test_json_schema_lists_the_registered_settings() -> None:
         "quality",
         "alignment",
         "analytics",
+        "site",
     }
     checks = definitions["QualityPipelineSettings"]["properties"]["check_settings"]
     assert set(checks["properties"]) == set(check_registry.ids())
@@ -57,6 +58,7 @@ def test_reference_rows_cover_every_section_once() -> None:
         "quality",
         "alignment",
         "analytics",
+        "site",
     ]
     by_path = {row.path: row for row in rows}
     assert by_path["time.expected_interval_s"].default == "`1830.0`"
@@ -71,7 +73,7 @@ def test_reference_rows_cover_every_section_once() -> None:
 def test_reference_markdown_has_one_table_per_section() -> None:
     markdown = ConfigReference().markdown()
     assert markdown.startswith("### `paths`\n\n| Key | Default | Description |\n|---|---|---|\n")
-    assert markdown.count("### `") == 9
+    assert markdown.count("### `") == 10
     assert markdown.endswith("|\n")
     assert "| `analytics.indices.gsr.targets` | `[]` |" in markdown
 

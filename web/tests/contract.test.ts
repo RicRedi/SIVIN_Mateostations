@@ -82,8 +82,8 @@ describe('off_site events (MIGRATION_PLAN §2.8)', () => {
       { type: 'step', t: 300, source: 'detected', confidence: null, detail: null },
     ]);
     expect(warnings).toEqual([
-      'e.json: $.events[0].t_end ignored: only "off_site" events have an end, not "deployment"',
-      'e.json: $.events[1].t_end ignored: only "off_site" events have an end, not "step"',
+      'e.json: $.events[0].t_end ignored: only interval events have an end, not "deployment"',
+      'e.json: $.events[1].t_end ignored: only interval events have an end, not "step"',
     ]);
   });
 
@@ -145,7 +145,7 @@ describe('contract validation errors', () => {
 
   it('throws ContractError instances carrying file and path', () => {
     try {
-      parseEventsFile({ sensor_id: SENSOR, events: [{ type: 'moved', t: 1, source: 'detected' }] }, 'events.json');
+      parseEventsFile({ sensor_id: SENSOR, events: [{ type: 7, t: 1, source: 'detected' }] }, 'events.json');
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(ContractError);

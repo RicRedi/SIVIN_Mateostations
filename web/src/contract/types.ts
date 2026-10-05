@@ -18,11 +18,20 @@ export interface VariableSpec {
   readonly label: LocalizedLabel;
 }
 
-/** Per-sensor availability in the manifest. `raw_months` are `YYYY-MM` keys (UTC months). */
+/**
+ * Per-sensor availability in the manifest. `raw_months` are `YYYY-MM` keys (UTC months).
+ *
+ * Optional (WP-3.2): `status` is the registry life-cycle state (`active`, `inactive`, `retired`;
+ * a retired sensor keeps its published history). `data_status: "error"` marks a sensor whose
+ * last pipeline build failed, so its files are from the build at `last_built_at` (ISO 8601).
+ */
 export interface ManifestSensor {
   readonly first_t: number;
   readonly last_t: number;
   readonly raw_months: readonly string[];
+  readonly status?: string;
+  readonly data_status?: string;
+  readonly last_built_at?: string;
 }
 
 /** A climate index advertised by the manifest. */
@@ -38,6 +47,11 @@ export interface Manifest {
   readonly schema_version: typeof SUPPORTED_SCHEMA_VERSION;
   readonly generated_at: string;
   readonly display_timezone: string;
+  /**
+   * Optional (WP-3.2): age in seconds after which a latest sample is stale. The web judges
+   * staleness against the current time with it, so a stopped pipeline shows up as stale.
+   */
+  readonly stale_after_s?: number;
   readonly variables: readonly VariableSpec[];
   readonly sensors: Readonly<Record<string, ManifestSensor>>;
   readonly seasons: readonly number[];
@@ -80,7 +94,9 @@ export interface RawMonthFile {
  * `series/<sensor_id>/daily.json`; `date` is the local calendar day in the display time zone.
  *
  * `precip_sum_mm` (daily precipitation sum, mm) and `battery_min_v` (daily minimum battery
- * voltage, V) are optional (WP-1.9); `null` where a day has no such value.
+ * voltage, V) are optional (WP-1.9); `null` where a day has no such value. `precip_n_samples`
+ * (optional, WP-3.2) is the number of interval values in `precip_sum_mm` (a full day has about
+ * 86 400 s / 1830 s ≈ 47), so a partial precipitation day is recognisable.
  */
 export interface DailyFile {
   readonly sensor_id: string;
@@ -92,6 +108,7 @@ export interface DailyFile {
   readonly rh_mean: readonly (number | null)[];
   readonly rh_max: readonly (number | null)[];
   readonly precip_sum_mm?: readonly (number | null)[];
+  readonly precip_n_samples?: readonly (number | null)[];
   readonly battery_min_v?: readonly (number | null)[];
   readonly coverage: readonly number[];
 }
@@ -114,8 +131,20 @@ export type PointEventType = (typeof POINT_EVENT_TYPES)[number];
 /** Interval event type: a period from the off-site log (§2.8). */
 export const OFF_SITE_EVENT_TYPE = 'off_site';
 
-/** All event types of `events/<sensor_id>.json`. */
-export const SENSOR_EVENT_TYPES = [...POINT_EVENT_TYPES, OFF_SITE_EVENT_TYPE] as const;
+/**
+ * Advisory interval events of quality control (WP-3.2): a low-battery episode and a detected
+ * indoor-like period missing from the off-site log. They have a `t_end` (≥ `t`), are drawn as a
+ * marker at `t` and hide no data.
+ */
+export const MARKED_INTERVAL_EVENT_TYPES = ['low_battery', 'unlogged_off_site'] as const;
+export type MarkedIntervalEventType = (typeof MARKED_INTERVAL_EVENT_TYPES)[number];
+
+/**
+ * All event types this frontend understands. An entry of another type is skipped with a
+ * warning (tolerant reading, WP-3.2), so a pipeline that publishes a new kind never breaks the
+ * chart.
+ */
+export const SENSOR_EVENT_TYPES = [...POINT_EVENT_TYPES, ...MARKED_INTERVAL_EVENT_TYPES, OFF_SITE_EVENT_TYPE] as const;
 export type SensorEventType = (typeof SENSOR_EVENT_TYPES)[number];
 
 /** A point event of `events/<sensor_id>.json` (deployment, retrieval, step); has no `t_end`. */
@@ -140,17 +169,36 @@ export interface OffSiteEvent {
   readonly detail: string | null;
 }
 
+/** An advisory interval `[t, t_end]` shown as a marker at `t` (`low_battery`, `unlogged_off_site`). */
+export interface MarkedIntervalEvent {
+  readonly type: MarkedIntervalEventType;
+  readonly t: number;
+  readonly t_end: number;
+  readonly source: string;
+  readonly confidence: number | null;
+  readonly detail: string | null;
+}
+
+/** An event drawn as a marker (a vertical line and a button): point events and marked intervals. */
+export type MarkerEvent = PointSensorEvent | MarkedIntervalEvent;
+
 /** One entry of `events/<sensor_id>.json`. */
-export type SensorEvent = PointSensorEvent | OffSiteEvent;
+export type SensorEvent = PointSensorEvent | MarkedIntervalEvent | OffSiteEvent;
 
 /** True for the interval event `off_site`. */
 export function isOffSiteEvent(event: SensorEvent): event is OffSiteEvent {
   return event.type === OFF_SITE_EVENT_TYPE;
 }
 
+/** True for the advisory intervals `low_battery` and `unlogged_off_site`. */
+export function isMarkedIntervalEvent(event: SensorEvent): event is MarkedIntervalEvent {
+  return (MARKED_INTERVAL_EVENT_TYPES as readonly string[]).includes(event.type);
+}
+
 /**
- * True if the event belongs to the window `[startT, endT)` (Unix seconds): a point event lies in
- * it, an `off_site` period `[t, t_end)` overlaps it (an open period runs on indefinitely).
+ * True if the event belongs to the window `[startT, endT)` (Unix seconds): a point event or the
+ * marker time `t` of a marked interval lies in it, an `off_site` period `[t, t_end)` overlaps it
+ * (an open period runs on indefinitely).
  */
 export function eventInWindow(event: SensorEvent, startT: number, endT: number): boolean {
   if (isOffSiteEvent(event)) {
@@ -165,13 +213,20 @@ export interface EventsFile {
   readonly events: readonly SensorEvent[];
 }
 
-/** One index result in `indices/<season>.json`. */
+/**
+ * One index result in `indices/<season>.json`. Optional (WP-3.2): `estimated` is true when the
+ * index relies on a proxy, e.g. leaf wetness estimated from humidity; `status` is `"ok"` or
+ * `"no_data"` (coverage 0: `value` and `class` are `null`), `detail` explains it.
+ */
 export interface IndexValue {
   readonly value: number | null;
   readonly unit: string;
   readonly coverage: number;
   readonly complete: boolean;
   readonly class: string | null;
+  readonly estimated?: boolean;
+  readonly status?: string;
+  readonly detail?: string;
 }
 
 /** `indices/<season>.json`: sensor id → index id → result. */

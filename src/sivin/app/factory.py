@@ -26,6 +26,7 @@ from sivin.app.ingest import (
 from sivin.app.json_files import ErrorText, JsonFileWriter
 from sivin.app.quality import EventsWriter, KnownSensors, QualityService
 from sivin.app.run import Clock, ExportSource, RunRecorder, RunService
+from sivin.app.site import SiteIndices, SiteInputsLoader, SiteService
 from sivin.app.workspace import Workspace
 from sivin.config.sections import QuarantineMode
 from sivin.ingest.parsers import base as parser_base
@@ -35,9 +36,15 @@ from sivin.quality.pipeline import QualityPipeline
 from sivin.redaction import SecretRedactor
 from sivin.registry.geojson import GeoJsonRegistryStore
 from sivin.registry.offsite import OffSiteLogStore
+from sivin.site.builder import SiteBuilder
+from sivin.site.events import SiteEventMapping
+from sivin.site.sensor_builder import DailyAggregation, SensorSiteBuilder, SummaryBuilder
+from sivin.site.sensor_files import default_sensor_writers
+from sivin.site.site_files import default_site_writers
+from sivin.site.state import StateDirectory, StoreFingerprints
 from sivin.storage.config import build_store
 from sivin.storage.runlog import RunLog
-from sivin.storage.store import MeasurementStore
+from sivin.storage.store import RAW_DIR, MeasurementStore
 
 if TYPE_CHECKING:
     from sivin.app.fetch import DriverFactoryBuilder, FetchService
@@ -340,8 +347,53 @@ class ServiceFactory:
             self.portal_settings(headed, download_dir), self._credentials, drivers, self._redactor
         )
 
+    def site_service(self) -> SiteService:
+        """Return the site-data service (``sivin build-site``).
+
+        Returns
+        -------
+        SiteService
+            Reads every published sensor through quality control, computes the indices with a
+            dry-run indices service (no derived file is written) and writes
+            ``<paths.site_dir>/data``.
+        """
+        config = self._workspace.config
+        time, analytics = config.time, config.analytics
+        sensor_builder = SensorSiteBuilder(
+            DailyAggregation(
+                time.display_timezone,
+                time.expected_interval_s,
+                analytics.exclude_mask,
+                analytics.auxiliary_exclude_mask,
+            ),
+            SummaryBuilder(time.display_timezone, analytics.exclude_mask),
+            default_sensor_writers(SiteEventMapping(config.site.events), self._redactor),
+        )
+        builder = SiteBuilder(
+            self.quality_service(dry_run=True),
+            SiteIndices(self.indices_service(dry_run=True), index_registry),
+            sensor_builder,
+            default_site_writers(config.site.stale_after_s, redactor=self._redactor),
+            StoreFingerprints(self._workspace.data_dir / RAW_DIR),
+            StateDirectory(self._workspace.site_state_file.parent, self._workspace.site_data_dir),
+            self._clock,
+            self._error_text,
+        )
+        inputs = SiteInputsLoader(
+            self.store(),
+            self.catalog().registry,
+            self._workspace.sensors_file,
+            self._workspace.offsite_log_file,
+            config,
+        )
+        return SiteService(builder, inputs, self._workspace.site_data_dir)
+
     def run_service(
-        self, dry_run: bool = False, skip_fetch: bool = False, headed: bool = False
+        self,
+        dry_run: bool = False,
+        skip_fetch: bool = False,
+        headed: bool = False,
+        skip_site: bool = False,
     ) -> RunService:
         """Return the service of ``sivin run``.
 
@@ -354,11 +406,13 @@ class ServiceFactory:
             Do not use the portal; ingest the files already in the download directory.
         headed : bool, optional
             Show the browser window.
+        skip_site : bool, optional
+            Do not build the site data (the step is also skipped in a dry run).
 
         Returns
         -------
         RunService
-            Fetch (or directory) → ingest → QC → indices → run log.
+            Fetch (or directory) → ingest → QC → indices → site data → run log.
         """
         source: ExportSource
         note = None
@@ -380,6 +434,7 @@ class ServiceFactory:
             self._clock,
             dry_run,
             note,
+            None if dry_run or skip_site else self.site_service(),
         )
 
     def run_recorder(self) -> RunRecorder:
