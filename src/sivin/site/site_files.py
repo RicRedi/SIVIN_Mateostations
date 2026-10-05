@@ -13,10 +13,12 @@ from collections.abc import Sequence
 from typing import Any, Final
 
 from sivin.redaction import SecretRedactor
+from sivin.registry.geojson import FILE_ENCODING, render_json
 from sivin.site.columns import iso_utc_seconds, unix_second
 from sivin.site.files import SiteFile, encode_json
 from sivin.site.labels import VARIABLES, IndexCatalog, VariableSpec
 from sivin.site.model import SiteSnapshot
+from sivin.site.public_registry import PublicRegistryProjection
 
 SCHEMA_VERSION: Final = 1
 """``schema_version`` of the site data contract (MIGRATION_PLAN §2.6)."""
@@ -141,10 +143,31 @@ class ManifestWriter(SiteFileWriter):
         return [self._file(MANIFEST_FILE, document)]
 
 
-class RegistryCopyWriter(SiteFileWriter):
-    """``sensors.geojson``: the sensor registry file, byte for byte (§2.6 "kopie registru")."""
+class PublicRegistryWriter(SiteFileWriter):
+    """``sensors.geojson``: the public projection of the sensor registry.
 
-    __slots__ = ()
+    The registry without internal notes (``notes`` and each placement's ``note`` are
+    ``null``, owner decision 2026-10-05), see
+    :class:`~sivin.site.public_registry.PublicRegistryProjection`. The text has the canonical
+    form of the registry file (2-space indentation), so it stays easy to read and diff.
+
+    Parameters
+    ----------
+    projection : PublicRegistryProjection, optional
+        Builds the public document; the default projection when omitted.
+    redactor : SecretRedactor, optional
+        Applied to every string written.
+    """
+
+    __slots__ = ("_projection",)
+
+    def __init__(
+        self,
+        projection: PublicRegistryProjection | None = None,
+        redactor: SecretRedactor | None = None,
+    ) -> None:
+        super().__init__(redactor)
+        self._projection = projection if projection is not None else PublicRegistryProjection()
 
     def files(self, snapshot: SiteSnapshot) -> list[SiteFile]:
         """Return ``[sensors.geojson]``.
@@ -157,9 +180,17 @@ class RegistryCopyWriter(SiteFileWriter):
         Returns
         -------
         list of SiteFile
-            The copy.
+            The public registry.
+
+        Raises
+        ------
+        RegistryFormatError
+            If ``snapshot.registry`` is not a valid registry file.
         """
-        return [SiteFile(REGISTRY_FILE, snapshot.registry)]
+        document: object = self._projection.document(snapshot.registry)
+        if self._redactor is not None:
+            document = self._redactor.redact_data(document)
+        return [SiteFile(REGISTRY_FILE, render_json(document).encode(FILE_ENCODING))]
 
 
 class LatestWriter(SiteFileWriter):
@@ -252,7 +283,7 @@ def default_site_writers(
     catalog: IndexCatalog | None = None,
     redactor: SecretRedactor | None = None,
 ) -> tuple[SiteFileWriter, ...]:
-    """Return the site-wide writers of the contract: manifest, registry copy, latest, indices.
+    """Return the site-wide writers of the contract: manifest, public registry, latest, indices.
 
     Parameters
     ----------
@@ -272,7 +303,7 @@ def default_site_writers(
         ManifestWriter(
             catalog if catalog is not None else IndexCatalog(), stale_after_s, redactor=redactor
         ),
-        RegistryCopyWriter(redactor),
+        PublicRegistryWriter(redactor=redactor),
         LatestWriter(stale_after_s, redactor),
         SeasonIndicesWriter(redactor),
     )
