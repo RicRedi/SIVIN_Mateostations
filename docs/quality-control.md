@@ -1,9 +1,17 @@
 # Quality control and transition detection
 
-Package `sivin.quality` (WP-1.5) checks the measurements of one sensor, sets
-[`QcFlag`](../src/sivin/core/flags.py) bits in the `qc` column and reports events (deployments,
-retrievals, steps, gaps). The binding design is
-[MIGRATION_PLAN.md §2.7](../MIGRATION_PLAN.md#27-kvalita-dat-validace-vstupu-párování-a-přechody).
+Package `sivin.quality` (WP-1.5, WP-1.8) checks the measurements of one sensor, sets
+[`QcFlag`](../src/sivin/core/flags.py) bits in the `qc` column and reports events (off-site
+periods, gaps, steps, warnings). The binding design is
+[MIGRATION_PLAN.md §2.7](../MIGRATION_PLAN.md#27-kvalita-dat-validace-vstupu-párování-a-přechody)
+and [§2.8](../MIGRATION_PLAN.md#28-log-mimo-vinici-sensorsoffsite_logyaml).
+
+**Source of truth for `PRE_DEPLOYMENT` (owner decision of 2026-10-05):** the hand-maintained
+[off-site log](sensors.md#off-site-log) `sensors/offsite_log.yaml`. By default every sensor is
+assumed to measure in the vineyard; samples inside a logged period get `PRE_DEPLOYMENT`. The
+deployment detector still runs, but by default only in **advisory** mode: it warns about
+indoor-like periods the log does not cover and sets no flags. Its flagging behaviour (WP-1.5)
+is available with `deployment.mode: enforce`.
 
 All numeric thresholds below are **project defaults for ~30 min data, not values quoted from
 literature**, unless the table says otherwise. They are marked *[to be tuned]* and must be
@@ -14,6 +22,7 @@ range, step (rate-of-change) and persistence tests follows Zahumenský (2004).
 
 - [Flags and events](#flags-and-events)
 - [Pipeline order](#pipeline-order)
+- [Off-site log](#off-site-log)
 - [Checks](#checks)
 - [Deployment detection](#deployment-detection)
 - [Configuration](#configuration)
@@ -30,7 +39,7 @@ range, step (rate-of-change) and persistence tests follows Zahumenský (2004).
 | `SPIKE` (4) | `spike` | yes |
 | `STEP` (8) | `step` | no (informative) |
 | `STUCK` (16) | `persistence` | yes |
-| `PRE_DEPLOYMENT` (32) | deployment detector | yes |
+| `PRE_DEPLOYMENT` (32) | off-site log (`OffSiteCheck`); the detector only in `enforce` mode | yes |
 | `TIMESTAMP_SUSPECT` (128) | `sampling` (also set by the parsers for DST, WP-1.2) | no |
 
 `NEIGHBOR_OUTLIER` (64) needs the sensor alignment of WP-1.6 and `MANUAL_EXCLUDE` (256) is set
@@ -38,10 +47,13 @@ by the owner; neither is produced here. Existing flags of the input are kept (al
 OR-ed).
 
 Events (`QualityEvent`, `DeploymentEvent`) carry `kind`, `t_utc`, `detail`, `severity`
-(`info`/`warning`), `source` (`detected`/`registry`), an optional `confidence` (0–1) and, for
-intervals, `end_utc`. Kinds: `deployment`, `retrieval`, `step`, `gap`, `irregular_sampling`,
-`non_positive_interval`, `deployment_mismatch`, `unconfirmed_transition`. The first three are
-the `type` values of the site contract (`events/<id>.json`, plan §2.6).
+(`info`/`warning`), `source` (`detected`/`registry`/`log`), an optional `confidence` (0–1) and,
+for intervals, `end_utc`. Kinds: `deployment`, `retrieval`, `step`, `gap`,
+`irregular_sampling`, `non_positive_interval`, `deployment_mismatch`,
+`unconfirmed_transition`, `off_site`, `unlogged_off_site`. `deployment`, `retrieval`, `step`
+and `off_site` are the `type` values of the site contract (`events/<id>.json`, plan §2.6,
+§2.8); an `off_site` event is an interval `[t_utc, end_utc)` with `end_utc = None` while the
+sensor is still off site (`t_end: null` on the web).
 
 **`confidence` is a heuristic evidence score, not a calibrated probability.** For a detected
 transition it is the share of the relative criteria that hold (see
@@ -54,19 +66,38 @@ therefore flags the whole row, temperature included; see [Limitations](#limitati
 
 ## Pipeline order
 
-`QualityPipeline.run(series, known_deployments=())` runs three stages:
+`QualityPipeline.from_settings(settings, off_site_log=log)` builds the pipeline;
+`run(series, known_deployments=())` runs four stages:
 
 1. **Screening checks on the whole series** — default `missing`, `sampling`, `range`. These are
    wrong wherever the sensor is. Their `MISSING` and `OUT_OF_RANGE` flags are passed on, so the
    detector ignores a gross error (e.g. a −999 sentinel) instead of seeing a regime change.
-2. **Deployment detection on the whole series** — `deployment`/`retrieval` events and
-   `PRE_DEPLOYMENT` for every sample recorded indoors.
-3. **Deployed checks on every continuous outdoor stretch separately** — default `spike`, `step`,
-   `persistence`. Indoor data are not judged by outdoor expectations (a stable office
-   temperature is not "stuck"), and the jump at a deployment or retrieval is never reported as
+2. **Off-site log** (if the pipeline has one) — `PRE_DEPLOYMENT` on every sample inside a logged
+   period and one `off_site` event per period ([Off-site log](#off-site-log)).
+3. **Deployment detection on the whole series** — in the default `advisory` mode only
+   `unlogged_off_site` / `unconfirmed_transition` warnings; in `enforce` mode
+   `deployment`/`retrieval` events and `PRE_DEPLOYMENT` for every sample detected indoors
+   (combined with the log's flags).
+4. **Deployed checks on every continuous stretch without `PRE_DEPLOYMENT`** — default `spike`,
+   `step`, `persistence`. Off-site data are not judged by outdoor expectations (a stable office
+   temperature is not "stuck"), and the jump at a logged period's boundary is never reported as
    a spike or a step, because no stretch spans it.
 
-With `detect_deployment: false` the whole series is one outdoor stretch.
+Without a log entry and with the advisory detector, an office stay counts as vineyard data: its
+boundaries are typically reported as `step` (informative, not excluded) next to the
+`unlogged_off_site` warning. With `detect_deployment: false` only the log decides.
+
+## Off-site log
+
+`OffSiteCheck` (`sivin/quality/checks/offsite.py`) receives the validated `OffSiteLog`
+(`sivin/registry/offsite.py`, format and validation in [sensors.md](sensors.md#off-site-log)).
+It flags a sample `PRE_DEPLOYMENT` exactly when `from <= t < to` for one of its sensor's
+periods (`to = null`: until further notice); local times of the log are converted to UTC when
+the log is loaded, so a period across a daylight-saving change flags exactly the right samples.
+Every period that overlaps `[first sample, last sample]` of the series becomes one `off_site`
+event (source `log`, `detail` = `"<reason>: <note>"`) with the period's own bounds, also when it
+starts before the series. The check is not in `check_registry`, because it needs the log as a
+collaborator; the pipeline creates it.
 
 The result (`QualityResult`) holds the flagged series, all events in time order, the number of
 rows per single flag (`flag_counts`) and the detector details (segments, regimes, features).
@@ -195,7 +226,21 @@ Irregular and non-positive intervals are summarised in one warning event each.
 A sensor is switched on in the office (stable temperature, small daily range, steady and fairly
 dry air), carried into the vineyard (a level change, a much larger daily range, humidity that
 follows the daily cycle) and possibly brought back for service and redeployed.
-`DeploymentDetector` finds these transitions in six steps.
+`DeploymentDetector` finds these transitions in six steps and then hands the result to the
+policy of its `mode`:
+
+| `mode` | Flags | Events |
+|---|---|---|
+| `advisory` (default) | none | `unlogged_off_site` warning ("possible unlogged off-site period …, add it to sensors/offsite_log.yaml") for every applied indoor interval that the log does not cover; `unconfirmed_transition` warnings whose time the log does not cover |
+| `enforce` (WP-1.5) | `PRE_DEPLOYMENT` on every detected indoor row | `deployment`/`retrieval` transitions, `deployment_mismatch` and `unconfirmed_transition` warnings |
+
+A detected interval counts as **covered** when one logged period of the sensor — touching or
+overlapping periods merged (e.g. transport followed by office) — contains it after widening the
+logged period by `log_tolerance_s` (default 6 h, project default *[to be tuned]*) on both sides.
+For the office stay at the start of the data the interval starts at the first sample. In
+advisory mode transitions and `deployment_mismatch` warnings are not reported: they describe
+flags that this mode does not set. The modes are `DetectionPolicy` subclasses registered per
+mode (`AdvisoryPolicy`, `EnforcePolicy`).
 
 **Guiding principle: when the evidence is not clear, do not exclude data.** Wrongly flagging
 vineyard data `PRE_DEPLOYMENT` is worse than missing a short service visit. Every step below
@@ -377,9 +422,9 @@ detection **only near themselves** (`known_tolerance_s`, 6 h):
    look like vineyard data and are not flagged). A later known time follows an earlier
    placement — a **relocation** — and raises no warning.
 
-Every row inside an applied indoor interval — the office stay before the first deployment and
-each confirmed service visit — gets `PRE_DEPLOYMENT`; rows without values take the state of
-their timestamp.
+In `enforce` mode every row inside an applied indoor interval — the office stay before the
+first deployment and each confirmed service visit — gets `PRE_DEPLOYMENT`; rows without values
+take the state of their timestamp. In `advisory` mode these intervals only feed the warnings.
 
 | Setting | Default | Unit | Origin |
 |---|---|---|---|
@@ -405,6 +450,8 @@ their timestamp.
 | `transport.max_duration_s` | 10 800 (3 h) | s | project default |
 | `transport.margin_c` | 3 | °C | project default |
 | `transport.reference_s` / `min_reference_samples` | 1 day / 12 | s / count | project default |
+| `mode` | `advisory` | — | owner decision 2026-10-05 (`enforce` = WP-1.5 behaviour) |
+| `log_tolerance_s` | 21 600 (6 h) | s | project default *[to be tuned]*, advisory coverage by the log |
 | `known_tolerance_s` | 21 600 (6 h) | s | project default *[to be tuned with Q3]* |
 | `ignore_mask` | 259 | bit mask | `MISSING \| OUT_OF_RANGE \| MANUAL_EXCLUDE` |
 
@@ -421,12 +468,21 @@ quality:
     range: { temp_climate_min_c: -30.0, temp_climate_max_c: 42.0 }
   detect_deployment: true
   deployment:
+    mode: advisory            # advisory | enforce
+    log_tolerance_s: 21600
     known_tolerance_s: 21600
     change_points: { min_segment_s: 86400, window_s: 2592000, stride_s: 1296000 }
     regime: { room_min_c: 5.0, room_max_c: 35.0, indoor_max_rh_spread_pct: 8.0 }
     contrast: { min_votes: 2, window_s: 172800 }
     transport: { enabled: false, max_duration_s: 10800 }
+
+offsite_log:                  # OffSiteLogSettings (sivin.registry.offsite)
+  file: sensors/offsite_log.yaml
+  timezone: Europe/Prague
 ```
+
+The log itself is loaded with `OffSiteLogStore().load(file, registry, timezone)` and passed to
+`QualityPipeline.from_settings(..., off_site_log=log)`; wiring it into the CLI run is WP-1.7.
 
 ## Limitations
 
@@ -470,6 +526,10 @@ quality:
   measure the daily cycle; the level difference and the humidity excess both measure the step.
   "2 of 4" can therefore be one physical signal counted twice. It is a heuristic, like the
   confidence derived from it.
+- **The off-site log is only as good as its entries.** A stay the owner did not log is counted
+  as vineyard data; the advisory detector warns about it only when it would have detected it in
+  `enforce` mode (all limitations below apply), so a missing warning is no proof that the log
+  is complete.
 - **Known deployments override detection only near themselves.** Data before the first known
   deployment are flagged only if an office stay is detected; a registry time that the data do
   not confirm produces a warning, not flags. A registry time up to `known_tolerance_s` (6 h) *later* than the
@@ -497,7 +557,9 @@ quality:
 | `BoundaryRefiner`, `TransportTrimmer` | `sivin/quality/boundaries.py` | `tests/quality/test_changepoint_regime.py` |
 | `RegimeSegmenter`, `IndoorRun` | `sivin/quality/segmentation.py` | `tests/quality/test_changepoint_regime.py`, `tests/quality/test_deployment.py` |
 | `KnownDeploymentReconciler`, `indoor_mask` | `sivin/quality/timeline.py` | `tests/quality/test_deployment.py` |
-| `DeploymentDetector`, `DeploymentResult` | `sivin/quality/deployment.py` | `tests/quality/test_deployment.py` |
+| `DeploymentDetector`, `DeploymentResult`, `DetectorMode`, `AdvisoryPolicy`, `EnforcePolicy`, `LoggedCoverage` | `sivin/quality/deployment.py` | `tests/quality/test_deployment.py`, `tests/quality/test_offsite.py` |
+| `OffSiteCheck` | `sivin/quality/checks/offsite.py` | `tests/quality/test_offsite.py` |
+| `OffSiteLog`, `OffSitePeriod`, `OffSiteLogStore` | `sivin/registry/offsite.py` | `tests/registry/test_offsite.py` |
 | `QualityEvent`, `DeploymentEvent` | `sivin/quality/events.py` | `tests/quality/test_base_and_events.py` |
 | `QualityPipeline`, `QualityResult` | `sivin/quality/pipeline.py` | `tests/quality/test_pipeline.py` |
 | synthetic generator | `tests/quality/synthetic.py` | `tests/quality/test_pipeline.py` |
