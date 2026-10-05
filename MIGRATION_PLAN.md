@@ -538,7 +538,7 @@ Smysl roste s počtem čidel; návrh tříd musí počítat s N čidly, ne se 4.
 Formát: **Cíl · Závisí na · Files scope · Úkoly · Akceptační kritéria**.
 Pokud není řečeno jinak, WP **nemění** `pyproject.toml`, `cli.py` ani `config/sivin.yaml`
 (sdílené soubory). Potřebuje-li novou závislost nebo CLI příkaz, napíše to do hand-off note;
-zapojení do CLI a konfigurace dělá integrační WP-3.2.
+zapojení do CLI a konfigurace dělá integrační WP-1.7 (vlna 2).
 
 ### Vlna 0
 
