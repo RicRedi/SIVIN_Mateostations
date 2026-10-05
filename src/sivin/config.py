@@ -12,23 +12,18 @@ from typing import Any, Final, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 
-from sivin.analytics.base import DEFAULT_MIN_DAILY_COVERAGE, DEFAULT_MIN_SEASON_COVERAGE
+from sivin.core.defaults import (
+    DEFAULT_MIN_DAILY_COVERAGE,
+    DEFAULT_MIN_SEASON_COVERAGE,
+    DEFAULT_TIMEZONE,
+    LEGACY_SAMPLING_INTERVAL_S,
+)
 from sivin.core.flags import QcFlag
 
 DEFAULT_CONFIG_FILE: Final = Path("config/sivin.yaml")
 """Location of the configuration file, relative to the project root."""
-
-DEFAULT_TIMEZONE: Final = "Europe/Prague"
-"""Time zone of the vineyards (South Moravia, Czech Republic)."""
-
-LEGACY_SAMPLING_INTERVAL_S: Final = 1825.0
-"""Nominal sampling interval of the sensors in seconds.
-
-Taken from the legacy configurations and ``sampl_freq_basic.py``, whose example timestamps are
-30 min 25 s (1825 s) apart.
-"""
 
 
 class ConfigError(ValueError):
@@ -111,7 +106,7 @@ class AnalyticsConfig(_Section):
             "index result. Project default, to be tuned on real data."
         ),
     )
-    exclude_mask: int = Field(
+    exclude_mask: StrictInt = Field(
         int(QcFlag.DEFAULT_EXCLUDE),
         ge=0,
         description=(

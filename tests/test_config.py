@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,6 +71,7 @@ def test_empty_file_gives_defaults(tmp_path: Path) -> None:
         ("time:\n  display_timezone: Europe/Brno\n", "time.display_timezone"),
         ("time:\n  expected_interval_s: 0\n", "time.expected_interval_s"),
         ("analytics:\n  exclude_mask: 1024\n", "analytics.exclude_mask"),
+        ("analytics:\n  exclude_mask: true\n", "analytics.exclude_mask"),
     ],
 )
 def test_invalid_values_name_the_key_path(tmp_path: Path, text: str, key_path: str) -> None:
@@ -91,3 +94,12 @@ def test_models_are_frozen() -> None:
         config.analytics.min_daily_coverage = 0.5  # type: ignore[misc]
     with pytest.raises(ValidationError):
         AnalyticsConfig(unknown=1)  # type: ignore[call-arg]
+
+
+def test_config_and_cli_do_not_import_pandas() -> None:
+    """The configuration layer must not pull in the analytics stack (pandas)."""
+    code = "import sys, sivin.cli; print('pandas' in sys.modules)"
+    output = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    assert output.strip() == "False"

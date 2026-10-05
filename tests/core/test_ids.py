@@ -20,6 +20,8 @@ from sivin.core.ids import SensorId
         "MeteoData_8615620 77678271  (VUT)_20260301_223857.csv",
         "MeteoData_8615620 77678271 (VUT)_20260301_223857.xlsx",
         "/home/user/data/MeteoData_8615620 77678271  (VUT)_20260301_223857.csv",
+        "MeteoData_8615620 77678271 (VUT)_20260301_223857 (1).xlsx",
+        "MeteoData_8615620 77678271  (VUT)_20260301_223857 (12).csv",
         r"C:\Users\someone\Downloads\MeteoData_8615620 77678271 (VUT)_20260301_223857.csv",
     ],
 )
@@ -37,6 +39,9 @@ def test_parse_accepts_every_known_spelling(text: str) -> None:
         ("VUT", "Cannot recognise"),
         ("data.xlsx", "Cannot recognise"),
         ("MeteoData_8615620 (VUT)_20260301_223857.csv", "Cannot recognise"),
+        ("\u0667\u0667\u0666\u0667\u0668\u0662\u0667\u0661", "Cannot recognise"),
+        ("\u0668\u0662\u0667\u0661", "Cannot recognise"),
+        ("MeteoData_8615620 77678271 (VUT)_20260301_223857 (x).csv", "Cannot recognise"),
     ],
 )
 def test_parse_rejects_unknown_spellings(text: str, message: str) -> None:
@@ -44,7 +49,16 @@ def test_parse_rejects_unknown_spellings(text: str, message: str) -> None:
         SensorId.parse(text)
 
 
-@pytest.mark.parametrize("serial", ["8271", "7767827a", " 77678271", "776782710"])
+@pytest.mark.parametrize(
+    "serial",
+    [
+        "8271",
+        "7767827a",
+        " 77678271",
+        "776782710",
+        "\u0667\u0667\u0666\u0667\u0668\u0662\u0667\u0661",
+    ],
+)
 def test_constructor_requires_exactly_eight_digits(serial: str) -> None:
     with pytest.raises(ValueError, match="exactly 8 digits"):
         SensorId(serial)

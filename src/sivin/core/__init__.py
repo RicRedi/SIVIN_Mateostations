@@ -1,26 +1,6 @@
 """Shared contracts of all subsystems: sensor identity, measurement schema, QC flags, time.
 
-The names re-exported here are the stable public API of :mod:`sivin.core`.
+Import from the submodules (``sivin.core.ids``, ``.flags``, ``.schema``, ``.timeutil``,
+``.daily``, ``.season``, ``.defaults``). This package deliberately re-exports nothing, so that
+importing a light module such as :mod:`sivin.core.flags` does not load pandas.
 """
-
-from sivin.core.daily import DailyWeather
-from sivin.core.flags import QcFlag, excluded, is_excluded
-from sivin.core.ids import SensorId
-from sivin.core.schema import Column, MeasurementSeries, SchemaError
-from sivin.core.season import MonthDay, Season
-from sivin.core.timeutil import ConversionResult, LocalTimeConverter
-
-__all__ = [
-    "Column",
-    "ConversionResult",
-    "DailyWeather",
-    "LocalTimeConverter",
-    "MeasurementSeries",
-    "MonthDay",
-    "QcFlag",
-    "SchemaError",
-    "Season",
-    "SensorId",
-    "excluded",
-    "is_excluded",
-]

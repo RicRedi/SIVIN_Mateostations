@@ -18,16 +18,19 @@ SERIAL_DIGITS: Final = 8
 LEGACY_SUFFIX_DIGITS: Final = 4
 """Length of the legacy short sensor name used by ``vineyard_analyst.yaml`` (e.g. ``8271``)."""
 
-_SERIAL_PATTERN: Final = re.compile(rf"\d{{{SERIAL_DIGITS}}}")
+_SERIAL_PATTERN: Final = re.compile(rf"[0-9]{{{SERIAL_DIGITS}}}")
+
+_LEGACY_SUFFIX_PATTERN: Final = re.compile(rf"[0-9]{{{LEGACY_SUFFIX_DIGITS}}}")
 
 SENSOR_NAME_PATTERN: Final = re.compile(
     rf"""
     (?:MeteoData_)?                     # export file prefix
-    (?:(?P<device>\d+)\s+)?             # portal device number, e.g. "8615620 "
-    (?P<serial>\d{{{SERIAL_DIGITS}}})   # canonical serial number, e.g. "77678271"
-    (?:\s*\((?P<label>[^)]*)\))?        # GPX / export label, e.g. " (VUT)" or "  (VUT)"
-    (?:_(?P<exported>\d{{8}}_\d{{6}}))? # export timestamp, e.g. "_20260301_223857"
-    (?:\.[A-Za-z0-9]+)?                 # file extension, e.g. ".csv" or ".xlsx"
+    (?:(?P<device>[0-9]+)\s+)?               # portal device number, e.g. "8615620 "
+    (?P<serial>[0-9]{{{SERIAL_DIGITS}}})     # canonical serial number, e.g. "77678271"
+    (?:\s*\((?P<label>[^)]*)\))?            # GPX / export label, e.g. " (VUT)" or "  (VUT)"
+    (?:_(?P<exported>[0-9]{{8}}_[0-9]{{6}}))? # export timestamp, e.g. "_20260301_223857"
+    (?:\s*\((?P<copy>[0-9]+)\))?            # browser copy suffix, e.g. " (1)"
+    (?:\.[A-Za-z0-9]+)?                     # file extension, e.g. ".csv" or ".xlsx"
     """,
     re.VERBOSE,
 )
@@ -39,7 +42,9 @@ Accepted spellings (MIGRATION_PLAN §2.4):
 * ``8615620 77678271`` (device name in the portal),
 * ``77678271 (VUT)`` (waypoint name in ``sensor_location.gpx``),
 * ``MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`` (exported file; the portal sometimes
-  puts two spaces before the label).
+  puts two spaces before the label, and a browser appends `` (1)`` to a repeated download).
+
+Only ASCII digits are accepted.
 """
 
 
@@ -98,7 +103,7 @@ class SensorId:
         match = SENSOR_NAME_PATTERN.fullmatch(name)
         if match is not None:
             return cls(match.group("serial"))
-        if name.isdigit() and len(name) == LEGACY_SUFFIX_DIGITS:
+        if _LEGACY_SUFFIX_PATTERN.fullmatch(name) is not None:
             raise ValueError(
                 f"{text!r} looks like a legacy {LEGACY_SUFFIX_DIGITS}-digit short sensor name. "
                 "It is ambiguous; resolve it through the sensor registry instead."

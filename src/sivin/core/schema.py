@@ -115,8 +115,11 @@ class MeasurementSeries:
         """Build a series from raw columns, normalising them before validation.
 
         Normalisation: timestamps are converted to UTC with nanosecond resolution, rows are
-        sorted by time (stable), exact duplicate timestamps are dropped keeping the last row
-        (a warning is logged), values are cast to ``float64`` and flags to ``int32``.
+        sorted by time (stable), values are cast to ``float64`` and flags to ``int32``.
+        Rows with the same timestamp are reduced to the **last** one in input order and a
+        warning is logged, even when their values differ. Reconciling conflicting duplicates
+        (e.g. two overlapping exports) is not decided here: it belongs to input validation
+        (WP-1.2) and the measurement store (WP-1.4), which should do it before calling this.
 
         Parameters
         ----------
@@ -300,7 +303,7 @@ class MeasurementSeries:
         """
         frame = self._frame.copy()
         sensor_ids = pd.Series(str(self._sensor_id), index=frame.index, dtype="str")
-        frame.insert(0, Column.SENSOR_ID, sensor_ids)
+        frame.insert(0, str(Column.SENSOR_ID), sensor_ids)
         return frame
 
     def _derived(self, frame: pd.DataFrame) -> Self:
@@ -312,6 +315,7 @@ def _validated_copy(sensor_id: SensorId, frame: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(frame, pd.DataFrame):
         raise SchemaError(f"Expected a pandas DataFrame, got {type(frame).__name__}.")
     data = frame.copy()
+    data.columns = pd.Index([str(column) for column in data.columns])
     if Column.SENSOR_ID in data.columns:
         foreign = data[Column.SENSOR_ID].astype("str") != str(sensor_id)
         if foreign.any():
@@ -325,6 +329,8 @@ def _validated_copy(sensor_id: SensorId, frame: pd.DataFrame) -> pd.DataFrame:
     for column in (Column.TEMP, Column.RH):
         if data[column].dtype != VALUE_DTYPE:
             raise SchemaError(f"Column '{column}' must be float64, got {data[column].dtype}.")
+        if np.isinf(data[column].to_numpy()).any():
+            raise SchemaError(f"Column '{column}' contains infinite values; use NaN for missing.")
     if data[Column.QC].dtype != QC_DTYPE:
         raise SchemaError(f"Column '{Column.QC}' must be int32, got {data[Column.QC].dtype}.")
     _check_flag_values(data[Column.QC].to_numpy())
@@ -393,7 +399,10 @@ def _utc_timestamps(
     values: Sequence[TimestampLike] | pd.Series | pd.DatetimeIndex,
 ) -> pd.DatetimeIndex:
     if isinstance(values, pd.Series | pd.DatetimeIndex):
-        index = pd.DatetimeIndex(values)
+        try:
+            index = pd.DatetimeIndex(values)
+        except (TypeError, ValueError) as error:
+            raise SchemaError(f"Cannot parse timestamps: {error}") from error
         if index.tz is None:
             raise SchemaError(_NAIVE_TIMESTAMPS_MESSAGE)
     else:

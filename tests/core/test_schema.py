@@ -62,6 +62,8 @@ def test_constructor_keeps_a_private_copy(sensor_id: SensorId) -> None:
         (lambda f: f.assign(source=["a.csv", None, "a.csv"]), "strings only"),
         (lambda f: f.assign(source=[1, 2, 3]), "strings only"),
         (lambda f: f.assign(sensor_id="77680921"), "other than 77678271"),
+        (lambda f: f.assign(temp_c=[1.0, np.inf, 2.0]), "infinite"),
+        (lambda f: f.assign(rh_pct=[1.0, -np.inf, 2.0]), "infinite"),
     ],
 )
 def test_constructor_rejects_schema_violations(
@@ -224,3 +226,15 @@ def test_from_records_rejects_naive_series_and_missing_timestamps(sensor_id: Sen
         MeasurementSeries.from_records(sensor_id, naive, [1, 2], [3, 4])
     with pytest.raises(SchemaError, match="must not be missing"):
         MeasurementSeries.from_records(sensor_id, [None, "2026-01-01T00:00Z"], [1, 2], [3, 4])
+
+
+def test_from_records_rejects_mixed_offset_strings_in_series(sensor_id: SensorId) -> None:
+    times = pd.Series(["2026-01-01T00:00:00+01:00", "2026-01-01T00:30:00Z"])
+    with pytest.raises(SchemaError, match="Cannot parse timestamps"):
+        MeasurementSeries.from_records(sensor_id, times, [1, 2], [3, 4])
+
+
+def test_column_labels_are_plain_strings(sensor_id: SensorId) -> None:
+    series = MeasurementSeries.from_records(sensor_id, UTC_TIMES, [1, 2, 3], [4, 5, 6])
+    assert all(type(label) is str for label in series.frame.columns)
+    assert all(type(label) is str for label in series.to_frame().columns)

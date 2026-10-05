@@ -37,20 +37,6 @@ from sivin.core.season import Season
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MIN_DAILY_COVERAGE: Final = 0.9
-"""Share of a day (0-1) that valid samples must cover for the day to count as complete.
-
-Project default, not taken from literature; to be tuned on real data
-(``analytics.min_daily_coverage`` in the configuration).
-"""
-
-DEFAULT_MIN_SEASON_COVERAGE: Final = 0.9
-"""Share (0-1) of the days of an index period that must be complete for a complete result.
-
-Project default, not taken from literature; to be tuned on real data
-(``analytics.min_season_coverage`` in the configuration).
-"""
-
 
 @dataclass(frozen=True, slots=True)
 class IndexContext:
@@ -73,11 +59,22 @@ class IndexContext:
     timezone : str
         IANA zone defining local calendar days.
     min_daily_coverage : float
-        Coverage (0-1) a day needs to count as complete.
+        Coverage (0-1) a day needs to count as complete (``analytics.min_daily_coverage``).
     min_season_coverage : float
-        Share (0-1) of complete days in the index period needed for a complete result.
+        Share (0-1) of complete days in the index period needed for a complete result
+        (``analytics.min_season_coverage``).
     exclude_mask : int
-        :class:`~sivin.core.flags.QcFlag` bits that exclude a raw sample.
+        :class:`~sivin.core.flags.QcFlag` bits that exclude a raw sample
+        (``analytics.exclude_mask``).
+
+    The three thresholds have no defaults on purpose: the factory that builds contexts must
+    pass the values of the configuration.
+
+    Raises
+    ------
+    ValueError
+        If ``sensor_id`` or ``timezone`` disagree with ``daily``/``series``, a threshold is
+        outside 0-1 or ``exclude_mask`` contains bits that are not QC flags.
     """
 
     sensor_id: SensorId
@@ -87,9 +84,27 @@ class IndexContext:
     latitude_deg: float | None
     elevation_m: float | None
     timezone: str
-    min_daily_coverage: float = DEFAULT_MIN_DAILY_COVERAGE
-    min_season_coverage: float = DEFAULT_MIN_SEASON_COVERAGE
-    exclude_mask: int = int(QcFlag.DEFAULT_EXCLUDE)
+    min_daily_coverage: float
+    min_season_coverage: float
+    exclude_mask: int
+
+    def __post_init__(self) -> None:
+        if not self.daily.sensor_id == self.series.sensor_id == self.sensor_id:
+            raise ValueError(
+                f"IndexContext for sensor {self.sensor_id} carries daily data of "
+                f"{self.daily.sensor_id} and a series of {self.series.sensor_id}."
+            )
+        if self.daily.timezone != self.timezone:
+            raise ValueError(
+                f"IndexContext timezone {self.timezone!r} differs from the daily data's "
+                f"{self.daily.timezone!r}."
+            )
+        for name in ("min_daily_coverage", "min_season_coverage"):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be within 0-1, got {value}.")
+        if self.exclude_mask < 0 or self.exclude_mask & ~QcFlag.all_bits():
+            raise ValueError(f"exclude_mask {self.exclude_mask} contains unknown QC flag bits.")
 
 
 @dataclass(frozen=True)
@@ -190,7 +205,9 @@ class ClimateIndex[P: IndexParams](ABC):
     unit : str
         Unit of the value.
     params_model : type[IndexParams]
-        Pydantic model of the parameters; must be the type argument ``P``.
+        Pydantic model of the parameters; must be the type argument ``P``. Every concrete
+        index must set it (``IndexParams`` itself for an index without parameters); a missing
+        ``params_model`` is rejected at registration and at instantiation.
 
     Parameters
     ----------
@@ -200,20 +217,20 @@ class ClimateIndex[P: IndexParams](ABC):
     Raises
     ------
     TypeError
-        If ``params`` is not an instance of :attr:`params_model`.
+        If the class has no ``params_model`` or ``params`` is not an instance of it.
     """
 
     index_id: ClassVar[str]
     unit: ClassVar[str]
-    params_model: ClassVar[type[IndexParams]] = IndexParams
+    params_model: ClassVar[type[IndexParams]]
 
     def __init__(self, params: P | None = None) -> None:
+        model = _declared_params_model(type(self))
         if params is None:
-            params = cast(P, self.params_model())
-        if not isinstance(params, self.params_model):
+            params = cast(P, model())
+        if not isinstance(params, model):
             raise TypeError(
-                f"{type(self).__name__} expects {self.params_model.__name__}, "
-                f"got {type(params).__name__}."
+                f"{type(self).__name__} expects {model.__name__}, got {type(params).__name__}."
             )
         self._params: P = params
 
@@ -401,6 +418,7 @@ class IndexRegistry:
             raise TypeError(f"{cls.__name__} must define a non-empty class variable 'index_id'.")
         if not isinstance(getattr(cls, "unit", None), str):
             raise TypeError(f"{cls.__name__} must define a class variable 'unit'.")
+        _declared_params_model(cls)
         if index_id in self._classes:
             raise ValueError(
                 f"Index id {index_id!r} is already registered by "
@@ -409,6 +427,17 @@ class IndexRegistry:
         self._classes[index_id] = cls
         logger.debug("Registered climate index %r (%s).", index_id, cls.__qualname__)
         return cls
+
+
+def _declared_params_model(cls: type) -> type[IndexParams]:
+    """Return the ``params_model`` of an index class, or raise a clear ``TypeError``."""
+    model = getattr(cls, "params_model", None)
+    if not (isinstance(model, type) and issubclass(model, IndexParams)):
+        raise TypeError(
+            f"{cls.__name__} must set the class variable 'params_model' to an IndexParams "
+            f"subclass (IndexParams itself if it has no parameters), got {model!r}."
+        )
+    return model
 
 
 index_registry: Final = IndexRegistry()

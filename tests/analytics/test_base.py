@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 
 import pandas as pd
@@ -73,6 +74,9 @@ def context(sensor_id: SensorId) -> IndexContext:
         latitude_deg=48.88,
         elevation_m=184.0,
         timezone=PRAGUE,
+        min_daily_coverage=0.9,
+        min_season_coverage=0.9,
+        exclude_mask=int(QcFlag.DEFAULT_EXCLUDE),
     )
 
 
@@ -81,7 +85,7 @@ def test_dummy_index_hand_computed(context: IndexContext) -> None:
     # Complete days: Sep 1 (mean 15 -> 5) and Sep 3 (mean 11 -> 1); Sep 2 is incomplete.
     assert result.value == 6.0
     assert result.coverage == pytest.approx(2 / 3)
-    assert result.complete is False  # 0.667 < default min_season_coverage 0.9
+    assert result.complete is False  # 0.667 < min_season_coverage 0.9
     assert result.details == {"n_days": 2}
     assert result.estimated is False
     assert result.classification is None
@@ -110,6 +114,7 @@ def test_relaxed_season_coverage_makes_result_complete(context: IndexContext) ->
         timezone=PRAGUE,
         min_daily_coverage=0.5,
         min_season_coverage=0.6,
+        exclude_mask=int(QcFlag.DEFAULT_EXCLUDE),
     )
     result = MeanAboveIndex().compute(relaxed)
     assert result.coverage == 1.0
@@ -187,3 +192,41 @@ def test_index_result_validation_and_read_only_details(sensor_id: SensorId) -> N
     result = make(coverage=0.0, details={"a": 1}, daily=pd.Series([1.0], index=[date(2026, 9, 1)]))
     with pytest.raises(TypeError):
         result.details["a"] = 2  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"sensor_id": SensorId("11111111")}, "carries daily data of 77678271"),
+        ({"timezone": "UTC"}, "differs from the daily data"),
+        ({"min_daily_coverage": 1.5}, "min_daily_coverage must be within 0-1"),
+        ({"min_season_coverage": -0.1}, "min_season_coverage must be within 0-1"),
+        ({"exclude_mask": 1024}, "unknown QC flag bits"),
+        ({"exclude_mask": -1}, "unknown QC flag bits"),
+    ],
+)
+def test_index_context_consistency(
+    context: IndexContext, changes: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        dataclasses.replace(context, **changes)  # type: ignore[arg-type]
+
+
+def test_missing_params_model_is_rejected(context: IndexContext) -> None:
+    class NoParams(ClimateIndex[IndexParams]):
+        index_id = "no_params"
+        unit = "-"
+
+        def compute(self, ctx: IndexContext) -> IndexResult:
+            raise NotImplementedError
+
+    with pytest.raises(TypeError, match="must set the class variable 'params_model'"):
+        IndexRegistry().register(NoParams)
+    with pytest.raises(TypeError, match="must set the class variable 'params_model'"):
+        NoParams()
+
+    class WithoutParameters(NoParams):
+        params_model = IndexParams
+
+    assert IndexRegistry().register(WithoutParameters) is WithoutParameters
+    assert WithoutParameters().params == IndexParams()
