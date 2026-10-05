@@ -162,7 +162,141 @@ All commands in `/home/user/wt/wp-3.2` (venv by `uv`, Python 3.12; Node 22).
    or should it appear in the manifest without a map marker?
 
 ## Review
-Verdict: _pending_ (round 1)
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer session, 2026-10-05. Throwaway scripts and screenshots are in
+`/tmp/claude-0/review-3.2/` (outside the repository).
+
+### Gates observed (worktree `/home/user/wt/wp-3.2`, head `c1e0fa2`)
+
+- `make lint` → `All checks passed!`, `288 files already formatted`; `make type` → `Success: no
+  issues found in 176 source files`; `make test` → **1837 passed**.
+- `make cov` → 1837 passed, total 99 %; every module of `sivin/site/*` 100 %, `app/site.py`
+  100 %, `cli/commands/site.py` 100 %, `app/run.py` 99 %, `cli/commands/pipeline.py` 99 %.
+- Web (`npm ci && npm run lint && npm run typecheck && npm test && npm run build`) → exit 0;
+  17 test files, **165 passed**, lines 99.38 %; build OK.
+
+### What I verified beyond the worker's tests
+
+- **Contract fidelity.** I compared every file in `web/tests/fixtures/python-site/` field by field
+  with §2.6/§2.8 and the WP-1.9 fields. Required fields, key order, `null` for missing, Unix seconds
+  and ISO `Z` times all match. The raw months are UTC months: the last May sample of 77678271 is
+  1780271350 < 1780272000 = 2026-06-01T00:00Z, local time would put it in June. `off_site` matches
+  §2.8: `source: log`, `detail` = `"<reason>: <note>"`, `t_end` set.
+- **Real data through the real web.** I built a copy of `web/` with the python-site fixture as
+  `public/data` (`SITE_BASE=/ VITE_DEMO_DATA=false`), served it and drove it with playwright-core
+  and `/opt/pw-browsers/chromium`. Screenshots: `/tmp/claude-0/review-3.2/0*.png`.
+  - 77799986 shows its grey off-site band with no line, the "no data" note and "bez hodnoty" as
+    the latest value. The amber `low_battery` marker shows its interval in the label (2025-07-29 ..
+    2025-08-02 window).
+  - The synthetic 77678271 shows its daily cycle. 24 h / 7 d / 30 d end at the end of the data and
+    switch to the correct resolution; season 2025/2026 and the custom window work.
+  - The console had no contract warnings or errors. The only failures were OSM tile requests,
+    because there is no network.
+- **Incremental build.**
+  - A change to the off-site log alone gives a full build (1 built, 0 reused), and the events,
+    flags (`qc` all 32), latest and indices are updated.
+  - A registry change gives a full build. A retired sensor (placement closed) gets
+    `status: "retired"` in the manifest and keeps its data.
+  - A stored sensor removed from the registry is left out with a warning, and its files are pruned.
+  - Appending data to one sensor rebuilds only that sensor. Written: `daily.json`,
+    `raw/2026-09.json`, manifest, latest, state. The result is byte-identical to a `--full` build
+    at the same clock.
+- **Performance.** I used 4 sensors × 3 years of SYNTHETIC 1830 s data (≈ 52 k rows each).
+  - Full build 14.1 s, 163 files, 6.9 MB in total: raw month ≈ 46 KB, `daily.json` 67 KB,
+    `manifest.json` 5.3 KB, `.build-state.json` 47 KB.
+  - Incremental build with no change 0.1 s; with one sensor changed 3.6 s.
+- **Leaks.** I searched the whole generated output for `/tmp`, `/home`, `/root`, `MeteoData`,
+  `.csv`, `password` and `SIVIN_` and found nothing. Failure texts use relative paths and are not
+  published.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `src/sivin/site/indices.py:17-40` (`index_entry`), `docs/site.md` § indices | A sensor with **no valid sample in the season** still gets numeric risk values and a risk class (details below). | open |
+| minor | `src/sivin/site/builder.py:202,273` (`previous = None` drops `_previous_states`), `docs/site.md:182` | A failing sensor is unpublished by every full build, although `docs/site.md` says "Failures never remove published data" (details below). | open |
+| minor | `src/sivin/site/builder.py:312-340` (`compute_indices` / `states`) | An index failure is cached by the incremental build (from reading the code, not reproduced; details below). | open |
+| minor | `src/sivin/site/settings.py:31` (`DEFAULT_PUBLISHED_EVENTS`) | `unlogged_off_site` is public by default with an operator instruction as its tooltip (details below). | open |
+| minor | `src/sivin/site/labels.py:128-130` | The Czech label of `gdd_winkler` is "Sumy aktivních teplot (Winkler)", which names a different index (details below). | open |
+| nit | `src/sivin/site/files.py` / `docs/site.md` § incremental | `.build-state.json` sits in `site/data` and would be deployed publicly (47 KB with 4 sensors). It is harmless, but WP-4.1 should exclude it from the Pages artifact or keep it outside `data/`. | open |
+| nit | `src/sivin/site/site_files.py` (`RegistryCopyWriter`) | `sensors.geojson` is a byte copy, as the plan says. It publishes `portal_name` (with the provider account number 8615620) and internal placement notes ("placeholder deployment date — owner to confirm (MIGRATION_PLAN Q3)"). Owner decision: publish as is, or keep only the public properties. | open |
+| nit | `src/sivin/site/site_files.py` (`LatestWriter`) | `stale` is frozen at `generated_at`. If the daily job stops, the portal keeps showing `stale: false` indefinitely. The web could also compare `generated_at` with the current time (WP-3.4/4.1). | open |
+
+**Major: zero-coverage index entries (`indices.py:17-40`).** A sensor with no valid sample in
+the season still gets risk values and a risk class.
+- Input: the committed fixture, or my scenario with an off-site period covering the whole 2026
+  season of 77678271.
+- Wrong behaviour: `powdery_mildew_gt: {value: 0.0, class: "low", coverage: 0.0}` and
+  `botrytis_broome: {value: 0.0, coverage: 0.0}` are published. On a public site this says "low
+  powdery mildew risk" for a sensor that was in the office: a statement made from no data.
+  `complete: false` does not undo that for any consumer of the JSON.
+- Suggested fix: at the publication boundary, write `value: null` and `class: null` when
+  `coverage == 0`, or leave such a sensor out of that season, and add a test. Also note for
+  WP-2.3 that the disease models should return no value at zero coverage.
+
+**Minor: failing sensor unpublished by a full build (`builder.py:202,273`).** When the shared
+inputs change or `--full` is used, `_previous_states` is empty, so a sensor that fails disappears.
+- Verified: build, then corrupt `data/raw/77680921/2026.csv`. The incremental build keeps the old
+  files (correct). Then add one line to the off-site log: a full build with **4 files removed**,
+  and 77680921 is gone from the manifest.
+- Suggested fix: keep the parsed previous sensor states as a fallback for failed sensors even when
+  `settings` changed, or correct the documentation.
+
+**Minor: index failure cached (`builder.py:312-340`).** From reading the code; I did not
+reproduce it.
+- Wrong behaviour: when an index fails for a sensor that built fine, the sensor's state is saved
+  with its current store fingerprint. The next incremental build reuses the sensor, so the failed
+  index is not retried until its store changes. The failure (exit 1) is reported only once; later
+  runs publish the missing entry with exit 0.
+- Suggested fix: do not record the fingerprint (or force a rebuild) for a sensor that had index
+  failures.
+
+**Minor: `unlogged_off_site` public by default (`settings.py:31`).** This answers open question
+2.
+- What is published: an unconfirmed detector guess, whose `detail` is an operator instruction
+  ("…add an entry to sensors/offsite_log.yaml with from: … and to: …"). It is shown verbatim in
+  the public tooltip.
+- Recommendation: leave it out of the default `site.events` and keep it in the run/job summary,
+  where the owner can act on it. If the owner wants it public, publish it with a short neutral
+  detail.
+
+**Minor: wrong Czech label for `gdd_winkler` (`labels.py:128-130`).** In Czech viticulture,
+*suma aktivních teplot* (SAT) is the sum of daily mean temperatures on days with mean ≥ 10 °C.
+Winkler GDD is Σ(T − 10), i.e. *suma efektivních teplot*. Suggested label: "Suma efektivních
+teplot (Winkler)" or "Růstové stupňodny (Winkler)".
+
+### Contract additions (focus 1)
+
+All the additions below are additive for this web and tolerated when absent:
+- `manifest.sensors[*].status`;
+- the extra manifest variables `precip_mm` and `battery_v` (the web looks variables up by id);
+- `daily.precip_n_samples`;
+- `indices[*][*].estimated`;
+- `confidence: null` on `off_site` (it is not in the §2.8 example; harmless);
+- the event types `low_battery` and `unlogged_off_site` with an integer `t_end ≥ t`.
+
+The new event types are the only **breaking** addition, and only for a web build from before
+WP-3.2: the old validator rejected the whole events file on an unknown `type`. Because web and data
+are deployed together, this is tolerated, but WP-4.1 must deploy the web and the data of the same
+commit. `latest.json` leaving out sensors without a valid sample is not covered by §2.6, but it is
+handled by the web ("bez hodnoty"). `low_battery`/`unlogged_off_site` intervals always have an end
+in QC (`IndoorInterval.end_utc` and the battery run end are never `None`), so the web's integer
+`t_end` requirement holds.
+
+### Deviations assessment
+
+1. **Files outside the literal scope** (`web/src/ui/EventMarkers.ts`, `web/src/i18n/*`,
+   `tests/config/test_schema.py`): justified, because the brief asked for a marker style and an
+   i18n label. The changes are minimal.
+2. **Unknown event types are skipped with a warning:** requested. The two web tests that were
+   changed still test an invalid file.
+3. **Contract additions:** acceptable, see above. Owner to confirm them into §2.6.
+4. **Seasons = exactly the selected ones; `sivin run` uses the default:** fine and documented.
+5. **`computed_at` = `generated_at`:** fine, and needed for byte-identical builds. The side effect
+   is that the 4 indices files are rewritten on every run (commit churn on `data`).
+6. **Fingerprint reads `<data_dir>/raw/<id>/` directly:** an acceptable workaround inside scope. It
+   couples the site builder to the store layout; the proposed public `partition_files` is the right
+   follow-up.
+7. **`RunService(site=None)` / `RunReport` defaults:** fine.
+
+Scope otherwise clean; no shared core/storage/CI file touched. The CLI registration and the
+`config/model.py` change are within the WP's scope.
