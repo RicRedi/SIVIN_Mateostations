@@ -30,20 +30,22 @@ describe('QcMask', () => {
     expect(mask.excludes(0)).toBe(false);
   });
 
-  it('display mask leaves MISSING to null values and keeps all other excluding flags', () => {
-    expect(DISPLAY_EXCLUDE_MASK).toBe(2 | 4 | 16 | 32 | 256);
+  it('display mask is the full DEFAULT_EXCLUDE mask, so MISSING hides the row (owner decision 2026-10-05)', () => {
+    expect(DISPLAY_EXCLUDE_MASK).toBe(DEFAULT_EXCLUDE_MASK);
+    expect(DISPLAY_EXCLUDE_MASK).toBe(311);
     const display = new QcMask(DISPLAY_EXCLUDE_MASK);
-    expect(display.excludes(QcFlag.MISSING)).toBe(false);
-    expect(display.excludes(QcFlag.MISSING | QcFlag.PRE_DEPLOYMENT)).toBe(true);
+    expect(display.excludes(QcFlag.MISSING)).toBe(true);
+    expect(display.excludes(QcFlag.MISSING | QcFlag.STEP)).toBe(true);
+    expect(display.excludes(QcFlag.STEP | QcFlag.TIMESTAMP_SUSPECT)).toBe(false);
   });
 
-  it('with the display mask a valid temperature survives a row whose RH is null', () => {
-    const raw = RawSeries.merge(ID, [{ sensor_id: ID, t: [H0, H0 + 1825], temp_c: [10, 11], rh_pct: [null, 60], qc: [QcFlag.MISSING, 0] }]);
+  it('with the display mask a row whose RH is null (MISSING) also hides its temperature', () => {
+    const raw = RawSeries.merge(ID, [{ sensor_id: ID, t: [H0, H0 + 1830], temp_c: [10, 11], rh_pct: [null, 60], qc: [QcFlag.MISSING, 0] }]);
     const display = new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK));
-    expect(display.raw(raw, 'temp_c').values).toEqual([10, 11]);
+    expect(display.raw(raw, 'temp_c').values).toEqual([null, 11]);
     expect(display.raw(raw, 'rh_pct').values).toEqual([null, 60]);
-    // hour 0 temperature mean (10 + 11) / 2, stamped at the bin centre 00:30
-    expect(display.hourlyMeans(raw, 'temp_c', H0, H0 + 3600).values).toEqual([10.5]);
+    // hour 0: only the 00:30:30 temperature of 11 is valid; stamped at the bin centre 00:30
+    expect(display.hourlyMeans(raw, 'temp_c', H0, H0 + 3600).values).toEqual([11]);
   });
 });
 
