@@ -321,3 +321,63 @@ Verified correct (independent scripts, synthetic data):
   hiding transitions/`deployment_mismatch`: reasonable and documented. Note that "`to` required"
   does not prevent an accidental open end (minor finding above).
 - `docs/web.md` is also in WP-0.2's Files scope; expect a (textual) merge conflict there.
+
+### Round 2
+
+Verdict: APPROVE  (round 2)
+
+Reviewer: independent Claude reviewer, 2026-10-05. Reviewed `2c3ea4a..673ef36`: the fix commit
+`9738111`, the merges of `origin/wp/0.2-owner-decisions` (`a9819ce`) and plan v2.1 (`b46a7b1`),
+and the package split `673ef36`.
+
+**Gates (run by the reviewer in `/home/user/wt/wp-1.8`):**
+- `make lint type test`: ruff, format and mypy --strict are clean; **1424 passed** (exit 0).
+- `make cov`: total 99 %.
+  - `registry/offsite/*`: 99–100 % (`local_time.py` one partial branch, `store.py` line 211).
+  - `quality/checks/offsite.py` 100 %, `quality/pipeline.py` 100 %, `quality/deployment.py` 99 %.
+- `cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build`: green,
+  14 files / **145 tests passed**, build OK.
+
+**Round-1 findings, re-checked with the round-1 probe scripts plus new ones (`/tmp/claude-0/review-1.8/exp1-5.py`):**
+
+| Severity (round 1) | Finding | Round 2 |
+|---|---|---|
+| major | Duplicate `entries:` / duplicate key in an entry read silently; the example could not be uncommented safely | **resolved.** `StrictLogLoader` rejects any duplicate key and names the key and both lines (`line 6: the key 'entries' appears a second time (first on line 1) … put all entries as '- sensor: ...' items under one 'entries:'`). The example is now a commented list item under the single `entries:` key. Uncommenting its five lines as instructed gives a valid log with the extra period in the year 2000, so it touches no data. |
+| minor | Blank `to:` read as an open period | **resolved.** A blank value gives `entry #1, 'to' (line 4): is empty - write a date/time, or 'open' if the sensor is still off site`. The same holds for every key, and for `""`. |
+| minor | Messages without a fix | **resolved.** Each message names the key that is missing (with an example line), the key that is unknown (with the allowed keys) or the sensor that is unknown (with the known serials). It also covers the wrong type (put the text in quotes), the tab indent and an entry that is not a mapping. An unquoted serial is accepted. |
+| minor | Cross-entry messages in UTC | **resolved.** Times are now local with the zone abbreviation and UTC in brackets, e.g. `2025-12-17 12:00 CET (11:00 UTC)`. |
+| minor | Strict `t_end` on point events | **resolved.** The value is ignored with a contract warning, which goes to `console.warn` by default. |
+| minor | Advisory warning in UTC | **resolved.** Times are local, and the warning includes ready-to-paste `from:`/`to:` values with an offset. These stay unambiguous in the repeated October hour (checked: `2026-10-25T02:30+02:00` / `+01:00`). |
+| nit | Two index formats | **resolved.** One format: `entry #N` (1-based) with the line number. |
+| nit | Spring-forward suggestion | **resolved.** The message now says to write a time after the change, or the clock time before it with its offset. |
+| nit | Coincident band handles | **resolved.** Handles closer than one handle width are stacked downwards. |
+
+**Refactor `673ef36` (one module split into the package `registry/offsite/`):**
+- It touches only `src/sivin/registry/offsite*`, `docs/quality-control.md` and this note. No test changed, and all pass.
+- I ran every probe script against `9738111` (old module, via a temporary worktree) and against `HEAD`. The output is byte-identical (`exp1`, `exp2`).
+- The public names of `sivin.registry.offsite` are unchanged. Only imported helpers and private names are no longer reachable from the package root.
+- The behaviour is unchanged.
+
+**Merge with WP-0.2:**
+- `origin/wp/0.2-owner-decisions` (`20ef2a5`) and the plan branch are ancestors of `HEAD`.
+- The following are identical to WP-0.2: `src/sivin/core`, `src/sivin/config.py`, `config/`, `src/sivin/ingest`, `src/sivin/quality/checks/missing.py`, `web/src/domain`, and the core, ingest and fixture tests.
+- On the web, `DISPLAY_EXCLUDE_MASK = DEFAULT_EXCLUDE_MASK = 311`, asserted in `web/tests/Resampler.test.ts`.
+- The row rule (`MISSING` when either variable is missing) is preserved.
+- `docs/web.md` contains both the WP-0.2 mask text and the *Off-site periods* section. No conflict markers are left in the tree.
+
+**Q10 entry (owner decision §0.5, v2.1):**
+- The entry is `77799986`, `2025-07-30 10:00` – `2026-03-01 22:30` local, reason `service`.
+- The first sample of the real export fixture (`2025-07-30 10:22:29`) and its last sample (`2026-03-01 22:27:05`) both lie inside the period, so the whole export is flagged.
+- The committed log loads against the real registry, and also with CRLF line endings.
+
+**New findings:**
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| nit | `src/sivin/registry/offsite/strict_yaml.py` (`construct_mapping`) | A non-scalar YAML key (`? [a]`) raises a bare `TypeError: unhashable type: 'list'` instead of `OffSiteLogError`. An owner is very unlikely to write this; catch `TypeError` there, or keep it. | open |
+| nit | `sensors/offsite_log.yaml`, `docs/sensors.md` vs plan §2.8 | The file and docs teach `to: open` (case-insensitive). The plan's `to: null` is still accepted, so this is a compatible superset. The §2.8 text only mentions `null`; the owner may want the plan updated to name `open`. | open |
+| nit | `web/src/ui/EventMarkers.ts` (`HANDLE_SIZE_PX`, `HANDLE_TOP_PX`) | The values duplicate `.event-marker` sizes in `styles.css`, which is out of scope. This is already covered by the *Out of scope* note about a proper `.event-marker--off-site` style. | open |
+
+**Other notes:**
+- The worker filled the Status column of the round-1 table. This is acceptable: the findings themselves were not edited.
+- No blockers or majors remain.
