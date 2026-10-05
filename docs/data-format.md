@@ -1,11 +1,13 @@
 # Export formats and input validation
 
-> **Not verified on a real export.** The formats below are reconstructed from the legacy
+> **Partly verified on a real export.** The formats below were reconstructed from the legacy
 > scripts (`generate_animation.py`, `chrome_driver.py`, `sampl_freq_basic.py`,
-> `vineyard_analyst.py` and the plot scripts). No real export file was available when the
-> parsers were written. Until the owner provides a sample export (**Q1**) and confirms the
-> time zone of its timestamps (**Q2**), every statement about column names, title rows, row
-> order and time zone is an assumption. That is why all of them are configurable.
+> `vineyard_analyst.py` and the plot scripts) before any real export was available. The
+> **portal CSV** has since been checked against one real export of sensor 77799986 (see
+> [Verified against a real export](#verified-against-a-real-export)); the owner confirmed that
+> the timestamps are local time (**Q2**). The **portal XLSX** layout and the exports of the other
+> sensors are still unverified (**Q11**), so column names, title rows and row order stay
+> configurable.
 
 Code: `sivin.ingest.parsers` (parsers) and `sivin.ingest.validation` (validator).
 Plan: MIGRATION_PLAN §2.7 and WP-1.2.
@@ -45,17 +47,27 @@ give `required-columns`, a name without a serial gives `sensor-id`).
 
 ```
 Meteo Data;
-Datum a čas;Teplota (°C);Vlhkost (%)
-2026-03-01 00:00:07;3,7;86,7
+Datum a čas;Teplota (°C);Vlhkost (%);Srážky (mm);Celkové srážky (mm);Nabití baterie (V)
+2026-03-01 22:27:05;23,79;31,1;0,0;326,4;3,60
+...
+2025-07-30 10:22:29;28,66;41,8;0,0;323,0;3,00
+;
 ```
+
+(First and last data rows of the real export of sensor 77799986; the legacy scripts showed only
+the first three columns.)
 
 - Delimiter `;` (`csv_delimiter`). Encoding UTF-8 with or without BOM, then Windows-1250
   (`csv_encodings`). The Windows-1250 fallback is an assumption.
 - One title row `Meteo Data;`. The header row is searched for, so any number of title rows
   works, up to `header_search_rows`.
-- Further columns may exist; unknown columns are ignored.
-- Decimal comma. Local wall-clock timestamps `%Y-%m-%d %H:%M:%S`.
-- File name example: `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`.
+- Further columns exist (precipitation, cumulative precipitation, battery voltage); unknown
+  columns are ignored.
+- Decimal comma. Local wall-clock timestamps `%Y-%m-%d %H:%M:%S`, newest row first.
+- A last line `;` (empty cells) follows the data; blank rows are skipped.
+- File name examples: `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv` (legacy
+  scripts) and `MeteoData_8615620_77799986_VUT_20260301_223842.csv` (the real export, with
+  underscores; owner question Q8). `SensorId.parse` accepts both.
 
 ### Portal XLSX (downloaded by legacy `chrome_driver.py`)
 
@@ -105,10 +117,11 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
   unparseable.
 - Formula cells are read with their cached result. A workbook saved by a script has no cached
   results; such cells read as empty, and `values-present` rejects the file.
-- A row whose temperature **and** humidity are both missing gets `QcFlag.MISSING`. A row with
-  only one missing value keeps `qc = 0` and the missing value is `NaN`. `DailyWeather` already
-  ignores `NaN` per variable, and a row flag would also exclude the valid other variable
-  (see the hand-off note, open question 1).
+- **Whole-row validity** (owner decision 2026-10-05, plan §0.5): a row whose temperature
+  **or** humidity is missing gets `QcFlag.MISSING`; the measurement as a whole is invalid. The
+  present value is kept in the series (it is not set to `NaN`), but the flag excludes the row
+  from indices and from the web chart, and `DailyWeather` does not count it even without the
+  flag. Until 2026-10-05 only rows with both values missing were flagged (WP-1.2).
 
 ## Timestamps
 
@@ -123,7 +136,7 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
    again with the other date order. The order is called ambiguous if the other order reads more
    cells (e.g. `1/13/2026`), or reads as many cells with fewer *long* steps between consecutive
    timestamps. A long step is longer than `expected_interval_s × long_step_factor`
-   (1825 s × 48 ≈ 24.3 h). A month-first file whose days are all ≤ 12 reads without parse
+   (1830 s × 48 ≈ 24.4 h). A month-first file whose days are all ≤ 12 reads without parse
    errors, but every change of day becomes a step of about a month. The median step cannot
    show this, because only one step per day changes. The guard therefore counts long steps
    instead of comparing the median with the expected interval.
@@ -138,8 +151,8 @@ not used, so `Teplota rosného bodu (°C)` (dew point) is not mistaken for the t
    - A table is reversed only if it is **clearly newest first**: at least
      `newest_first_min_steps` (4) counted non-zero steps, and at least
      `newest_first_min_share` (0.75) of them go back in time. A table that steps back but has
-     fewer steps is read oldest first (rule `row-order`, WARNING). The real row order of the
-     exports is unknown (Q1).
+     fewer steps is read oldest first (rule `row-order`, WARNING). The real CSV export is
+     newest first and is reversed by this rule.
    - **Out-of-sequence rows** (rule `out-of-sequence`). Each row is compared with the latest
      *accepted* row. The threshold is `max_backward_step_s` (2 h, at least 1 h = the
      repeated hour).
@@ -206,7 +219,7 @@ configuration section `ingest.validation`. The defaults are project defaults
 | `short-rows` | rows that end before a required column (cut-off line); the missing cells become missing values | WARNING |
 | `numbers-parseable` | share of non-numeric value cells > `max_unparseable_value_share` (5 %) → ERROR; otherwise the values become missing | ERROR / WARNING |
 | `timestamps-parseable` | share of unreadable timestamps > `max_unparseable_timestamp_share` (5 %) → ERROR; otherwise the rows are dropped | ERROR / WARNING |
-| `values-present` | no temperature and no humidity value at all (empty columns, formulas without cached results) → ERROR; one variable without any value (e.g. a failed humidity channel) → WARNING, the other is imported | ERROR / WARNING |
+| `values-present` | a temperature or humidity column without any value (empty column, formulas without cached results, e.g. a failed humidity channel) → ERROR: under whole-row validity every row would be `MISSING`, so the file holds no valid measurement (until 2026-10-05 one empty variable was a WARNING) | ERROR |
 | `date-order` | day and month look swapped (see Timestamps, step 2) | ERROR |
 | `timestamps-plausible` | share of timestamps outside the plausible range > `max_implausible_timestamp_share` (5 %) → ERROR; otherwise the rows are dropped | ERROR / WARNING |
 | `row-order` | the table steps back but is too short to decide whether it is newest first; read oldest first | WARNING |
@@ -239,12 +252,44 @@ first affected row.
 `header_search_rows` (10), `day_first` (true), `newest_first_min_share` (0.75),
 `newest_first_min_steps` (4), `max_backward_step_s` (7200), `earliest_timestamp`
 (2020-01-01), `latest_timestamp` (none: run time + `max_future_s`), `max_future_s` (86400),
-`expected_interval_s` (1825), `long_step_factor` (48), `csv_delimiter` (`;`), `csv_encodings`
+`expected_interval_s` (1830, the median step of the real export; the legacy estimate was 1825), `long_step_factor` (48), `csv_delimiter` (`;`), `csv_encodings`
 (`utf-8-sig`, `cp1250`), `legacy_sheet_sensors` ({}).
 `ValidationSettings` (proposed section `ingest.validation`): see the table above. Both are
 frozen pydantic models with `extra="forbid"`.
 
+## Verified against a real export
+
+On 2026-10-05 the owner supplied the first real export (Q1, plan §0.6.1):
+`MeteoData_8615620_77799986_VUT_20260301_223842.csv`, sensor 77799986, 3520 data rows from
+2025-07-30 10:22:29 to 2026-03-01 22:27:05 local time (2025-07-30 08:22:29Z to
+2026-03-01 21:27:05Z). The portal CSV parser reads it under its original name without any
+validation finding.
+
+What matched the reconstructed format:
+
+- title line `Meteo Data;`, then the header row; `;` delimiter, decimal comma,
+- the header names `Datum a čas`, `Teplota (°C)`, `Vlhkost (%)`,
+- local wall-clock timestamps `YYYY-MM-DD HH:MM:SS` in `Europe/Prague` (owner decision Q2),
+- encoding UTF-8 (without BOM), read by the first entry of `csv_encodings`.
+
+What differed from it, and how it is handled:
+
+| Finding | Handling |
+|---|---|
+| File name with underscores instead of spaces and parentheses (`MeteoData_8615620_77799986_VUT_…`); unknown whether the portal or the upload produced it (Q8) | `SensorId.parse` accepts both spellings (WP-0.2); routing (`can_parse`) already accepted any `.csv` and any `MeteoData…` workbook |
+| Three extra columns `Srážky (mm)`, `Celkové srážky (mm)`, `Nabití baterie (V)` | ignored without a finding; adopting them is owner question Q9 |
+| Rows **newest first** | reversed by the row-order analysis (no finding) |
+| A last line `;` after the data | a blank row, skipped |
+| CRLF line endings | read by the CSV reader (no finding) |
+| Median step 1830 s, not the legacy 1825 s | default `expected_interval_s` = 1830 s (`time` and `ingest.parsers`) |
+| Gaps of 3.5 h, 23.4 h and 139 days (3336.6 h) near the start, and two samples 49 s apart | kept as they are; gaps are not a validation finding |
+| No daylight-saving transition inside the data (the 2025 fall-back lies in the 139-day gap) | DST handling is still verified only on synthetic data |
+
+A trimmed excerpt (300 rows, original bytes) is the regression fixture
+`tests/fixtures/exports/real/`, tested by `tests/ingest/test_real_export.py`.
+
 ## Test fixtures
 
 `tests/fixtures/exports/` holds synthetic files generated by `make_fixtures.py`. The README
-there lists every file and the expected result.
+there lists every file and the expected result. The only exception is `real/`, a trimmed real
+export (public by owner decision 2026-10-05) with its own README.
