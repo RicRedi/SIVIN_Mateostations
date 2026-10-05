@@ -491,10 +491,10 @@ the Status cells of my table were edited.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | web/src/ui/App.ts:83-90 | A `hashchange` that changes the language and also carries an unknown sensor id leaves the UI in the old language | open |
-| nit | web/src/domain/dailyColumnSeries.ts:53 | Daily means are still drawn at local midnight, while hourly means are now centred | open |
-| nit | web/src/ui/TimeWindowControl.ts (renderShownWindow) | The shown end is the exclusive end | open |
-| nit | web/src/state/Store.ts:47-62 | A throwing listener leaves the remaining queued changes for the next `update` | open |
+| minor | web/src/ui/App.ts:83-90 | A `hashchange` that changes the language and also carries an unknown sensor id leaves the UI in the old language | fixed (follow-up): App compares with the applied `i18n.language`; regression test in `App.test.ts` (fails on the old code) |
+| nit | web/src/domain/dailyColumnSeries.ts:53 | Daily means are still drawn at local midnight, while hourly means are now centred | fixed (follow-up): daily values are drawn at local noon |
+| nit | web/src/ui/TimeWindowControl.ts (renderShownWindow) | The shown end is the exclusive end | fixed (follow-up): the shown end is the last minute inside the window (e.g. 30. 9. 2026 23:59) |
+| nit | web/src/state/Store.ts:47-62 | A throwing listener leaves the remaining queued changes for the next `update` | fixed (follow-up): all listeners and queued changes are delivered, then the first error is rethrown; test added |
 
 **Details**
 

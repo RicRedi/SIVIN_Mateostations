@@ -20,6 +20,9 @@ export interface WindowControlState {
   readonly window: TimeWindow;
 }
 
+/** The window end is exclusive; the shown end is the last minute inside the window. */
+const INCLUSIVE_END_OFFSET_S = 60;
+
 const KIND_LABELS: Readonly<Record<WindowKind, MessageKey>> = {
   '24h': 'preset24h',
   '7d': 'preset7d',
@@ -134,7 +137,7 @@ export class TimeWindowControl {
   private renderShownWindow(window: TimeWindow): void {
     const range = this.i18n.t('windowShown', {
       from: this.i18n.formatDateTime(window.startT, this.zone.name),
-      to: this.i18n.formatDateTime(window.endT, this.zone.name),
+      to: this.i18n.formatDateTime(window.endT - INCLUSIVE_END_OFFSET_S, this.zone.name),
     });
     this.shown.textContent = `${range} · ${this.i18n.t(RESOLUTION_LABELS[window.resolution])}`;
   }

@@ -90,7 +90,7 @@ describe('ChartDataLoader', () => {
     const data = await loader().load(['77678271'], window);
     const daily = fixtureJson('series/77678271/daily.json') as { date: string[]; temp_mean: number[] };
     const index = daily.date.indexOf('2026-08-01');
-    expect(data.sensors[0]?.temp_c.t).toEqual([utc(2026, 7, 31, 22), utc(2026, 8, 1, 22), utc(2026, 8, 2, 22)]);
+    expect(data.sensors[0]?.temp_c.t).toEqual([utc(2026, 8, 1, 10), utc(2026, 8, 2, 10), utc(2026, 8, 3, 10)]);
     expect(data.sensors[0]?.temp_c.values[0]).toBe(daily.temp_mean[index]);
   });
 });

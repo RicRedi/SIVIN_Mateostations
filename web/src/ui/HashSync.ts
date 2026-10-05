@@ -12,12 +12,12 @@ export class HashSync {
     private readonly codec: HashStateCodec,
     private readonly location: Location,
     private readonly history: History,
-    target: Window,
+    hashChanges: EventTarget,
   ) {
     store.subscribe(() => {
       this.write();
     });
-    target.addEventListener('hashchange', () => {
+    hashChanges.addEventListener('hashchange', () => {
       const { language } = this.store.state;
       this.store.update({ ...DEFAULT_APP_STATE, language, ...this.codec.decode(this.location.hash) });
     });

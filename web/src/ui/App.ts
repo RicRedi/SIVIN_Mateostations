@@ -86,7 +86,9 @@ export class App {
       return;
     }
     this.colors.update(state.selectedSensorIds);
-    if (state.language !== previous.language) {
+    // Compare with the applied language, not `previous`: an earlier notification may have
+    // returned early (unknown ids) before applying a language change it carried.
+    if (state.language !== this.i18n.language) {
       this.i18n.setLanguage(state.language);
       this.preference.save(state.language);
       this.views.header.render();

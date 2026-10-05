@@ -43,7 +43,7 @@ describe('TimeWindowControl', () => {
 
   it('shows the concrete window and resolution in local time', () => {
     const shown = root.querySelector('.window-control__shown')?.textContent ?? '';
-    expect(shown).toMatch(/^Zobrazeno 24\. 9\. 2026 0:00 – 1\. 10\. 2026 0:00 · Surová data$/);
+    expect(shown).toMatch(/^Zobrazeno 24\. 9\. 2026 0:00 – 30\. 9\. 2026 23:59 · Surová data$/);
   });
 
   it('emits relative presets', () => {

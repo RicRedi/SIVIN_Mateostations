@@ -48,7 +48,7 @@ describe('RawSeries.merge', () => {
 });
 
 describe('dailyColumnSeries', () => {
-  it('places each local day at local midnight and keeps days inside the window', () => {
+  it('draws each local day at local noon and keeps days starting inside the window', () => {
     const zone = new TimeZone('Europe/Prague');
     const daily = {
       sensor_id: ID,
@@ -62,7 +62,8 @@ describe('dailyColumnSeries', () => {
       coverage: [1, 1, 1],
     };
     const series = dailyColumnSeries(daily, 'temp_mean', zone, utc(2026, 5, 31, 22), utc(2026, 6, 2, 22));
-    expect(series.t).toEqual([utc(2026, 5, 31, 22), utc(2026, 6, 1, 22)]);
+    // 1 and 2 June 12:00 CEST = 10:00Z
+    expect(series.t).toEqual([utc(2026, 6, 1, 10), utc(2026, 6, 2, 10)]);
     expect(series.values).toEqual([10, null]);
   });
 });

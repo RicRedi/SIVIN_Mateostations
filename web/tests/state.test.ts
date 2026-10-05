@@ -82,6 +82,26 @@ describe('Store', () => {
     store.update({ n: 1 });
     expect(seen).toEqual(['first:1', 'second:0->1', 'first:2', 'second:1->2']);
   });
+
+  it('delivers to all listeners and drains the queue when a listener throws', () => {
+    const store = new Store({ n: 0 });
+    const seen: number[] = [];
+    store.subscribe((state) => {
+      if (state.n === 1) {
+        store.update({ n: 2 });
+        throw new Error('listener failed');
+      }
+    });
+    store.subscribe((state) => {
+      seen.push(state.n);
+    });
+    expect(() => {
+      store.update({ n: 1 });
+    }).toThrow('listener failed');
+    expect(seen).toEqual([1, 2]);
+    store.update({ n: 3 });
+    expect(seen).toEqual([1, 2, 3]);
+  });
 });
 
 describe('selection', () => {

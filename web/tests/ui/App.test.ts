@@ -54,10 +54,19 @@ describe('App', () => {
   let colors: SensorColors;
   let log: ReturnType<typeof fakeViews>['log'];
   let app: App;
-  const storage = new Map<string, string>();
+  let storage: Map<string, string>;
+  let hashChanges: EventTarget;
+
+  /** Set the hash without jsdom's asynchronous hashchange, then dispatch one synchronously. */
+  function navigate(hash: string): void {
+    window.history.replaceState(null, '', hash);
+    hashChanges.dispatchEvent(new Event('hashchange'));
+  }
 
   beforeEach(() => {
     window.history.replaceState(null, '', '#');
+    storage = new Map<string, string>();
+    hashChanges = new EventTarget();
     store = new Store<AppState>(DEFAULT_APP_STATE);
     presenter = new FakePresenter();
     colors = new SensorColors();
@@ -65,7 +74,7 @@ describe('App', () => {
     log = fake.log;
     const preference = new LanguagePreference(() => ({ getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v) }) as unknown as Storage);
     app = new App(store, catalog, new I18n({ cs, de, en }, 'cs'), preference, colors, presenter, fake.views);
-    new HashSync(store, new HashStateCodec(), window.location, window.history, window).write();
+    new HashSync(store, new HashStateCodec(), window.location, window.history, hashChanges).write();
     app.start();
   });
 
@@ -87,10 +96,18 @@ describe('App', () => {
   });
 
   it('removes unknown sensor ids from state and URL after a hashchange', () => {
-    window.location.hash = '#s=77678271,12345678&w=24h&lang=cs';
-    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    navigate('#s=77678271,12345678&w=24h&lang=cs');
     expect(store.state.selectedSensorIds).toEqual(['77678271']);
     expect(window.location.hash).toBe('#s=77678271&w=24h&lang=cs');
+  });
+
+  it('applies a language change that arrives together with an unknown sensor id', () => {
+    navigate('#s=77678271,12345678&w=7d&lang=de');
+    expect(store.state.language).toBe('de');
+    expect(store.state.selectedSensorIds).toEqual(['77678271']);
+    expect(log.header).toBe(1);
+    expect(storage.get('sivin.language')).toBe('de');
+    expect(window.location.hash).toBe('#s=77678271&w=7d&lang=de');
   });
 
   it('switches language, saves it and re-renders header and chart', () => {

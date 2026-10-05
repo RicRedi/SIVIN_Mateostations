@@ -2,9 +2,13 @@ import type { DailyFile, DailyValueColumn } from '../contract';
 import { TimeSeries } from './TimeSeries';
 import type { TimeZone } from './TimeZone';
 
+/** Local hour at which a daily value is drawn: noon, the centre of the day (like hourly means). */
+export const DAILY_STAMP_HOUR = 12;
+
 /**
- * One column of `daily.json` as a {@link TimeSeries} placed at local midnight of each day,
- * keeping only days that start within `[startT, endT)`.
+ * One column of `daily.json` as a {@link TimeSeries} drawn at local noon of each day (the bin
+ * centre, matching the centred hourly means), keeping only days that start within
+ * `[startT, endT)`.
  *
  * @param daily - Validated daily file.
  * @param column - Column to extract, e.g. `temp_mean`.
@@ -24,7 +28,7 @@ export function dailyColumnSeries(
   daily.date.forEach((date, i) => {
     const dayStartT = zone.startOfDate(date);
     if (dayStartT >= startT && dayStartT < endT) {
-      t.push(dayStartT);
+      t.push(zone.toUtc({ ...zone.toLocal(dayStartT), hour: DAILY_STAMP_HOUR }));
       values.push(daily[column][i] ?? null);
     }
   });
