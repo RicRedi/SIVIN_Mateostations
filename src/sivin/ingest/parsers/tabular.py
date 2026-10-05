@@ -27,6 +27,7 @@ from sivin.core.timeutil import LocalTimeConverter
 from sivin.ingest.parsers.base import ExportParser, ParsedExport
 from sivin.ingest.parsers.cells import NumberParser, TimestampParser
 from sivin.ingest.parsers.columns import CanonicalColumn, ColumnMapping, HeaderMatch, ParserSettings
+from sivin.ingest.parsers.order import RowOrder, RowOrderAnalyser
 from sivin.ingest.parsers.sources import CellGrid, Row
 from sivin.ingest.validation import (
     BoolArray,
@@ -100,24 +101,34 @@ class TabularExportReader:
         Column aliases, header search depth, date order and source time zone.
     converter : LocalTimeConverter, optional
         Local-to-UTC conversion; one for ``settings.source_timezone`` when omitted.
+    order : RowOrderAnalyser, optional
+        Decides whether a table is reversed and how backward steps are repaired; one with
+        :class:`~sivin.ingest.parsers.order.SplitAtBackwardSteps` when omitted.
     """
 
-    __slots__ = ("_converter", "_mapping", "_numbers", "_search_rows", "_timestamps")
+    __slots__ = ("_converter", "_mapping", "_numbers", "_order", "_search_rows", "_timestamps")
 
     def __init__(
-        self, settings: ParserSettings, converter: LocalTimeConverter | None = None
+        self,
+        settings: ParserSettings,
+        converter: LocalTimeConverter | None = None,
+        order: RowOrderAnalyser | None = None,
     ) -> None:
         self._mapping = ColumnMapping(settings.aliases)
         self._numbers = NumberParser()
         self._timestamps = TimestampParser(settings.day_first)
         self._converter = converter or LocalTimeConverter(settings.source_timezone)
+        self._order = order or RowOrderAnalyser(
+            settings.source_timezone, settings.newest_first_min_share
+        )
         self._search_rows = settings.header_search_rows
 
     def inspect(self, table: SensorTable) -> TableInspection:
         """Locate the header, map and parse the columns and convert the timestamps.
 
-        Rows recorded newest first are reversed, so that daylight-saving transitions are
-        resolved in recorded time order.
+        A table that is clearly newest first is reversed. Rows that still step back in local
+        time (clock correction, overlapping exports) are handled by the row-order repair
+        strategy: by default the rows are converted in separate monotonic segments.
 
         Parameters
         ----------
@@ -151,15 +162,16 @@ class TabularExportReader:
         if not header.is_complete:
             return with_header
         local = self._timestamps.parse(data.cells[CanonicalColumn.TIMESTAMP])
-        newest_first = _is_newest_first(local)
-        if newest_first:
+        order = self._order.analyse(local)
+        if order.newest_first:
             data = _reversed(data)
             local = local.iloc[::-1].reset_index(drop=True)
         return replace(
             with_header,
             source_rows=data.source_rows,
-            reversed_order=newest_first,
-            times=self._time_column(header.headers[CanonicalColumn.TIMESTAMP], local),
+            reversed_order=order.newest_first,
+            backward_rows=data.source_rows[order.backward_steps],
+            times=self._time_column(header.headers[CanonicalColumn.TIMESTAMP], local, order),
             temp=self._value_column(header, data, CanonicalColumn.TEMP),
             rh=self._value_column(header, data, CanonicalColumn.RH),
         )
@@ -225,40 +237,15 @@ class TabularExportReader:
             ),
         )
 
-    def _time_column(self, header: str, local: pd.Series) -> TimeColumn:
-        try:
-            conversion = self._converter.to_utc(local)
-        except ValueError as error:
-            logger.warning(
-                "Rows are not in time order (%s); converting each local time on its own and "
-                "dropping all daylight-saving rows.",
-                error,
-            )
-            return self._unordered_time_column(header, local)
+    def _time_column(self, header: str, local: pd.Series, order: RowOrder) -> TimeColumn:
+        results = [self._converter.to_utc(local.iloc[segment]) for segment in order.segments]
         return TimeColumn(
             header=header,
             local=local,
-            utc=conversion.timestamps_utc,
-            suspect=_as_bool(conversion.suspect),
-            unresolved=_as_bool(conversion.unresolved),
+            utc=pd.concat([result.timestamps_utc for result in results]),
+            suspect=np.concatenate([_as_bool(result.suspect) for result in results]),
+            unresolved=np.concatenate([_as_bool(result.unresolved) for result in results]),
         )
-
-    def _unordered_time_column(self, header: str, local: pd.Series) -> TimeColumn:
-        """Convert timestamps whose row order cannot be used for daylight-saving inference.
-
-        The distinct local times are converted in increasing order; every ambiguous or
-        nonexistent one is marked unresolved (the recorded order that would resolve it is
-        broken), so those rows are dropped.
-        """
-        present = local.notna().to_numpy()
-        distinct = np.unique(local.to_numpy()[present])
-        conversion = self._converter.to_utc(pd.Series(distinct, dtype="datetime64[ns]"))
-        lookup = np.searchsorted(distinct, local.to_numpy()[present])
-        utc = pd.Series(pd.NaT, index=local.index, dtype=conversion.timestamps_utc.dtype)
-        utc.iloc[np.flatnonzero(present)] = conversion.timestamps_utc.to_numpy()[lookup]
-        suspect = np.zeros(len(local), dtype=np.bool_)
-        suspect[present] = _as_bool(conversion.suspect)[lookup]
-        return TimeColumn(header, local, utc, suspect=suspect, unresolved=suspect.copy())
 
     def _value_column(
         self, header: HeaderMatch, data: _DataRows, column: CanonicalColumn
@@ -357,13 +344,6 @@ def _file_size(path: Path) -> int | None:
 
 def _is_blank(row: Row) -> bool:
     return all(cell is None or (isinstance(cell, str) and not cell.strip()) for cell in row)
-
-
-def _is_newest_first(local: pd.Series) -> bool:
-    """Tell whether most consecutive readable timestamps decrease (export sorted newest first)."""
-    instants = local.dropna().to_numpy(dtype="datetime64[ns]").view(np.int64)
-    steps = np.diff(instants)
-    return int((steps < 0).sum()) > int((steps > 0).sum())
 
 
 def _reversed(data: _DataRows) -> _DataRows:

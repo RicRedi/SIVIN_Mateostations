@@ -42,7 +42,7 @@ EXPECTED_RULES = (
     "numbers-parseable",
     "timestamps-parseable",
     "duplicate-timestamps",
-    "monotonic-order",
+    "backward-steps",
     "daylight-saving",
     "temperature-bounds",
     "humidity-bounds",

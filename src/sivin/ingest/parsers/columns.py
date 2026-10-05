@@ -183,6 +183,17 @@ class ParserSettings(BaseModel):
             "the legacy sampl_freq_basic.py. ISO dates (2026-01-05) are always year first."
         ),
     )
+    newest_first_min_share: float = Field(
+        0.9,
+        gt=0.5,
+        le=1.0,
+        description=(
+            "Share (0-1, dimensionless) of the steps between consecutive timestamps outside "
+            "daylight-saving hours that must go back in time for a table to be read as newest "
+            "first and reversed. The row order of the real exports is unknown (Q1); project "
+            "default [to be verified]."
+        ),
+    )
     csv_delimiter: str = Field(
         ";", min_length=1, max_length=1, description="Field delimiter of CSV exports."
     )

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from sivin.core.flags import QcFlag
-from sivin.core.timeutil import ConversionResult, LocalTimeConverter
-from sivin.ingest.parsers.columns import ParserSettings
 from sivin.ingest.parsers.portal import PortalCsvParser
-from sivin.ingest.parsers.tabular import TabularExportReader
 from sivin.ingest.validation import Severity
 
-from ..conftest import EXPORTS, PORTAL_CSV_NAME
+from ..conftest import EXPORTS
 
 DST_FILE = EXPORTS / "dst" / "MeteoData_8615620 77678271 (VUT)_20261025_120000.csv"
 
@@ -22,16 +21,6 @@ EXPECTED_UTC = [
     for k in range(12)
 ]
 AMBIGUOUS_ROWS = [4, 5, 6, 7]  # local 02:01:53, 02:32:18 (CEST), 02:02:43, 02:33:08 (CET)
-
-
-class StrictOrderConverter(LocalTimeConverter):
-    """Simulates the announced contract: a ValueError when the local times do not increase."""
-
-    def to_utc(self, local_naive: pd.Series) -> ConversionResult:
-        present = local_naive.dropna()
-        if not present.is_monotonic_increasing or present.duplicated().any():
-            raise ValueError("local timestamps are not increasing")
-        return super().to_utc(local_naive)
 
 
 def test_fall_back_gives_strictly_increasing_utc_with_flags() -> None:
@@ -48,23 +37,13 @@ def test_fall_back_gives_strictly_increasing_utc_with_flags() -> None:
     assert "0 unresolved row(s) dropped" in issue.message
 
 
-def test_converter_refusing_the_order_drops_daylight_saving_rows() -> None:
-    settings = ParserSettings()
-    reader = TabularExportReader(settings, StrictOrderConverter(settings.source_timezone))
-    result = PortalCsvParser(settings, reader=reader).parse(DST_FILE)
-    assert result.is_accepted
+def test_newest_first_file_across_fall_back(tmp_path: Path) -> None:
+    lines = DST_FILE.read_text(encoding="utf-8").splitlines()
+    reversed_file = tmp_path / DST_FILE.name
+    reversed_file.write_text("\n".join([*lines[:2], *lines[:1:-1]]), encoding="utf-8")
+    result = PortalCsvParser().parse(reversed_file)
     frame = result.series[0].frame
-    kept = [EXPECTED_UTC[k] for k in range(12) if k not in AMBIGUOUS_ROWS]
-    assert frame["timestamp_utc"].tolist() == kept
-    (issue,) = result.report.issues
-    assert "4 unresolved row(s) dropped" in issue.message
-
-
-def test_converter_refusing_unsorted_rows_still_sorts_them() -> None:
-    settings = ParserSettings()
-    reader = TabularExportReader(settings, StrictOrderConverter(settings.source_timezone))
-    path = EXPORTS / "broken" / "unsorted_rows" / PORTAL_CSV_NAME
-    result = PortalCsvParser(settings, reader=reader).parse(path)
-    assert result.is_accepted
-    assert len(result.series[0]) == 48
-    assert result.report.rules() == {"monotonic-order"}
+    assert frame["timestamp_utc"].tolist() == EXPECTED_UTC
+    suspect = [k for k, qc in enumerate(frame["qc"]) if qc & QcFlag.TIMESTAMP_SUSPECT]
+    assert suspect == AMBIGUOUS_ROWS
+    assert result.report.rules() == {"daylight-saving"}

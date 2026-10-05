@@ -315,6 +315,9 @@ class TableInspection:
         Source row numbers of data rows that end before a mapped column (cut-off lines).
     reversed_order : bool
         ``True`` if the rows were recorded newest first and were reversed by the parser.
+    backward_rows : numpy.ndarray of int64
+        Source row numbers of the rows (outside daylight-saving hours) that are earlier than
+        the row before them, after a possible reversal.
     times, temp, rh : TimeColumn, ValueColumn or None
         Parsed columns; ``None`` when the header or a required column is missing.
     """
@@ -329,6 +332,7 @@ class TableInspection:
     source_rows: RowArray = field(default_factory=_no_rows)
     short_rows: RowArray = field(default_factory=_no_rows)
     reversed_order: bool = False
+    backward_rows: RowArray = field(default_factory=_no_rows)
     times: TimeColumn | None = None
     temp: ValueColumn | None = None
     rh: ValueColumn | None = None
@@ -847,32 +851,36 @@ class DuplicateTimestampsRule(TableRule):
 
 
 @validation_rules.register
-class MonotonicOrderRule(TableRule):
-    """Timestamps should increase row by row; steps back in time are reported (WARNING).
+class BackwardStepsRule(TableRule):
+    """Rows that step back in local time are reported (WARNING with count and rows).
 
-    A table recorded newest first is reversed by the parser before this check; dropped rows
-    (no timestamp, unresolved daylight-saving time) are not considered.
+    Outside daylight-saving hours, a timestamp earlier than the one before it comes from a
+    device clock correction or from overlapping exports concatenated into one file. The file
+    is not rejected: the parser converts the rows in separate monotonic segments (see
+    :mod:`sivin.ingest.parsers.order`), sorts them by time afterwards and keeps the last of
+    repeated instants. A table recorded newest first is reversed before this check.
     """
 
-    rule_id = "monotonic-order"
+    rule_id = "backward-steps"
+
+    max_listed_rows: ClassVar[int] = 10
+    """At most this many row numbers are written into the message."""
 
     def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
         """Yield a WARNING for backward steps (see :meth:`TableRule.check_table`)."""
-        if table.times is None:
+        count = len(table.backward_rows)
+        if not count:
             return
-        utc = table.times.utc
-        valid = utc.notna().to_numpy() & ~table.times.unresolved
-        instants = utc.to_numpy()[valid]
-        backward = np.zeros(table.n_data_rows, dtype=np.bool_)
-        backward[np.flatnonzero(valid)[1:]] = instants[1:] < instants[:-1]
-        count = int(backward.sum())
-        if count:
-            yield self._issue(
-                Severity.WARNING,
-                f"{count} row(s) are earlier than the row before them; rows are sorted by time.",
-                table.first_row(backward),
-                table.name,
-            )
+        listed = ", ".join(str(row) for row in table.backward_rows[: self.max_listed_rows])
+        more = ", ..." if count > self.max_listed_rows else ""
+        yield self._issue(
+            Severity.WARNING,
+            f"{count} backward step(s) in time (clock correction or overlapping exports?) at "
+            f"row(s) {listed}{more}; converted in {count + 1} monotonic segments and sorted "
+            "by time.",
+            int(table.backward_rows[0]),
+            table.name,
+        )
 
 
 @validation_rules.register

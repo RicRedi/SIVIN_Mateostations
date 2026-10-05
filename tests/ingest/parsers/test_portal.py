@@ -129,8 +129,9 @@ def test_unsorted_rows_are_sorted_with_warning() -> None:
     result = PortalCsvParser().parse(BROKEN / "unsorted_rows" / PORTAL_CSV_NAME)
     frame = only_series(result)
     (issue,) = result.report.issues
-    assert (issue.rule, issue.row) == ("monotonic-order", 9)
-    assert issue.message.startswith("2 row(s)")
+    assert (issue.rule, issue.row, issue.severity) == ("backward-steps", 9, Severity.WARNING)
+    assert issue.message.startswith("2 backward step(s) in time")
+    assert "at row(s) 9, 34; converted in 3 monotonic segments" in issue.message
     assert len(frame) == 48
     assert frame["timestamp_utc"].is_monotonic_increasing
 

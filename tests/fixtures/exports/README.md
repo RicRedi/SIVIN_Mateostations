@@ -36,6 +36,6 @@ Regenerate (from the project root):
 | `broken/truncated_xlsx/` | `MeteoData_8615620 77678271.xlsx` | first half of the valid workbook | ERROR `file-readable` |
 | `broken/truncated_csv/` | portal CSV name | last line cut after the temperature | WARNING `short-rows` |
 | `broken/duplicated_rows/` | portal CSV name | a row repeated twice, another repeated with a different value | WARNING `duplicate-timestamps` |
-| `broken/unsorted_rows/` | portal CSV name | two pairs of neighbouring rows swapped | WARNING `monotonic-order` |
+| `broken/unsorted_rows/` | portal CSV name | two pairs of neighbouring rows swapped | WARNING `backward-steps` |
 
 "portal CSV name" is `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`.
