@@ -425,3 +425,101 @@ Lint and typecheck: clean. Vitest: 12 files, 96 tests passed; lines 99.56 %, bra
 - **Screenshots** (`docs/wp_log/img/`): consistent with the description. Tiles are blank, there
   is a deployment marker on 3 Jun, the demo badge is visible, and the map legend covers about half
   of the phone map.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewer: independent reviewer agent, 2026-10-05. Head `1c0c8ac` (fix commits `c05ac35`, `1c0c8ac`).
+
+**Gates observed.** I ran `cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build`
+and it exited 0.
+- Lint and typecheck are clean.
+- Vitest: 14 files, 128 tests passed, line coverage 99.4 %. `App.ts` is no longer excluded from coverage.
+- Build: JS 246.6 kB (gzip 82.0 kB).
+
+**Scope.** Only `web/**`, `docs/web.md` and `docs/wp_log/**` changed. In the round-1 review, only
+the Status cells of my table were edited.
+
+**Round-1 statuses verified.** I used a headless Chromium script (`drive3.mjs`) and read the code.
+
+- **major, bad URL dates: fixed.**
+  - These hashes all fall back to `w=7d`, with no page error and the chart rendered:
+    - `to=2026-13-45`
+    - `0001-01-01…9999-12-31&r=hourly`
+    - `y=0000`
+    - `from=2026-02-29` (2026 is not a leap year)
+    - `s=<img>&w=lol&r=xx&lang=zz`
+    - 5,000 bogus ids
+  - `2000-01-01…2100-12-31&r=raw` is capped to daily.
+  - 40 rapid `hashchange`s mixing valid and invalid hashes: no page errors, one uPlot instance
+    at the end, and the hash, title and legend agree with the last state.
+- **Unknown ids in the hash after a `hashchange`: fixed.** The queued, non-re-entrant `Store` works,
+  and `HashSync` writes the current state.
+- **Events 404 or one failing month: fixed.**
+  - A forced 404 on `77680921/raw/2026-07.json` gives one per-sensor `role=alert` line, and
+    77678271 still plots.
+  - A 404 on the events file, or an unknown event type, gives only a `console.warn`, and the chart
+    renders.
+  - When every sensor fails, the failure line is shown and the "no data" message is hidden.
+- **MISSING hides valid values: fixed for display.** `DISPLAY_EXCLUDE_MASK` = 311 & ~1 = 310. The
+  plan's default mask of 311 remains for indices. Per-variable QC is now owner question 6, which
+  is acceptable.
+- **UTC raw months: accepted.** The interpretation is documented in `docs/web.md` and is owner
+  question 5. Acceptable.
+- **Map markers: fixed.**
+  - The markers have `tabindex=0`, `role=button`, a name with the value and stale state, and `aria-pressed`.
+  - Enter selects, Ctrl+Space adds to the comparison, plain Space selects, and the page does not scroll.
+  - Focus is shown by a 4 px accent stroke (`:focus-visible`).
+- **`role=img`: fixed.** It is now on the canvas only, and the plot host has no role.
+- **Colour collisions: fixed.** Colours are assigned in selection order. With 4 sensors all
+  strokes are distinct, and a re-selected sensor takes the free slot.
+- **Line contrast: fixed.** I recomputed every ratio: 4.36–8.56:1, stale fill 4.24:1, all
+  ≥ 3:1. The map scale has no near-white class, and every class contrasts ≥ 2.3:1 with the
+  black marker outline.
+- **Concrete window: fixed.** The "Zobrazeno … · resolution" line shows the window actually
+  drawn, including the 7 d fallback after a bad URL.
+- **Nits:**
+  - Hourly means are now stamped at `h+1800`: fixed.
+  - The lenient readings are listed as owner question 7: accepted.
+  - Bin bound: fixed (URL years limited to 2000–2100, explicit caps of 31 d raw / 92 d hourly).
+  - Fixture: fixed (±3 s jitter; the regenerated fixture still validates in the tests).
+  - `App.ts` coverage: fixed (jsdom test with stub views; `SeriesChart` was split out into `EventMarkers`).
+- **Mobile:** the legend is collapsed by default at 390 px and there is no horizontal scroll at
+  390 px. The screenshots were regenerated, and the desktop one shows the new scale and the
+  shown-window line.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | web/src/ui/App.ts:83-90 | A `hashchange` that changes the language and also carries an unknown sensor id leaves the UI in the old language | open |
+| nit | web/src/domain/dailyColumnSeries.ts:53 | Daily means are still drawn at local midnight, while hourly means are now centred | open |
+| nit | web/src/ui/TimeWindowControl.ts (renderShownWindow) | The shown end is the exclusive end | open |
+| nit | web/src/state/Store.ts:47-62 | A throwing listener leaves the remaining queued changes for the next `update` | open |
+
+**Details**
+
+1. **minor: language lost on a mixed `hashchange`.**
+   - Reproduced from `#s=77678271&w=7d&lang=cs` by setting `#s=77678271,99999999&w=7d&lang=de`.
+     The hash ends as `…&lang=de`, but `<html lang>`, the language select and all texts stay
+     Czech.
+   - Cause: App's listener sees S1 (unknown id, `lang=de`), queues the filtered S2 and returns
+     early. Then S2 arrives with `previous = S1`, so `state.language !== previous.language` is false
+     and `i18n.setLanguage` never runs. (The same logic was there in round 1.)
+   - Fix: compare against `this.i18n.language` instead of `previous.language`, or do not return
+     early when filtering ids.
+   - This is rare (the URL has to be hand-edited) and the UI recovers on the next language change,
+     so it is minor.
+2. **nit: daily stamps.** Daily means are drawn at local midnight (the start of the day), while
+   hourly means are now centred. For consistency, consider noon.
+3. **nit: exclusive end.** A custom range of 1–7 Jun reads "1. 6. 2026 0:00 – 8. 6. 2026 0:00".
+   That is correct, but readers may expect 7 Jun. Optional: show the last included day.
+4. **nit: `Store` after a throwing listener.** The `finally` resets `notifying` but keeps the
+   queue, so a throwing listener delays the remaining queued changes until the next `update`.
+   Optional hardening.
+
+**Deviations assessment, round 2.**
+- The new point caps for an explicit resolution are sensible; the shown-window line tells the
+  user when a coarser resolution was used.
+- `no-console` now allows `warn`, for the events warning sink. This is acceptable. `console` is
+  injected as a `WarningSink`, not called from the domain.
+- The remaining open items are owner questions 5, 6 and 7, and none blocks the merge.
