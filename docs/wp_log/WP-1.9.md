@@ -210,7 +210,133 @@ In `/home/user/wt/wp-1.9`:
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, base `2f08446`, head `81ff791`.
+
+### Gates observed
+
+In `/home/user/wt/wp-1.9`:
+- `make lint`: ruff check clean, `200 files already formatted`. `make type`: `Success: no issues
+  found in 118 source files`. `make test`: `1388 passed`.
+- `make cov`: TOTAL 99 % (7541 statements, 3 missed). Every module this WP changed is at 100 %
+  (statements and branches).
+- Web: `npm ci`, `npm run lint` clean, `npm run typecheck` clean, `npm test` 15 files / 138 tests
+  passed, `npm run build` OK.
+- Merge with `wp/1.8-offsite-log` (`c458c3e`): `git merge-tree --write-tree` is clean (tree
+  `b602ac7`). The tree was extracted to `/tmp/claude-0/review-1.9/merged`, and there ruff check
+  and `ruff format --check src tests` are clean, mypy reports `Success: no issues found in 127
+  source files`, and pytest gives `1479 passed, 19 skipped`. The 19 skipped tests are
+  `test_gitignore`, which needs a git checkout. The web gates on the merged tree are also green:
+  lint, typecheck, 152 tests, build. WP-1.8 code builds no series from selected columns, so it
+  does not drop the new columns.
+
+### What I verified with my own scripts (`/tmp/claude-0/review-1.9/`, outside the repo)
+
+- **Full real export** (3520 rows): accepted with no findings. All six columns are read with no
+  NaN. `precip_mm` is 0.0–0.9, `precip_total_mm` 323.0–326.4 and `battery_v` 3.0–3.7. In all 7
+  rain rows, the interval value equals the counter increase within 0.1 mm. The only difference
+  is 0.3 vs 0.4 mm at 2025-12-19 13:07:16 UTC. With the defaults, `precip_counter` and
+  `precip_range` report nothing, and `battery` reports one event (2 readings at 3.0 V,
+  2025-07-30).
+- **Storage, mixed scenario.** I wrote an old-layout file `2025.csv` (60 real rows, T/RH only,
+  source `old`), read it (aux columns NaN), then appended the full real series. The result:
+  `new_rows=3460, filled_values=180` (60 rows × 3 columns), no conflicts. Every value of all
+  five columns equals the parsed series (`np.array_equal(..., equal_nan=True)`), so the merge is
+  **lossless**. A repeated append writes no file and leaves the SHA-256 unchanged. Read →
+  write is byte-identical for both rewritten partitions. The old file was rewritten in the new
+  layout only because data changed, as `docs/storage.md` says.
+- **Schema.** A frame without the aux columns gets NaN float64 columns, and the caller's frame
+  is not mutated. `from_records` without the aux keyword arguments gives NaN. `with_values`
+  keeps the flags and T/RH, refuses `temp_c`, and refuses `inf`.
+- **Parsers (synthetic CSVs).** These variants are mapped: `srazky [MM]`, `CELKOVÉ SRÁŽKY` and
+  `Nabiti baterie(V)`. `Baterie (%)`, `Precipitation (in)` and `Srážky (l/m2)` each drop only
+  that column, with an `optional-columns` WARNING. Two precipitation headers drop that column.
+  Unparseable aux cells give WARNINGs and NaN, and the file is accepted. A file without aux
+  columns is accepted. Short rows without the battery cell give a `short-rows` WARNING and NaN.
+  Reordered columns are read correctly.
+- **QC.** A reset (10.4 → 0.3) is one info event with no mismatch. A decrease of 0.1 is neither
+  a reset nor a mismatch. A difference of 0.1 from rounding is accepted, a difference of 0.2
+  is a mismatch, and a step after a gap is not compared. `set_aside` changes only `precip_mm`,
+  and `qc` and `complete_mask` are unchanged. All three checks return all-zero flags.
+  Rounding argument: both columns are multiples of 0.1 mm and the true combined rounding error
+  is below 0.15 mm, so a rounded difference can only be 0 or 0.1. The tolerance of 0.15 mm
+  therefore separates rounding from a real mismatch.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `src/sivin/core/daily.py:185-189` | `precip_sum_mm` and `battery_min_v` are taken over `complete_mask(exclude_mask)`, i.e. only rows with valid T **and** RH. Rain in a row with missing T/RH or with a T/RH-only flag (`SPIKE`, `OUT_OF_RANGE`, `STUCK`, `MISSING`) is lost. A low battery reading in a row whose T/RH dropped out (the typical symptom of a failing battery) is hidden. This contradicts the spirit of Q9 ("the validity rule concerns T and RH only"). | open |
+| minor | `src/sivin/ingest/validation.py:1225`, `:1302` | Aux values outside the gross bounds are kept (deviation 3). A battery column without a unit that holds percent (`Battery` = 85) is stored as `battery_v = 85.0` with only a `battery-bounds` WARNING, and `BatteryCheck` never reports it (85 > 3.3). | open |
+| minor | `src/sivin/quality/checks/precip.py:140` | The `precip_out_of_range` event detail says "set aside, temperature and humidity stay valid". Nothing applies `set_aside` in the pipeline yet (until WP-1.7), so the events file would claim a removal that did not happen, and the value reaches `precip_sum_mm`. | open |
+| minor | `src/sivin/quality/checks/battery.py:68` | No hysteresis and no minimum gap between events. With 0.1 V resolution and diurnal voltage swings, a battery near 3.3 V (3.3 ↔ 3.2) gives one `low_battery` event per dip, possibly daily, which is noise in `events/<id>.json`. | open |
+| minor | `web/src/contract/validateSeries.ts:62` (and the daily counterpart) | An optional field that is present but malformed (wrong length, a non-number, `null` instead of an array) makes the whole raw month or daily file fail, so its T/RH are not shown either. The owner approved "tolerant reading of optional contract fields". | open |
+| minor | `MIGRATION_PLAN.md` §2.6 (line ~453), §4 WP-1.9 | The plan's `daily.json` example and the WP-1.9 task text do not mention `precip_sum_mm`/`battery_min_v`, which this WP adds to the web contract. `docs/web.md` (outside scope) does not mention the optional fields either. The plan text is consistent otherwise (§2.5 table and store header match the code). | open |
+| nit | `src/sivin/storage/merge.py:218` | When only precipitation is filled into an old-layout row, the row's `source` moves to the new export, so the T/RH of that row are attributed to an export that did not change them. This is the existing WP-1.4 rule, but after WP-1.9 it fires for every old row on the first import. | open |
+| nit | `src/sivin/ingest/parsers/columns.py:235` | `precip_units` accepts only `mm`. `l/m²` (equal to mm) would drop the column. Consider adding it if other devices use it (not observed). | open |
+| nit | `web/tests/contract.optional.test.ts` | The test pins the message `$.battery_min_v must have 2 items like "t"` for a daily file, which is keyed by `date`. The message comes from the existing `FieldReader.list`. | open |
+
+### Details and suggested fixes
+
+**Major: daily auxiliary aggregates over T/RH-valid rows.** Synthetic check: 6 samples on one
+local day, `temp_c = [1, NaN, 3, 4, 5, 6]`, `precip_mm = [1, 2, 3, 0, 0, 0]`,
+`battery_v = [3.6, 3.1, 3.6, …]`. `DailyWeather.from_series` gives `precip_sum_mm = 4.0`
+(expected 6.0) and `battery_min_v = 3.6`, which hides the 3.1 V reading. The worker followed
+the brief and raised it as open question 1, so the decision belongs to the orchestrator and the
+owner. My assessment: rain does not stop being rain because the humidity sensor glitched. The
+only rows that must be excluded are those **not at the site** or excluded by hand. Proposal:
+
+- `from_series` takes a second mask `auxiliary_exclude_mask`. Its project default is
+  `PRE_DEPLOYMENT | MANUAL_EXCLUDE`, i.e. location and manual flags only, not
+  `MISSING`/`SPIKE`/`OUT_OF_RANGE`/`STUCK`, which describe T/RH.
+- `precip_sum_mm` = sum of present `precip_mm` over `valid_mask(auxiliary_exclude_mask)`,
+  with NaN if there is none.
+- `battery_min_v` = minimum over all present `battery_v` of the day. Battery is a property of
+  the device, so it should not depend on the location either. At most, use the same auxiliary
+  mask.
+- The rain sum also needs its own completeness measure. A day with 10 % T/RH coverage now
+  shows a small "sum" with nothing to mark it partial. Add `precip_n_samples` (or a
+  `precip_coverage`), or document that the counter difference over the day is the robust
+  alternative (follow-up, see *Out of scope*, gap filling).
+- Document it in the `DailyWeather` docstring, `docs/architecture.md` and
+  `docs/quality-control.md`.
+
+If the owner explicitly confirms the current semantics, this finding drops to resolved.
+
+**Minor: battery percent column.** Input: header `Battery` with values `85`. Result: stored
+`battery_v = 85.0`, a WARNING only. Fix: since the aux bounds rules can never reject, let them
+**read out-of-bounds aux values as missing** (with the WARNING saying so), or narrow the
+battery alias without a unit. The same idea would apply to negative precipitation outside the
+gross bounds.
+
+**Minor: event text.** Make the detail neutral (e.g. "…outside […] mm per interval;
+temperature and humidity unaffected"), or let `set_aside` say what it removed. Alternatively,
+state in the hand-off that WP-1.7 must apply `set_aside` before any events are published.
+
+**Minor: battery flapping.** Merge low runs separated by less than a configurable
+`merge_gap_s` (e.g. 24 h, project default [to be tuned]), or use hysteresis (`recover_v`).
+
+**Minor: web tolerance.** In `readOptionalColumns`, catch a `ContractError` for an optional
+field, drop that field and warn on the console. Required columns stay strict.
+
+### Deviations assessment
+
+1. **`quality/events.py` outside the Files scope.** Accepted. The change is four purely
+   additive enum members, and a parallel enum would break the typing of `QualityEvent.kind`.
+   `git merge-tree` with WP-1.8 is clean, and the merged gates are green. The owner should note
+   that these `type` values are not yet in the web's `SENSOR_EVENT_TYPES` (WP-3.2 must filter
+   or extend them).
+2. **Aux problems never reject a file.** Accepted. This is consistent with Q9. Verified: the
+   column is dropped (unit or ambiguity) or its cells become NaN (unparseable), with a WARNING
+   in the validation report. Note that WARNING-severity issues are logged at INFO by the
+   existing `InputValidator` convention. They reach the report and the run record, not the
+   WARNING log level.
+3. **Out-of-bounds aux values kept.** Partly accepted. Precipitation is covered by
+   `precip_range` once wired. For battery, see the minor finding above.
+4. **Set aside as NaN, not a flag.** Accepted as a design: it keeps the frozen `QcFlag`
+   contract, and `with_values` is restricted to aux columns (verified). Risk: until WP-1.7
+   wires it, nothing applies it. This is stated in the hand-off.
+5. **`DAILY_COLUMNS` unchanged, new `ALL_DAILY_COLUMNS`.** Accepted. Existing callers
+   (`frame[list(DAILY_COLUMNS)]` in the thermal fixtures, ripening, winter freeze) keep working
+   (full suite green). Frames without the aux columns construct a `DailyWeather` with NaN.
