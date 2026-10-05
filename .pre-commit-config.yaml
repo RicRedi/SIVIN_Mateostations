@@ -1,0 +1,34 @@
+# Optional local hooks: `.venv/bin/pre-commit install`. CI runs the same gates via `make`.
+# The legacy scripts and configs stay untouched until WP-5.1/WP-5.2 replace them.
+exclude: |
+  (?x)^(
+    (chrome_driver|generate_animation|one_variable_plot|rolling_stats|sampl_freq_basic
+     |two_variable_plot|vineyard_analyst)\.py
+    |(vineyard_analyst|map_config)\.yaml
+    |config/(one|two)_variable_plot\.yaml
+    |sensor_location\.gpx
+  )$
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy --strict (make type)
+        entry: make type
+        language: system
+        pass_filenames: false
+        types: [python]
