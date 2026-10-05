@@ -192,7 +192,96 @@ Web (in `web/`, Node 22):
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED  (round 1)
+
+Reviewer: independent Claude reviewer, 2026-10-05. Diff reviewed: `11f71ef...5500bec`.
+
+### Gates observed (run by the reviewer in `/home/user/wt/wp-1.8`)
+
+- `make lint type test` → ruff check and format clean, mypy --strict clean, **1365 passed** (exit 0).
+- `make cov` → 1365 passed, total 99 %; `registry/offsite.py` 99 % (1 partial branch),
+  `quality/checks/offsite.py` 100 %, `quality/pipeline.py` 100 %, `quality/events.py` 100 %,
+  `quality/deployment.py` 99 % (lines 234, 678, WP-1.5 code).
+- `cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build` → all green,
+  14 files / **142 tests passed**, build OK.
+- `npm run fixture` reproduces the committed `web/public/data/` byte for byte (deterministic).
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `sensors/offsite_log.yaml:24-38`, `src/sivin/registry/offsite.py:635` | Following the header instruction ("remove the leading `# `") produces a file with two top-level `entries:` keys; `yaml.safe_load` keeps the last one (`entries: []`) and the log loads **silently empty**. Duplicate keys inside an entry are also silently resolved (last wins). The example also contains an open `service` period for 77678271 that would exclude all its data if uncommented as is. | open |
+| minor | `src/sivin/registry/offsite.py:281-286`, `docs/sensors.md` (*Format* table) | `to:` with no value (YAML null) is accepted as an open period, the same as `to: null`. The docs say "the key must be written even then, so an open end is never an accident", but a half-filled entry (`to:` left blank to fill in later) silently excludes every sample from `from` onwards. | open |
+| minor | `src/sivin/registry/offsite.py:199-205, 685-688` | Several messages name entry and field but do not say how to fix it: an unquoted serial (`sensor: 77799986`, YAML int) → "expected a sensor name as text, got int" (the int could simply be accepted, or the message could say "put the serial in quotes"); missing key → bare pydantic "Field required" (for `to` it should say "write `to: null` if the sensor is still off site"); a typo key → "Extra inputs are not permitted" without the list of allowed keys; unknown sensor → "is not in the registry." without "check the serial or add the sensor to sensors/sensors.geojson". Most of these are explained in the `docs/sensors.md` table, but the brief requires the message itself to say it. | open |
+| minor | `src/sivin/registry/offsite.py:294-298, 529-541` | `from >= to`, overlap and open-period messages print the times in UTC (`2025-12-17T11:00:00Z`) while the owner wrote local time (`2025-12-17 12:00`); with two overlapping entries the owner has to convert back to find them. Print the times in the log's zone (or the original text) as well. | open |
+| minor | `web/src/contract/validateMeta.ts:104-106` | `t_end` on a point event is a hard contract error that drops the **whole** events file of the sensor. A SiteBuilder that serialises `QualityEvent.end_utc` uniformly (`t_end: null` on every event) would lose all markers. The owner approved tolerant reading of optional contract fields (§0.5); accept `t_end: null` (or ignore `t_end`) on point events, or state the strict rule explicitly for WP-3.2. The brief asked for "only allowed for off_site", so this is a contract-level choice for the owner. | open |
+| minor | `src/sivin/quality/deployment.py:495` | The advisory warning gives the period in UTC (`2026-04-13 23:.. UTC`), but the log is written in local time; the owner must convert before adding the entry. Give local time (or a ready-to-paste entry with offset). | open |
+| nit | `src/sivin/registry/offsite.py:532, 538` vs `:688` | Two index formats in one error report: `entries.0.from` (pydantic) and `entries[0].from` (cross-entry rules), both 0-based. Documented in `docs/sensors.md`, but one 1-based form ("entry 1 (entries[0])") would be friendlier for a non-programmer. | open |
+| nit | `src/sivin/registry/offsite.py:170-179` | For a nonexistent local time (spring forward) the message suggests both `+02:00` and `+01:00`; both are valid instants (01:30 CET / 03:30 CEST), which is confusing. The docs advise "use 03:00"; the message could say the same. | open |
+| nit | `web/src/ui/EventMarkers.ts:166-173` | Bands of several sensors with the same period put their handles on the same x position (one hides the other visually; both stay focusable). All bands have the same grey, so which sensor a band belongs to is only in the tooltip. Acceptable for now. | open |
+
+Details of the major finding (reproduced with a throw-away script outside the repo):
+
+- Input: the committed `sensors/offsite_log.yaml` with the example lines uncommented as instructed.
+  Result: `OffSiteLogStore().loads(...)` returns `OffSiteLog(periods=0)`, no error, no warning.
+- Input: `entries:` with one entry followed by `entries: []` → 0 periods. An entry with two
+  `from:` keys → the second one is used silently.
+- Suggested fix: load with a `yaml.SafeLoader` subclass that raises on duplicate mapping keys
+  (message: "key 'entries' appears twice (line N); keep one list"), test it; and restructure the
+  commented example so uncommenting cannot duplicate the key (e.g. `entries: []` replaced by
+  `entries:` with the example items commented *under* it, plus a line telling to delete `[]`).
+  Use a closed period in the example or mark the open one clearly as "example only".
+
+Verified correct (independent scripts, synthetic data):
+
+- Time parsing: CRLF, UTF-8 BOM, seconds and fractions, `T` or space, `+01:00` / `Z`,
+  unquoted YAML datetimes with and without offset, date-only (clear error), Czech
+  `17.12.2025 12:00`, `2025/12/17`, single-digit hour, month 13, 30 Feb, `24:00` (all rejected with
+  an example of the right format); ambiguous (`2025-10-26 02:00`/`02:30`, also in `to`) and
+  nonexistent (`2026-03-29 02:00`/`02:30`) local times rejected with the field named; `03:00` on the
+  fall-back day accepted. Several errors in one entry are all reported at once.
+- Sensor names: serial, portal name, GPX name `77799986 (VUT)` and a unique legacy short name
+  resolve via `SensorRegistry`; unknown and unparsable names rejected.
+- Rules: `from == to`, `from > to`, duplicate entries, overlaps (also non-adjacent), two open
+  periods, open not last → errors; touching periods accepted; empty file, comment-only file,
+  `entries:` without value and a misspelt top key → one clear error pointing to `entries: []`.
+- `OffSiteCheck` across the autumn change: a period `02:30+02:00 – 02:30+01:00` on 2026-10-25 flags
+  exactly the two half-hour samples inside it; an open period flags to the end; a period of
+  another sensor flags nothing; periods fully outside the data give no flag and no event; a
+  period ending exactly at the first sample is not reported (half-open), one starting at the last
+  sample flags only that sample.
+- Advisory detector: never sets flags by default (pipeline test and own run on 4 seeds of
+  office 3 d / vineyard 10 d / service 3 d / vineyard 10 d: `PRE_DEPLOYMENT` count 0, two
+  `unlogged_off_site` warnings). Coverage with merged touching periods and `log_tolerance_s`
+  checked by reading `LoggedCoverage` and its tests (partial logging → warning, logged within 6 h →
+  no warning).
+- Enforce mode: the only change to the WP-1.5 tests is `mode=enforce`; all their assertions are
+  unchanged and pass, so the WP-1.5 flagging behaviour is preserved. The pipeline now cuts the
+  deployed stretches from the combined `PRE_DEPLOYMENT` mask (log + detector), which equals the
+  old behaviour when there is no log.
+- New `STEP` flags without a log entry: on the 4 seeds above exactly 3 `STEP` rows (the three
+  regime boundaries) and no `SPIKE`/`STUCK` inside the office stays; `STEP` is informative (not
+  excluded). Expected consequence of the owner decision, documented in `docs/quality-control.md`.
+- Web: `off_site` contract validation (closed/open/missing/invalid `t_end`, `t_end <= t`),
+  `eventInWindow` overlap semantics, band clipping and open periods, `withoutBands` (explicit
+  `null` only for the sensor of the band, other sensors get `undefined` in `alignSeries` and keep
+  `spanGaps: false` semantics, i.e. their lines continue). XSS: `detail` reaches the DOM only
+  through `setAttribute('aria-label' | 'data-tip')` and CSS `attr()`; no `innerHTML` anywhere in
+  `web/src` → not injectable. Handles are `<button>`s with an accessible name and focus tooltip.
+- Docs: an owner can add an office, service and still-off-site entry from `docs/sensors.md`
+  alone; the validation table matches the real messages. Missing there: the duplicate-key trap
+  above and the `to:`-blank behaviour.
+
+### Deviations assessment
+
+- `src/sivin/quality/events.py` (3 enum members): necessary, the enums are closed; minimal and
+  does not collide with WP-0.2's scope. Accept.
+- `web/src/i18n/{cs,de,en}.ts` (2 keys): necessary for the translated label. Accept.
+- `web/src/app/ChartDataLoader.ts` (filter via `eventInWindow`): necessary, otherwise a period
+  that starts before the window would be dropped. Accept.
+- Inline style of the band handle: acceptable because `styles.css` is out of scope; the proposed
+  `.event-marker--off-site` class in *Out of scope* is the right follow-up.
+- `to` required, `note` optional, events only for periods overlapping the series, advisory mode
+  hiding transitions/`deployment_mismatch`: reasonable and documented. Note that "`to` required"
+  does not prevent an accidental open end (minor finding above).
+- `docs/web.md` is also in WP-0.2's Files scope; expect a (textual) merge conflict there.
