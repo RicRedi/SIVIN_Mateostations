@@ -7,7 +7,9 @@ MIGRATION_PLAN §2.4) override detection only near themselves. Guiding principle
 do not exclude data. :class:`KnownDeploymentReconciler` applies these rules:
 
 1. a detected deployment within the tolerance of a known time is moved to the known time
-   (source ``registry``, confidence 1);
+   (source ``registry``, confidence 1); if the known time is later, the samples in between
+   (classified outdoor by detection) become ``PRE_DEPLOYMENT`` and a warning names the
+   excluded duration;
 2. a detected deployment with no known time within the tolerance is still applied, with a
    ``deployment_mismatch`` warning (e.g. a service visit missing in the registry);
 3. a known time *inside* the detected office stay before the first deployment ends that stay
@@ -177,6 +179,16 @@ class KnownDeploymentReconciler:
             interval = replace(
                 interval, end_utc=known_t, deployment=_registry_event(known_t, detail)
             )
+            if known_t > detected.t_utc:
+                warnings.append(
+                    _warning(
+                        known_t,
+                        f"known deployment {-offset_h:.2f} h after the detected one: "
+                        f"{-offset_h:.2f} h of data classified as outdoor become "
+                        "PRE_DEPLOYMENT (registry is ground truth)",
+                        EventSource.REGISTRY,
+                    )
+                )
         else:
             what = "service visit" if interval.retrieval is not None else "deployment"
             warnings.append(

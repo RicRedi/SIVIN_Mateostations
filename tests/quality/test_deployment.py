@@ -10,6 +10,7 @@ from tests.quality.synthetic import OFFICES, SENSOR, SyntheticSensor, Trace, Wea
 
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
+from sivin.quality.boundaries import TransportSettings
 from sivin.quality.deployment import DeploymentDetector, DeploymentResult, DeploymentSettings
 from sivin.quality.events import DeploymentEvent, EventKind, EventSource, QualityEvent, Severity
 from sivin.quality.timeline import IndoorInterval, KnownDeploymentReconciler, indoor_mask
@@ -83,12 +84,23 @@ class TestOfficeThenVineyard:
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], list(trace.boundaries))
 
     @pytest.mark.parametrize("seed", range(4))
-    def test_car_transport_counts_as_pre_deployment(self, seed: int) -> None:
+    def test_car_transport_counts_as_pre_deployment_when_enabled(self, seed: int) -> None:
         trace = _sensor(seed).trace([("indoor", 3), ("car", 1.5 / 24, 35.0), ("outdoor", 12)])
-        result = DeploymentDetector().detect(trace.series())
+        settings = DeploymentSettings(transport=TransportSettings(enabled=True))
+        result = DeploymentDetector(settings).detect(trace.series())
         arrival = trace.boundaries[1]
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], [arrival])
         assert result.pre_deployment[trace.boundaries[0] : arrival].all()
+
+    @pytest.mark.parametrize("seed", range(4))
+    def test_car_transport_stays_outdoor_by_default(self, seed: int) -> None:
+        # Trimming is off by default: no vineyard sample is lost, the car rows may stay outdoor.
+        trace = _sensor(seed).trace([("indoor", 3), ("car", 1.5 / 24, 35.0), ("outdoor", 12)])
+        result = DeploymentDetector().detect(trace.series())
+        assert _kinds(result) == [EventKind.DEPLOYMENT]
+        deployed = _position(trace, result.transitions[0])
+        assert trace.boundaries[0] - 1 <= deployed <= trace.boundaries[1]
+        assert not result.pre_deployment[trace.boundaries[1] :].any()
 
     def test_event_detail_comes_from_local_windows(self) -> None:
         trace = _sensor(1).trace([("indoor", 3), ("outdoor", 10)])
@@ -221,8 +233,7 @@ class TestKnownDeployments:
         trace = self._trace()
         known = (trace.timestamp(trace.boundaries[0]) + 2 * HOUR).floor("s")
         result = DeploymentDetector().detect(trace.series(), [known.to_pydatetime()])
-        (deployment,) = result.events
-        assert isinstance(deployment, DeploymentEvent)
+        (deployment,) = result.transitions
         assert (deployment.t_utc, deployment.source, deployment.confidence) == (
             known,
             EventSource.REGISTRY,
@@ -231,6 +242,18 @@ class TestKnownDeployments:
         assert "detected -2.00 h from it" in deployment.detail
         first_outdoor = self._first_outdoor(trace, known)
         assert np.flatnonzero(result.pre_deployment).tolist() == list(range(first_outdoor))
+        # Registry is ground truth, but excluding data classified as outdoor is warned about.
+        (warning,) = result.warnings
+        assert warning.kind is EventKind.DEPLOYMENT_MISMATCH
+        assert warning.t_utc == known
+        assert "2.00 h of data classified as outdoor become PRE_DEPLOYMENT" in warning.detail
+
+    def test_known_time_earlier_than_detection_does_not_warn(self) -> None:
+        trace = self._trace()
+        known = trace.timestamp(trace.boundaries[0]) - 2 * HOUR
+        result = DeploymentDetector().detect(trace.series(), [known])
+        assert result.warnings == ()
+        assert [t.t_utc for t in result.transitions] == [known]
 
     def test_mismatch_beyond_tolerance_warns_and_keeps_detection(self) -> None:
         trace = self._trace()

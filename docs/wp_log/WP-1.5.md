@@ -197,6 +197,16 @@ Edge cases (s8): empty, 1 row, 5 rows, all NaN, all out of range, temperature on
   for both variables (fog, inversion).
 - **Generator:** see the acceptance table above.
 
+## Follow-up after review round 2 (approved)
+
+- Transport trimming is a setting, `transport.enabled`, default **off** (it can cut real
+  vineyard data); trade-off documented; tests cover both settings. The measured car offsets in
+  the round-2 table above were taken with trimming on.
+- A registry time later than the detected deployment still moves the boundary (registry is
+  ground truth) but now emits a `deployment_mismatch` warning with the excluded duration.
+- Limitations extended (unrecognised offices, steady-humidity assumption, summer offices,
+  correlated votes, fog and stuck temperature); open minors listed under *Open questions*.
+
 ## What did not work / what was not verified
 
 - **No real data.** Thresholds are project defaults and are not tuned; the detector and the
@@ -252,6 +262,23 @@ Edge cases (s8): empty, 1 row, 5 rows, all NaN, all out of range, temperature on
   it should be taken from `time.expected_interval_s` to keep one source.
 
 ## Open questions for the owner
+
+Open minors after review round 2, for the owner to tune with real exports (Q1) and known
+deployment dates (Q3); all are documented in `docs/quality-control.md` → *Limitations*:
+
+- offices not recognised and no warning raised: humid basement (RH ≈ 80 %), strong night
+  setback (16 → 22 °C) — `indoor_max_rh_pct`, `indoor_max_daily_spread_c`;
+- the "steady humidity" assumption: dry-overcast weather produces false service visits
+  (reviewer's second generator: 0.30 per sensor-year normally, 3.5 per sensor-year and up to
+  28 days excluded in a dry-overcast stress variant) — `indoor_max_rh_spread_pct`;
+- summer offices merging with overcast days, ending in `unconfirmed_transition` (office rows
+  unflagged);
+- the 2-of-4 votes are two correlated pairs (`contrast.min_votes`);
+- the fog exemption hides a temperature sensor stuck during fog (`rh_saturation_pct`,
+  `saturation_share`);
+- whether to enable transport trimming (`transport.enabled`, off by default);
+- registry times later than detection exclude up to `known_tolerance_s` with a warning.
+
 
 1. **Q3:** known deployment dates and any service visits per sensor are needed to tune the
    absolute and relative thresholds and `known_tolerance_s`.
@@ -647,13 +674,13 @@ exclusions.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | `src/sivin/quality/regime.py:77-101`, `docs/quality-control.md` (Limitations) | Some offices are missed silently | open (owner, Q1/Q3) |
-| minor | `src/sivin/quality/regime.py:93-101` | False alarms rest on the "steady humidity" assumption | open (owner, Q1/Q3) |
-| minor | `src/sivin/quality/boundaries.py:170-198` | Transport trimming can cut real vineyard data | open |
-| minor | `src/sivin/quality/timeline.py` (`_apply`, move to known time) | Known dates can exclude up to `known_tolerance_s` of vineyard data without a warning | open |
-| minor | `src/sivin/quality/segmentation.py:84-94` | Summer offices are missed more often than in other seasons | open |
-| nit | `src/sivin/quality/contrast.py:205-223`, docs | The four votes are two correlated pairs | open |
-| nit | `src/sivin/quality/checks/persistence.py` | A temperature sensor stuck during fog is never flagged | open |
+| minor | `src/sivin/quality/regime.py:77-101`, `docs/quality-control.md` (Limitations) | Some offices are missed silently | documented in Limitations (humid basement, night setback, no warning); open for the owner to tune with real data (Q1/Q3) |
+| minor | `src/sivin/quality/regime.py:93-101` | False alarms rest on the "steady humidity" assumption | documented in Limitations with the reviewer's numbers; open for the owner to verify on real data (Q1/Q3) |
+| minor | `src/sivin/quality/boundaries.py:170-198` | Transport trimming can cut real vineyard data | fixed (follow-up): `transport.enabled`, default off; trade-off documented; tests for both settings |
+| minor | `src/sivin/quality/timeline.py` (`_apply`, move to known time) | Known dates can exclude up to `known_tolerance_s` of vineyard data without a warning | fixed (follow-up): registry stays ground truth; a `deployment_mismatch` warning with the excluded duration; tested |
+| minor | `src/sivin/quality/segmentation.py:84-94` | Summer offices are missed more often than in other seasons | documented in Limitations (`unconfirmed_transition`); open for the owner to tune with real data (Q1/Q3) |
+| nit | `src/sivin/quality/contrast.py:205-223`, docs | The four votes are two correlated pairs | documented next to the votes and in Limitations |
+| nit | `src/sivin/quality/checks/persistence.py` | A temperature sensor stuck during fog is never flagged | documented in Limitations; open for the owner to tune with real data (Q1) |
 
 **Some offices are missed silently.** A humid basement (RH ≥ 75 %) or an office with strong
 night setback (16 → 22 °C, daily spread > 4 °C) is never indoor-like: 0/15 each, with no

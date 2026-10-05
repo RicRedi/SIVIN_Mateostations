@@ -283,8 +283,9 @@ segment duration thus limits the search but not the final boundary. The radius i
 from the last sample before and the first sample after the boundary, so a gap in the data at
 the boundary does not shrink the search to one side.
 
-A **transport transient** (the sensor in a car between office and vineyard) is then moved to
-the indoor side, so that it becomes `PRE_DEPLOYMENT`. Starting at the boundary on the outdoor
+**Transport trimming (optional, off by default: `transport.enabled: false`).** When enabled, a
+**transport transient** (the sensor in a car between office and vineyard) is moved to the
+indoor side, so that it becomes `PRE_DEPLOYMENT`. Starting at the boundary on the outdoor
 side, samples are moved while their temperature lies outside both reference ranges,
 
 $$
@@ -295,6 +296,16 @@ for at most `transport.max_duration_s` (3 h). The outdoor reference is the day o
 after the maximum transport duration, the indoor reference the day of indoor data next to the
 boundary. A transient within the reference ranges (a car at 20 °C) is not detectable and stays
 on the side the likelihood put it.
+
+*Trade-off.* With trimming, a 35 °C car phase becomes `PRE_DEPLOYMENT` and the deployment is
+placed at the arrival in the vineyard. But if the weather changes within the outdoor reference
+day (a warm afternoon followed by rain), real vineyard samples fall outside the reference range
+and up to 3 h of them are excluded (review round 2: deployment +1 to +6 samples late in a
+heavy-rain scenario at 21 °C). Without trimming no vineyard sample is lost, and the car phase
+(typically ≤ 3 samples) usually stays on the outdoor side (review: boundary 3 samples before
+arrival), where the `range`, `spike` and `step` checks may flag it. Following the rule "when in
+doubt, do not exclude data", trimming is off by default. Whether trimming is on or off, the
+indoor comparison windows keep `transport.max_duration_s` away from the boundary.
 
 ### 4. Relative confirmation
 
@@ -320,6 +331,9 @@ winter deployment has no spread contrast but a large level and humidity differen
 unheated store or a 30 °C office have a much smaller daily range and drier, steadier air than
 outdoors; a cloudy summer day amid clear days is not indoor-like ($r > r_{max}$) and is never
 confirmed.
+
+The four votes are two correlated pairs (spread ratios: the daily cycle; level difference and
+humidity excess: the step), so two votes can be one physical signal counted twice.
 
 The event `confidence` is the share of available votes that hold (0.5–1 for a confirmed
 transition). It is a transparent heuristic, **not a calibrated probability**.
@@ -347,7 +361,10 @@ Known deployment times (e.g. `placement.from` of the sensor registry, plan §2.4
 detection **only near themselves** (`known_tolerance_s`, 6 h):
 
 1. a detected deployment within the tolerance of a known time is moved to the known time
-   (source `registry`, confidence 1);
+   (source `registry`, confidence 1). The registry is ground truth: if the known time is
+   *later* than the detected deployment, the samples in between (classified outdoor by
+   detection, at most `known_tolerance_s`) become `PRE_DEPLOYMENT`, and a `deployment_mismatch`
+   warning names the excluded duration;
 2. a detected deployment with no known time within the tolerance is still applied, with a
    `deployment_mismatch` warning — e.g. a service visit missing in the registry (returning to
    the same placement adds no `placement.from`);
@@ -384,6 +401,7 @@ their timestamp.
 | `contrast.min_rh_spread_ratio` / `rh_spread_floor_pct` | 2 / 2 | — / % | project default |
 | `contrast.min_votes` | 2 | count | project default |
 | `contrast.window_s` / `min_window_samples` | 2 days / 24 | s / count | project default |
+| `transport.enabled` | false | — | off: trimming can exclude real vineyard data (see step 3) |
 | `transport.max_duration_s` | 10 800 (3 h) | s | project default |
 | `transport.margin_c` | 3 | °C | project default |
 | `transport.reference_s` / `min_reference_samples` | 1 day / 12 | s / count | project default |
@@ -407,7 +425,7 @@ quality:
     change_points: { min_segment_s: 86400, window_s: 2592000, stride_s: 1296000 }
     regime: { room_min_c: 5.0, room_max_c: 35.0, indoor_max_rh_spread_pct: 8.0 }
     contrast: { min_votes: 2, window_s: 172800 }
-    transport: { max_duration_s: 10800 }
+    transport: { enabled: false, max_duration_s: 10800 }
 ```
 
 ## Limitations
@@ -424,16 +442,44 @@ quality:
 - **Office stays without contrast** are not flagged: a sensor whose data are all indoor (still in
   the office) or an office whose daily range exceeds 4 °C (e.g. a sunny window sill) is not
   recognised. Known deployment times then still produce registry events and warnings.
-- **Transport** is moved to the indoor side only if it lies outside both the indoor and outdoor
-  temperature ranges (± 3 °C) and lasts at most 3 h; a car at outdoor-like temperatures stays
-  outdoor.
+- **Transport** stays on the side the likelihood puts it by default (trimming is off); a car
+  phase then usually counts as vineyard data. With trimming on, it is moved to the indoor side
+  only if it lies outside both temperature ranges (± 3 °C) and lasts at most 3 h, at the risk of
+  excluding up to 3 h of real vineyard data after a weather change.
+- **Offices that are not recognised, without a warning.** Besides the sunny window sill, the
+  absolute rules miss a humid basement (RH ≈ 80 %, above `indoor_max_rh_pct` = 75 %) and an
+  office with a strong night setback (16 → 22 °C, daily spread above
+  `indoor_max_daily_spread_c` = 4 °C): 0/15 detected each on the reviewer's second generator,
+  and no warning is raised. Their rows enter the indices (a January office adds about 12
+  growing degree days per day). Raising the spread threshold to 6 °C found only 4/15 setback
+  offices and raised false transitions from 0.40 to 0.60 per sensor-year.
+- **The "steady humidity" assumption.** Cloudy days are kept from looking indoor because outdoor
+  humidity either exceeds 75 % or follows the daily temperature cycle (daily RH spread > 8 %).
+  Where overcast weather is dry and humidity stays steady, outdoor stretches look indoor and
+  create false service visits. On the reviewer's second generator: 0.30 false transitions per
+  sensor-year (mean 11 `PRE_DEPLOYMENT` rows per year, max 94 ≈ 2 days) with ordinary weather,
+  but 3.5 per sensor-year with up to 1340 rows (≈ 28 days) excluded in a dry-overcast stress
+  variant. The assumption must be checked on real exports before service-visit
+  `PRE_DEPLOYMENT` flags are trusted.
+- **Summer offices merging with overcast days.** In summer an overcast day with RH ≤ 75 % can be
+  indoor-like itself and merge with an adjacent office stay; the merged run's boundary then
+  fails the relative confirmation, the office stay is not flagged and only an
+  `unconfirmed_transition` warning remains (reviewer's second generator: 2/15 three-day summer
+  offices missed; 3/15 first offices missed in a service-plus-front scenario).
+- **The 2-of-4 votes are two correlated pairs.** The temperature and humidity spread ratios both
+  measure the daily cycle; the level difference and the humidity excess both measure the step.
+  "2 of 4" can therefore be one physical signal counted twice. It is a heuristic, like the
+  confidence derived from it.
 - **Known deployments override detection only near themselves.** Data before the first known
   deployment are flagged only if an office stay is detected; a registry time that the data do
-  not confirm produces a warning, not flags.
+  not confirm produces a warning, not flags. A registry time up to `known_tolerance_s` (6 h) *later* than the
+  detected deployment does exclude the samples in between (registry as ground truth); this is
+  always reported by a `deployment_mismatch` warning with the excluded duration.
 - **Very fast fronts** (≥ 5 °C within one sampling interval) are flagged `STEP` (informative).
 - **Persistence** uses greedy left-to-right runs; a run that starts in the middle of an earlier
   run within the tolerance can be split. Runs in saturated air (fog) are never `STUCK`, so a
-  sensor stuck at 100 % humidity is not detected while it reads saturation.
+  humidity sensor stuck at 100 % is not detected while it reads saturation, and a temperature
+  sensor that sticks during fog (≥ 50 % of the run at RH ≥ 97 %) is not detected either.
 - **Greedy binary segmentation** is not guaranteed optimal (PELT would be); boundary refinement
   and the relative confirmation make the reported boundaries insensitive to that in the tested
   cases.

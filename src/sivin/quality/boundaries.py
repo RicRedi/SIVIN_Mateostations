@@ -5,14 +5,16 @@ r"""Exact placement of a regime boundary: likelihood refinement and transport tr
   around its first estimate and within the stretch between its neighbouring boundaries. The
   change-point search works with a minimum segment duration; the refinement does not, so a
   boundary close to another change point is still placed exactly.
-* :class:`TransportTrimmer` assigns a short hot or cold transient on the outdoor side of a
-  boundary (the sensor in a car between office and vineyard) to the indoor side, so that it
-  becomes ``PRE_DEPLOYMENT``: starting at the boundary, samples whose temperature lies outside
-  both reference ranges, i.e. outside
+* :class:`TransportTrimmer` (off by default, ``TransportSettings.enabled``) assigns a short
+  hot or cold transient on the outdoor side of a boundary (the sensor in a car between office
+  and vineyard) to the indoor side, so that it becomes ``PRE_DEPLOYMENT``: starting at the
+  boundary, samples whose temperature lies outside both reference ranges, i.e. outside
   :math:`[\min(P_5^{in}, P_5^{out}) - m,\ \max(P_{95}^{in}, P_{95}^{out}) + m]`, are moved
   over, for at most the maximum transport duration. The outdoor reference is the day of
   outdoor data that follows the maximum transport duration, the indoor reference the day of
-  indoor data next to the boundary.
+  indoor data next to the boundary. Trade-off: a weather change within the reference day can
+  make real vineyard samples fall outside the ranges, and up to the maximum transport duration
+  of them would be excluded; hence it is off unless enabled.
 """
 
 from __future__ import annotations
@@ -35,12 +37,21 @@ class TransportSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    enabled: bool = Field(
+        False,
+        description=(
+            "Move transport transients to the indoor side. Off by default: a weather change "
+            "within the outdoor reference day can make real vineyard samples look like a "
+            "transient and exclude up to max_duration_s of them (review round 2)."
+        ),
+    )
     max_duration_s: float = Field(
         3 * S_PER_H,
         ge=0,
         description=(
-            "Longest transport transient (s) moved to the indoor side; 0 disables trimming. "
-            "Project default 3 h."
+            "Longest transport transient (s) moved to the indoor side; also the distance (s) "
+            "indoor comparison windows keep from a boundary, whether trimming is enabled or "
+            "not. Project default 3 h."
         ),
     )
     margin_c: float = Field(
@@ -168,7 +179,7 @@ class TransportTrimmer:
             The adjusted boundary.
         """
         settings = self._settings
-        if settings.max_duration_s == 0:
+        if not settings.enabled or settings.max_duration_s == 0:
             return position
         deployment = indoor_limit < position
         sign = 1 if deployment else -1

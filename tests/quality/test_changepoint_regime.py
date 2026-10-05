@@ -259,23 +259,25 @@ class TestBoundaries:
 
     def test_transport_after_the_office_becomes_indoor(self) -> None:
         t_s, temp = self._car_trace()
-        trimmer = TransportTrimmer()
+        trimmer = TransportTrimmer(TransportSettings(enabled=True))
         assert trimmer.trim(t_s, temp, 100, 0, 200) == 103
         assert trimmer.guard_s == 3 * 3600.0
-        disabled = TransportTrimmer(TransportSettings(max_duration_s=0.0))
+        disabled = TransportTrimmer(TransportSettings(enabled=True, max_duration_s=0.0))
         assert disabled.trim(t_s, temp, 100, 0, 200) == 100
+        assert TransportTrimmer().trim(t_s, temp, 100, 0, 200) == 100  # off by default
         # Too little outdoor reference data: unchanged.
         assert trimmer.trim(t_s, temp, 100, 0, 110) == 100
 
     def test_transport_before_the_office_becomes_indoor(self) -> None:
         t_s, temp = self._car_trace()
         reversed_temp = temp[::-1].copy()  # outdoor, car at 97..99, office from 100
-        assert TransportTrimmer().trim(t_s, reversed_temp, 100, 200, 0) == 97
+        trimmer = TransportTrimmer(TransportSettings(enabled=True))
+        assert trimmer.trim(t_s, reversed_temp, 100, 200, 0) == 97
 
     def test_values_inside_the_reference_ranges_stay(self) -> None:
         t_s, temp = self._car_trace()
         temp[100:103] = 12.0  # an ordinary first outdoor value
-        assert TransportTrimmer().trim(t_s, temp, 100, 0, 200) == 100
+        assert TransportTrimmer(TransportSettings(enabled=True)).trim(t_s, temp, 100, 0, 200) == 100
 
 
 class TestIndoorRun:
