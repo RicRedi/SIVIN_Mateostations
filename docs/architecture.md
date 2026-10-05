@@ -30,6 +30,10 @@ data provider portal ──► PortalClient ──► ExportParser ──► Inp
                                                          GitHub Pages: web/ (Leaflet + uPlot)
 ```
 
+The steps are run by the `sivin` command ([cli.md](cli.md)): `sivin fetch` (1), `sivin ingest`
+(2–4), `sivin qc` (5), `sivin indices` (7), `sivin run` (all of them); the site export (8) is
+WP-3.2.
+
 1. `PortalClient` logs in, lists devices and downloads one export per sensor.
 2. `ExportParser` implementations turn each file into a `MeasurementSeries`; local wall-clock
    timestamps are converted to UTC by `LocalTimeConverter`.
@@ -57,7 +61,7 @@ changing one is a plan change approved by the owner.
 | `MonthDay`, `Season` | `sivin.core.season` | Periods given by month and day (vegetation season, Huglin period, single months). |
 | `ClimateIndex`, `IndexContext`, `IndexResult`, `IndexRegistry` | `sivin.analytics.base` | Extension point for indices: a new index is a subclass registered with `@index_registry.register`; parameters are frozen pydantic models. |
 | defaults | `sivin.core.defaults` | Shared default values (time zone, nominal sampling interval `DEFAULT_SAMPLING_INTERVAL_S` = 1830 s measured on the first real export, the legacy estimate `LEGACY_SAMPLING_INTERVAL_S` = 1825 s, coverage thresholds) without heavy imports. |
-| `SivinConfig` | `sivin.config` | `config/sivin.yaml` as frozen pydantic models (`extra="forbid"`): sections `paths`, `time`, `analytics`. |
+| `SivinConfig` | `sivin.config` | `config/sivin.yaml` as frozen pydantic models (`extra="forbid"`). Since WP-1.7 it composes every subsystem: `paths`, `time`, `registry`, `offsite_log`, `ingest` (`portal`, `parsers`, `validation`), `storage`, `quality`, `alignment`, `analytics`; `time` values are copied into the subsystems and registry-backed settings are validated at load time ([configuration.md](configuration.md)). |
 | `ProjectPaths` | `sivin.paths` | Project root discovery; configuration paths are relative to it. |
 
 ### Row validity (owner decision 2026-10-05)
@@ -148,12 +152,41 @@ exports and for daily aggregation and display. Units: °C, %, kPa, m, seconds.
 
 ## Storage and site data
 
-- Store (`data` branch): `data/raw/<sensor_id>/<YYYY>.csv`, `data/derived/events/<sensor_id>.json`,
-  `data/runs/<YYYY-MM-DD>.jsonl`. Writes are idempotent.
+- Store (`data` branch): `data/raw/<sensor_id>/<YYYY>.csv` (`source` = short export id),
+  `data/derived/events/<sensor_id>.json`, `data/derived/indices/<season>.json`,
+  `data/runs/<YYYY-MM-DD>.jsonl`, `data/quarantine/`. Writes are idempotent; formats in
+  [storage.md](storage.md).
 - Site data (`site/data/`): `manifest.json`, `sensors.geojson`, `latest.json`,
   `series/<id>/raw/<YYYY-MM>.json`, `series/<id>/daily.json`, `events/<id>.json`,
   `indices/<season>.json`. Arrays are column-oriented, time is Unix seconds UTC, missing = `null`.
   The exact shapes are in plan §2.6.
+
+## Application services and CLI (WP-1.7)
+
+The subsystems are composed in `sivin.app`, a layer the CLI only calls ([cli.md](cli.md)):
+
+```
+sivin.cli (typer, logging, printing)
+   └─► ServiceFactory(Workspace)            composition root: builds everything from SivinConfig
+         ├─ SensorCatalogLoader              registry + off-site log (invalid → SetupError, exit 3)
+         ├─ FetchService ─► PortalSession     sivin fetch (Selenium imported only here)
+         ├─ IngestService                     sivin ingest: ExportReader (parser + InputValidator),
+         │     ├─ Quarantine                  rejected files + report JSON
+         │     └─ MeasurementStore            accepted series (short export id as source)
+         ├─ QualityService                    sivin qc: store → QualityPipeline(off-site log)
+         │     └─ EventsWriter                derived/events/<id>.json
+         ├─ IndicesService                    sivin indices: QualityService → season window →
+         │     ├─ IndexContextFactory         DailyWeather + IndexContext (registry placement)
+         │     └─ IndexSelection              index_registry.create(id, analytics.indices[id])
+         └─ RunService + RunRecorder          sivin run: fetch → ingest → qc → indices → run log
+```
+
+- Every consumer of stored data gets it **through QC** (`QualityService.checked`), because the
+  store keeps no flags (row validity above).
+- One sensor, file, device or index failing never stops a command; the failures are reported
+  and give exit code 1 (`Outcome`). Errors that make the whole command pointless (configuration,
+  registry, off-site log, credentials) are a `SetupError` (exit code 3).
+- `sivin.cli` imports the application layer lazily, so `sivin --version` does not load pandas.
 
 ## Sensor registry
 
@@ -174,7 +207,8 @@ deployment instant and is the ground truth for the deployment detector (plan §2
 | `sivin.analytics` | `ClimateIndex` base and registry (WP-0.1); `thermal`, `ripening`, `disease`, `spatial` | WP-2.x |
 | `sivin.site` | `SiteBuilder` | WP-3.2 |
 | `sivin.viz` | publication plots and animations | WP-5.1 |
-| `sivin.cli` | `sivin` command; the only place that configures logging | WP-0.1, WP-1.7, WP-3.2 |
+| `sivin.app` | application services: `Workspace`, `ServiceFactory`, ingest, QC, indices, fetch, run | WP-1.7 |
+| `sivin.cli` | `sivin` command (one module per command group); the only place that configures logging | WP-0.1, WP-1.7, WP-3.2 |
 | `web/` | TypeScript frontend (Leaflet, uPlot) | WP-3.1 |
 
 ## Design rules in one paragraph

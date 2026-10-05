@@ -9,6 +9,11 @@ The measurement store keeps the canonical measurements of every sensor as plain 
 <root>/
   raw/<sensor_id>/<YYYY>.csv     one file per sensor and UTC calendar year
   runs/<YYYY-MM-DD>.jsonl        run log, one file per UTC date of the run start
+  derived/events/<sensor_id>.json   QC events per sensor (sivin qc / run, WP-1.7)
+  derived/indices/<season>.json     index results per season (sivin indices / run, WP-1.7)
+  quarantine/<file>                 rejected exports (sivin ingest, WP-1.7)
+  quarantine/<file>.report.json     their validation report
+  downloads/                        exports saved by sivin fetch (ingest.portal.download_dir)
 ```
 
 - `<root>` is `paths.data_dir` of the configuration (`data/`). In production it is the `data/`
@@ -21,7 +26,10 @@ The measurement store keeps the canonical measurements of every sensor as plain 
   local time on 1 January (23:30 UTC on 31 December in winter) is stored in the previous
   year's file. `MeasurementStore.read` hides this: it reads every file that overlaps the
   requested interval.
-- `data/derived/events/` of §2.5 is written by later workpackages, not by the store.
+- `derived/`, `quarantine/` and `downloads/` are written by the application services
+  (`sivin.app`), not by the store; their locations are `paths.derived_dir`,
+  `paths.quarantine_dir` and `ingest.portal.download_dir` ([configuration.md](configuration.md)).
+  See [Derived data](#derived-data-wp-17).
 - Hidden files `.<name>.*.tmp` are leftovers of an interrupted write (see *Atomic writes*);
   the store ignores them and they can be deleted.
 
@@ -187,12 +195,15 @@ guarantees.
 ## Run log
 
 `RunLog` appends one `RunRecord` per pipeline run as one JSON line to
-`runs/<YYYY-MM-DD>.jsonl`, the UTC date of the run start. Fields: `started_at`,
-`finished_at` (ISO 8601 UTC with `Z`), `files` (processed export files), `appends` (per sensor:
+`runs/<YYYY-MM-DD>.jsonl`, the UTC date of the run start. `sivin ingest` and `sivin run`
+write one record each (WP-1.7). Fields: `started_at`,
+`finished_at` (ISO 8601 UTC with `Z`), `files` (the **full names** of the processed export
+files; the rows keep only the short identifier, see below), `appends` (per sensor:
 `new_rows`, `identical_skipped`, `filled_values`, `ignored_missing_values`,
 `conflicting_values`, `replaced_values`), `validation_issues`
-(number of input-validation findings per category, filled from the WP-1.2 report),
-`failures` (one message per failure) and `conflicts` (the recorded conflict decisions, see
+(number of input-validation findings per `<severity>:<rule>`, e.g. `error:required-columns`,
+over all files of the run), `failures` (one message per failure: rejected file, device not
+downloaded, sensor or index failed) and `conflicts` (the recorded conflict decisions, see
 above). Keys are sorted. Lines are only ever appended.
 
 A write interrupted mid-line leaves an incomplete last line. The next append notices that the
@@ -254,6 +265,49 @@ not its file name. The full file name of every processed export is recorded in t
 - The export time is the portal's time of the download (local time in the file name), not a
   measurement time. Two exports of the same sensor in the same second would share an
   identifier; this does not happen with one download per sensor and run.
+
+## Derived data (WP-1.7)
+
+Written atomically and **byte-stable** (two-space indented UTF-8 JSON, a final line break, no
+run time inside), so an unchanged result does not change the file on the `data` branch.
+Times are ISO 8601 UTC with `Z`; `NaN` is written as `null`.
+
+`derived/events/<sensor_id>.json` — result of the QC pipeline over the stored record
+(`EventsWriter`):
+
+```jsonc
+{ "sensor_id": "77799986",
+  "first_t": "2025-07-30T08:22:29Z", "last_t": "2026-03-01T21:27:05Z", "n_samples": 300,
+  "flag_counts": { "PRE_DEPLOYMENT": 300 },      // rows per single QcFlag, zero counts omitted
+  "values_set_aside": 0,                          // precipitation values replaced by NaN
+  "events": [ { "type": "off_site", "t": "2025-07-30T08:00:00Z", "t_end": "2026-03-01T21:30:00Z",
+                "source": "log", "severity": "info", "confidence": null,
+                "detail": "service: …", "origin": "offsite" } ] }
+```
+
+`type` is the `EventKind` (`off_site`, `deployment`, `step`, `gap`, `low_battery`,
+`precip_out_of_range`, …), `t_end` the end of an interval event (`null` for a point event and
+for an off-site period that is still open), `source` `detected` / `registry` / `log`,
+`severity` `info` / `warning`, `origin` the check that reported it. The site export (WP-3.2)
+maps these to the site contract (§2.6); the run summary of warnings is part of WP-4.1.
+
+`derived/indices/<season>.json` — results of every index for every sensor with data in the
+season window (`IndicesReport.document`):
+
+```jsonc
+{ "season": 2026, "data_from": "2025-01-01", "data_to": "2026-12-31",   // local days loaded
+  "sensors": { "77678271": {
+      "huglin": { "value": null, "unit": "°C·d", "coverage": 0.016, "complete": false,
+                  "class": null, "estimated": false, "details": { … } } } } }
+```
+
+The values in these examples are illustrative, not measurements. The daily curves
+(`IndexResult.daily`) are not written; WP-3.2 decides how the site shows them.
+
+`quarantine/<file>` and `quarantine/<file>.report.json` — a rejected export (copied by
+default, moved with `ingest.quarantine_mode: move`) and `{"file", "source_path", "accepted":
+false, "issues": [{"rule", "severity", "message", "row", "table"}]}`. A quarantined file of the
+same name is replaced.
 
 ## Migration path to Parquet
 

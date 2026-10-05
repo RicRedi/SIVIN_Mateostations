@@ -24,6 +24,9 @@ from sivin.config.shared import SharedValues, settings_model_of
 DEFS: Final = "$defs"
 """Key of the shared definitions in a JSON schema."""
 
+DEFAULT_HEADING_LEVEL: Final = 3
+"""Markdown heading level of the sections of the key reference."""
+
 SCHEMA_MODE: Final[Literal["validation"]] = "validation"
 """Pydantic JSON schema mode: the schema of the input (the YAML file)."""
 
@@ -159,8 +162,13 @@ class ConfigReference:
         self._walk(SivinConfig, self._defaults, (), rows)
         return rows
 
-    def markdown(self) -> str:
+    def markdown(self, heading_level: int = DEFAULT_HEADING_LEVEL) -> str:
         """Return the reference as Markdown tables, one per top-level section.
+
+        Parameters
+        ----------
+        heading_level : int, optional
+            Level of the section headings (``3`` = ``###``).
 
         Returns
         -------
@@ -176,7 +184,7 @@ class ConfigReference:
                 section = top
                 lines += [
                     "",
-                    f"### `{top}`",
+                    f"{'#' * heading_level} `{top}`",
                     "",
                     "| Key | Default | Description |",
                     "|---|---|---|",
