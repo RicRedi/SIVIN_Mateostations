@@ -1,0 +1,25 @@
+{
+  "_comment": "SYNTHETIC sample written for tests. Shape follows the path the legacy chrome_driver.py reads (viewModel.Scene.Sections[0].Devices[*].DeviceName); all other keys and values are invented.",
+  "viewModel": {
+    "Scene": {
+      "Title": "SIVIN VUT",
+      "Sections": [
+        {
+          "Name": "Devices",
+          "Devices": [
+            {"DeviceName": "8615620 77678271", "Online": true},
+            {"DeviceName": "8615621 77678272", "Online": true},
+            {"DeviceName": "8615622 77678273", "Online": false}
+          ]
+        },
+        {
+          "Name": "Alerts",
+          "Items": []
+        }
+      ]
+    },
+    "CurrentUser": null
+  },
+  "url": "/",
+  "virtualDirectory": ""
+}
