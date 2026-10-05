@@ -326,3 +326,64 @@ public helper in `sivin.core.ids`, as the worker already proposes), or reword th
    for canonical files.
 9. `to` may be omitted on input: **not acceptable as is** (see M1). The key should be required.
 10. No re-exports: consistent with `sivin.core`.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewer: independent review agent. The reviewer checked fix commit `615600b`, re-ran the gates
+in `/home/user/wt/wp-1.1`, and used throwaway scripts in `/tmp/claude-0/review-1.1/`.
+
+**Gates observed:**
+
+- `make lint`: `All checks passed!`, `46 files already formatted`.
+- `make type`: `Success: no issues found in 27 source files`.
+- `make test`: `326 passed`.
+- `make cov`: every `src/sivin/registry/*.py` at 100 % (statements and branches), `TOTAL 1238 0 250 0 100%`.
+- Scope: unchanged, only WP-1.1 files.
+
+**Verification:**
+
+- **M1.** The `required` lists of `Placement` and `Sensor` in the regenerated schema now hold every
+  §2.4 key.
+  - `jsonschema` (Draft 2020-12, throwaway venv) reports 0 errors on the committed file. It
+    rejects `portal_name: null`, and a missing `portal_name`, `site`, `notes`, `to`,
+    `elevation_m` or `note`. The Python loader rejects all of these as well.
+  - The re-read WP-3.1 parser (`validateSensors.ts`, `types.ts`) has not changed for sensors: it
+    still requires `portal_name: string` and the key `to`. The reviewer ran it under Node 22 with
+    `--experimental-transform-types` on a copy outside both repos. It accepts the committed file
+    and a registry saved after `with_moved`. It rejects the `portal_name: null` and missing-`to`
+    variants, which Python and the schema now reject too.
+  - Every file that Python and the schema accept is therefore also accepted by the web. The web
+    is more lenient only for the optional nullable keys.
+  - `GpxImporter()` without a prefix raises `TypeError`. Regenerating from `sensor_location.gpx`
+    with the documented command reproduces the committed file byte for byte.
+- **m2.** The schema and the loader reject `from: "yesterday"`, a naive time, `+01:00` and a
+  lowercase `z`. They accept `...00.5Z`.
+- **m3.** `x/8271` and `C:\exports\8271` now raise `AmbiguousSensorNameError` when two serials
+  end in 8271. `exports/0065` resolves to its unique sensor, and full names and paths still
+  resolve.
+- **Nit.** `moved_to` behaves as follows:
+  - an inactive sensor with a closed placement, moved to an open placement, becomes `active`;
+  - an inactive sensor moved to a closed placement stays `inactive`;
+  - an inactive sensor with an open placement, moved to an open one, closes the old placement
+    and becomes `active`;
+  - a retired sensor raises `ValueError`, from the model and from `with_moved`;
+  - an active sensor moved to a closed placement is still rejected.
+- **Round trip.** The committed file round-trips byte for byte, and Python callers can still pass
+  any aware datetime (stored as UTC).
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | (M1, round 1) | Registry contract looser than §2.4 and the WP-3.1 parser. | verified fixed |
+| minor | (m2, round 1) | Schema timestamps not enforced. | verified fixed |
+| minor | (m3, round 1) | Legacy suffix in a path gave a misleading error. | verified fixed |
+| nit | (round 1) | `moved_to` kept `inactive`. | verified fixed |
+| nit | sensors/sensors.schema.json (`from`/`to` `pattern`) | The pattern checks the shape only: `2025-13-01T00:00:00Z` passes the schema, and the Python loader rejects it. WP-3.3 should also enable format assertion (e.g. ajv-formats) or rely on the pipeline re-check. | open (for WP-3.3) |
+| nit | docs/wp_log/WP-1.1.md (decision 8) | One over-long, un-rewrapped line after the round-2 edit. | open |
+
+**Deviations assessment, round 2:**
+
+- Decision 9 (all keys required) resolves the round-1 objection.
+- Decision 11 (automatic `inactive → active` on a move to an open placement) is consistent with
+  the status rule. The reviewer recommends that the owner accept it.
