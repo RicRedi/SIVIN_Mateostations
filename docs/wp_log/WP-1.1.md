@@ -186,7 +186,107 @@ ruff 0.16.10, mypy 2.4.0).
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent review agent. Everything below was run or read by the reviewer in
+`/home/user/wt/wp-1.1` at `7d46f3b`. Throwaway scripts live in `/tmp/claude-0/review-1.1/`.
+
+### Gates observed
+
+- `make lint`: `All checks passed!`, `46 files already formatted`.
+- `make type`: `Success: no issues found in 27 source files`.
+- `make test`: `299 passed`.
+- `make cov`: every `src/sivin/registry/*.py` at 100 % (statements and branches), `TOTAL 1224 0 248 0 100%`.
+- Scope: `git diff bcde7d9...HEAD --name-only` touches only `sensors/**`, `src/sivin/registry/**`,
+  `tests/registry/**`, `docs/sensors.md` and `docs/wp_log/WP-1.1.md`. No shared file was changed.
+
+### Independent checks
+
+- **Byte-identical round trip.** load → save of the committed `sensors.geojson` gives the same bytes.
+  A registry after `with_moved` also round-trips (save → load → save gives the same bytes). A `from`
+  written as `+01:00` is normalised back to the committed bytes.
+- **JSON Schema vs committed file.** `jsonschema` 4.x (Draft 2020-12, in a throwaway venv outside
+  the repo) reports a valid schema and 0 errors on the committed file. It rejects an extra property,
+  `id: "8271"`, an unknown status, empty `placements`, `lat: 95` and three coordinates. It **accepts**
+  `portal_name: null`, a missing `portal_name` and a missing `to` (see M1). It also accepts
+  `from: "yesterday"` (see m2).
+- **§2.4 format.** Key order and nesting match §2.4 exactly: Feature → `type, geometry, properties`;
+  properties → `id, portal_name, label, site, variety, status, placements, notes`; placement →
+  `from, to, lon, lat, elevation_m, note`. `coordinates` is `[lon, lat]`. The differences from the
+  §2.4 example are layout only (multi-line arrays) and the full GPX precision of the elevation
+  (`183.939606` instead of `183.9`). Both are acceptable.
+- **WP-3.1 TypeScript contract** (`/home/user/wt/wp-3.1/web/src/contract/types.ts`,
+  `validateSensors.ts`, checked by reading the code). The committed file satisfies it.
+  The mismatches are listed in M1.
+- **Placement history.** A move closes the open placement at the new `from`, and `placement_at` is
+  half-open (`12:00:00Z` belongs to the new placement, `11:59:59Z` to the old one). An instant
+  given in `+01:00` resolves correctly. The geometry follows the last placement. The following are
+  all rejected with `ValidationError`: a move that starts before the current `from`; a move of an
+  `active` sensor to an already-closed placement; a move of a `retired` sensor; and a move of an
+  `inactive` sensor to a time before its closing `to`. A retired sensor has
+  `current_placement is None`, `placement_at(after retirement) is None`, and it is excluded from
+  `active()`.
+- **Name resolution.** With `11118271` and `22228271` both registered: `"8271"` and `" 8271 "`
+  raise `AmbiguousSensorNameError`, which names both candidates. The serial, the portal name, the
+  export file name and a Windows path all resolve. `"1111"` and `"99999999"` raise
+  `SensorLookupError`. After `without(11118271)`, `"8271"` resolves to `22228271`.
+- **Czech Republic bounding box.** Rounding outward from the extreme points (S ≈ 48°33′ Vyšší Brod
+  area, N ≈ 51°03′ Lobendava, W ≈ 12°05′ Krásná, E ≈ 18°51′ Bukovec) gives
+  48.55 / 51.06 / 12.09 / 18.86. This matches the reviewer's knowledge, but the reviewer did not
+  check it against a source, so `[to be verified]` is the correct label. The eastern margin is
+  only about 0.0006° (about 45 m), which does not matter for a plausibility check in South Moravia.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | src/sivin/registry/model.py:126-130, 247-253; sensors/sensors.schema.json (`required`); docs/sensors.md:52,104 | The registry contract is looser than the §2.4 example and the WP-3.1 consumer. `portal_name` may be `null` or missing, and a placement's `to` may be omitted. The web's `parseSensorsGeoJSON` throws on both. | open |
+| minor | sensors/sensors.schema.json (`from`/`to`) | `format: "date-time"` is only an annotation in Draft 2020-12, so a schema-only validator (WP-3.3) accepts `"from": "yesterday"` or a naive time. | open |
+| minor | src/sivin/registry/registry.py:144-148 | The legacy-suffix check runs on `key.strip()`, but `SensorId.parse` uses the base name of the path. `get("x/8271")` therefore fails with the message "looks like a legacy 4-digit short sensor name … resolve it through the sensor registry", even though it was the registry that was asked. | open |
+| nit | src/sivin/registry/model.py:362-386 | `moved_to`/`with_moved` keeps the status. Moving an `inactive` sensor whose placement is closed gives an `inactive` sensor with an open placement. Docs (lines 153-155) tell the user to set `active` by hand, which is easy to forget in the WP-3.3 flow. | open |
+
+**M1 (major): mismatch between the registry contract and the web contract.**
+
+- *Input:* `GpxImporter()` without `portal_prefix` (allowed by the brief) followed by `save`. Or a
+  hand-edited placement without the `to` key: the Python loader accepts it (default `null`), the
+  schema accepts it, and `docs/sensors.md:52` marks `portal_name` as "string or null, not required".
+- *Wrong behaviour:* `site/data/sensors.geojson` is a copy of the registry (§2.6). WP-3.1 types
+  `SensorProperties.portal_name` as `string` and reads it with `reader.string(p.portal_name)`, so
+  `null` or a missing value throws `ContractError`. It reads `to` with
+  `reader.nullableString(placement.to)`, so a missing key (`undefined`) throws too. Either case
+  makes the portal's whole sensor layer fail to load. `docs/sensors.md:104` says WP-3.3 validates
+  against this schema before it commits, so the schema would approve files that the web rejects.
+- *Suggested fix* (needs one owner/orchestrator decision, the worker followed the brief):
+  1. Make every key of §2.4 required in the file. Remove the defaults of `to_utc`, `elevation_m`,
+     `note`, `site`, `variety` and `notes` on the file models, or emit the schema with
+     `json_schema_serialization_defaults_required=True` and enforce presence on load. The schema's
+     `required` list then matches what `save` writes, and a test should assert this.
+  2. For `portal_name`, choose one: (a) non-null string in the registry. The importer then requires
+     `portal_prefix`, or the registry refuses `null` on save. (b) Nullable in §2.4, and WP-3.1's
+     `SensorProperties.portal_name` becomes `string | null`. Option (a) matches §2.4 and the
+     already-built web without touching WP-3.1.
+
+**m2:** add a `pattern` (for example
+`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`) to `from`/`to` through
+`WithJsonSchema`/`json_schema_extra`, or state in `docs/sensors.md` that WP-3.3 must enable format
+assertion (e.g. ajv-formats).
+
+**m3:** apply the same base-name normalisation before the legacy-suffix check (ideally through a
+public helper in `sivin.core.ids`, as the worker already proposes), or reword the message.
+
+### Deviations assessment
+
+1. Combined note: acceptable.
+2. Geometry = last placement and `current_placement` = open placement: correct per §2.4 ("poslední placement").
+3. Status rule (active ⇒ last placement open, retired ⇒ last placement closed, inactive either way):
+   sound and consistent with the placement semantics and the docs. The reviewer recommends that the
+   owner accept it. See the nit on `moved_to`.
+4. No separate portal-name uniqueness check: the reasoning is correct. Equal portal names parse to
+   equal ids, which the registry already rejects.
+5. Configurable Czech Republic area check: good. It meets the plan's "souřadnice v rozsahu ČR".
+6. Extra modules: each has one responsibility. Acceptable.
+7. `with_sensor` adds or replaces: acceptable and documented.
+8. Canonical form: acceptable. The output is JSON-equivalent to §2.4, and the round trip holds
+   for canonical files.
+9. `to` may be omitted on input: **not acceptable as is** (see M1). The key should be required.
+10. No re-exports: consistent with `sivin.core`.
