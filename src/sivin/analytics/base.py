@@ -38,6 +38,13 @@ from sivin.core.season import Season
 logger = logging.getLogger(__name__)
 
 
+_MIN_LATITUDE_DEG: Final = -90.0
+"""Southern bound of geographic latitude in degrees."""
+
+_MAX_LATITUDE_DEG: Final = 90.0
+"""Northern bound of geographic latitude in degrees."""
+
+
 @dataclass(frozen=True, slots=True)
 class IndexContext:
     """Everything an index may use to compute its value for one sensor and one year.
@@ -74,7 +81,8 @@ class IndexContext:
     ------
     ValueError
         If ``sensor_id`` or ``timezone`` disagree with ``daily``/``series``, a threshold is
-        outside 0-1 or ``exclude_mask`` contains bits that are not QC flags.
+        outside 0-1, ``latitude_deg`` is outside -90..90 or ``exclude_mask`` is not an ``int``
+        (``bool`` included) or contains bits that are not QC flags.
     """
 
     sensor_id: SensorId
@@ -103,6 +111,12 @@ class IndexContext:
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be within 0-1, got {value}.")
+        if self.latitude_deg is not None and not (
+            _MIN_LATITUDE_DEG <= self.latitude_deg <= _MAX_LATITUDE_DEG
+        ):
+            raise ValueError(f"latitude_deg must be within -90..90, got {self.latitude_deg}.")
+        if isinstance(self.exclude_mask, bool) or not isinstance(self.exclude_mask, int):
+            raise ValueError(f"exclude_mask must be an int, got {self.exclude_mask!r}.")
         if self.exclude_mask < 0 or self.exclude_mask & ~QcFlag.all_bits():
             raise ValueError(f"exclude_mask {self.exclude_mask} contains unknown QC flag bits.")
 

@@ -60,6 +60,12 @@ _NAIVE_TIMESTAMPS_MESSAGE: Final = (
 )
 
 
+_MISSING_TIMESTAMPS_MESSAGE: Final = (
+    "Timestamps must not be missing (NaT); drop the rows that LocalTimeConverter.to_utc() "
+    "returns as NaT first."
+)
+
+
 class SchemaError(ValueError):
     """Raised when data violate the canonical measurement schema."""
 
@@ -128,7 +134,9 @@ class MeasurementSeries:
         timestamps_utc : sequence of timestamps
             Timezone-aware points in time (any zone; converted to UTC). Naive timestamps are
             rejected: convert local wall-clock time with
-            :class:`~sivin.core.timeutil.LocalTimeConverter` first.
+            :class:`~sivin.core.timeutil.LocalTimeConverter` first, and drop (or otherwise
+            handle) the rows it returns as ``NaT`` or ``unresolved``. Missing timestamps
+            (``NaT``) are rejected before any duplicate handling.
         temp_c : array_like of float
             Air temperature in °C.
         rh_pct : array_like of float
@@ -405,13 +413,15 @@ def _utc_timestamps(
             raise SchemaError(f"Cannot parse timestamps: {error}") from error
         if index.tz is None:
             raise SchemaError(_NAIVE_TIMESTAMPS_MESSAGE)
+        if index.hasnans:
+            raise SchemaError(_MISSING_TIMESTAMPS_MESSAGE)
     else:
         try:
             stamps = [pd.Timestamp(value) for value in values]
         except (TypeError, ValueError) as error:
             raise SchemaError(f"Cannot parse timestamps: {error}") from error
         if any(pd.isna(stamp) for stamp in stamps):
-            raise SchemaError("Timestamps must not be missing.")
+            raise SchemaError(_MISSING_TIMESTAMPS_MESSAGE)
         if any(stamp.tz is None for stamp in stamps):
             raise SchemaError(_NAIVE_TIMESTAMPS_MESSAGE)
         index = pd.DatetimeIndex([stamp.tz_convert("UTC") for stamp in stamps], tz="UTC")
