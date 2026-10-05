@@ -35,8 +35,10 @@ span is chosen by a registered `SpanRule`:
 | `union` (default) | from the earliest first to the latest last usable sample of any sensor | outwards: floor of start, ceiling of end |
 | `overlap` | from the latest first to the earliest last usable sample (sensors with data only) | inwards: ceiling of start, floor of end; no grid if empty |
 
-A sample is *usable* if its `qc` flags do not intersect the exclusion mask and the value is not
-`NaN`. The grid span uses rows where at least one of `temp_c`, `rh_pct` is usable.
+A sample is *usable* if its row is a complete measurement (both `temp_c` and `rh_pct` present,
+the whole-row rule of `MeasurementSeries.complete_mask`, owner decision 2026-10-05) and its `qc`
+flags do not intersect the exclusion mask. The rule is checked on the values, so it also holds
+for store data that carry no `MISSING` flag yet (WP-1.7). The grid span uses the usable rows.
 
 All times are UTC (`datetime64[ns, UTC]`). Daylight-saving transitions of Europe/Prague therefore
 play no role: a sensor sampling every 30 min across a transition is a regular UTC series, and the
@@ -44,9 +46,10 @@ grid has neither a missing nor a repeated hour (tested for both 2026 transitions
 
 ## Strategies
 
-Every variable of every sensor is aligned independently, on its usable samples only: excluded
-and `NaN` samples are never paired, and a sample whose humidity is `NaN` still contributes its
-temperature. Strategies are vectorised (`numpy.searchsorted`), with no Python loop over samples.
+Every variable of every sensor is aligned separately, on the usable rows only: excluded rows and
+rows with a missing variable are never paired. Under the whole-row rule a row whose humidity is
+`NaN` contributes no temperature either (before WP-1.7 it did, unless it carried `MISSING`).
+Strategies are vectorised (`numpy.searchsorted`), with no Python loop over samples.
 
 ### `nearest_within_tolerance` (`NearestWithinTolerance`)
 

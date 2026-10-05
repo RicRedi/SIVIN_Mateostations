@@ -285,6 +285,10 @@ def validate_step_s(step_s: float) -> float:
 def usable_span(series: MeasurementSeries, exclude_mask: int) -> DataSpan | None:
     """Return the first and last usable instant of a series.
 
+    A row is usable if it is a complete measurement (temperature and humidity present, the
+    whole-row rule of :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`) and not
+    excluded by ``exclude_mask``.
+
     Parameters
     ----------
     series : MeasurementSeries
@@ -299,8 +303,7 @@ def usable_span(series: MeasurementSeries, exclude_mask: int) -> DataSpan | None
         :meth:`TimeGrid.from_series`).
     """
     frame = series.frame
-    has_value = frame[Column.TEMP].notna() | frame[Column.RH].notna()
-    times = frame.loc[series.valid_mask(exclude_mask) & has_value, Column.TIMESTAMP]
+    times = frame.loc[series.complete_mask(exclude_mask), Column.TIMESTAMP]
     if times.empty:
         return None
     return times.iloc[0], times.iloc[-1]

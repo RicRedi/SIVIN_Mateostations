@@ -69,7 +69,7 @@ class PowderyMildewDayAssessor:
         frame = ctx.series.frame
         timing = self._params.sampling.durations().measure(frame[Column.TIMESTAMP])
         temp_c = frame[Column.TEMP].to_numpy(dtype=np.float64)
-        valid = (ctx.series.valid_mask(ctx.exclude_mask) & frame[Column.TEMP].notna()).to_numpy()
+        valid = ctx.series.complete_mask(ctx.exclude_mask).to_numpy()
         local_dates = LocalTimeConverter(ctx.timezone).local_dates(frame[Column.TIMESTAMP])
         groups = local_dates.groupby(local_dates).indices
         coverage = ctx.daily.frame["temp_coverage"]

@@ -171,6 +171,21 @@ def test_from_series_uses_only_usable_rows() -> None:
     assert grid == TimeGrid(at(1800), at(3600))
 
 
+def test_usable_span_skips_unflagged_half_rows() -> None:
+    nan = float("nan")
+    series = MeasurementSeries.from_records(
+        SensorId("11111111"),
+        [at(0), at(1800), at(3600), at(5400)],
+        temp_c=[nan, 2.0, 3.0, 4.0],
+        rh_pct=[1.0, 2.0, 3.0, nan],
+        qc=[0, 0, 0, 0],
+    )
+
+    # Rows 0 and 3 miss one variable without a MISSING flag: not complete, so not usable.
+    assert usable_span(series, int(QcFlag.DEFAULT_EXCLUDE)) == (at(1800), at(3600))
+    assert usable_span(series, NONE) == (at(1800), at(3600))
+
+
 def test_from_series_ignores_series_without_usable_rows() -> None:
     empty = MeasurementSeries.empty(SensorId("22222222"))
     full = MeasurementSeries.from_records(SensorId("11111111"), [at(0), at(3600)], [1, 2], [1, 2])

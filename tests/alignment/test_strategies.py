@@ -227,7 +227,7 @@ def test_linear_single_sample_only_fills_its_own_grid_point() -> None:
     assert result.valid.tolist() == [False, True, False]
 
 
-def test_sample_set_skips_excluded_and_nan_samples() -> None:
+def test_sample_set_skips_excluded_samples_and_unflagged_half_rows() -> None:
     series = MeasurementSeries.from_records(
         SensorId("11111111"),
         [at(0), at(100), at(200), at(300)],
@@ -241,12 +241,15 @@ def test_sample_set_skips_excluded_and_nan_samples() -> None:
     rh = SampleSet.from_series(series, "rh_pct", mask)
     unmasked = SampleSet.from_series(series, "temp_c", 0)
 
-    # SPIKE is excluded by default, STEP is informative only.
-    assert temp.sample_values.tolist() == [5.0, 6.0]
-    assert (temp.times_ns - T0_NS).tolist() == [200 * NS, 300 * NS]
-    assert rh.sample_values.tolist() == [50.0, 60.0]
-    assert unmasked.sample_values.tolist() == [99.0, 5.0, 6.0]
-    assert len(temp) == 2
+    # SPIKE is excluded by default, STEP is informative only. The rows at 100 s and 300 s
+    # miss one variable without a MISSING flag (qc = 0): under the whole-row rule they are
+    # invalid for both variables.
+    assert temp.sample_values.tolist() == [5.0]
+    assert (temp.times_ns - T0_NS).tolist() == [200 * NS]
+    assert rh.sample_values.tolist() == [60.0]
+    assert (rh.times_ns - T0_NS).tolist() == [200 * NS]
+    assert unmasked.sample_values.tolist() == [99.0, 5.0]
+    assert len(temp) == 1
 
 
 def test_sample_set_validation() -> None:

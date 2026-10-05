@@ -97,11 +97,14 @@ class SampleSet:
         Returns
         -------
         SampleSet
-            Samples that are neither excluded nor ``NaN``.
+            Samples of complete rows (temperature **and** humidity present, the whole-row rule
+            of :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`) that are not
+            excluded. The rule is checked on the values, so a row with one variable missing is
+            skipped for both variables even when it carries no ``MISSING`` flag.
         """
         frame = series.frame
         values = frame[variable].to_numpy(dtype=np.float64)
-        usable = series.valid_mask(exclude_mask).to_numpy() & ~np.isnan(values)
+        usable = series.complete_mask(exclude_mask).to_numpy()
         times_ns = epoch_ns(frame[Column.TIMESTAMP])
         return cls(times_ns[usable], values[usable])
 

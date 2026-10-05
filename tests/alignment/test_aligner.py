@@ -207,7 +207,7 @@ def test_derived_union_and_overlap_grids(drifting: list[MeasurementSeries]) -> N
     assert list(overlap.times) == [at(s) for s in range(1800, 7201, 1800)]
 
 
-def test_excluded_and_nan_samples_are_skipped(series_at: SeriesAt) -> None:
+def test_excluded_samples_and_unflagged_half_rows_are_skipped(series_at: SeriesAt) -> None:
     series = series_at(
         A,
         [0, 100, 200],
@@ -220,14 +220,17 @@ def test_excluded_and_nan_samples_are_skipped(series_at: SeriesAt) -> None:
     panel = SensorAligner(NearestWithinTolerance()).align([series], grid)
     raw = SensorAligner(NearestWithinTolerance(), exclude_mask=0).align([series], grid)
 
-    # The SPIKE sample at 0 s is excluded; temperature skips the NaN at 100 s and takes 200 s,
-    # humidity takes 100 s.
+    # The SPIKE sample at 0 s is excluded. The row at 100 s has no temperature and no MISSING
+    # flag (qc = 0, as read from the store); under the whole-row rule it is invalid for both
+    # variables, so both take the sample at 200 s.
     assert panel.variable("temp_c")[A].tolist() == [5.0]
-    assert panel.variable("rh_pct")[A].tolist() == [50.0]
-    offsets = panel.offsets_s("temp_c")
-    assert offsets is not None
-    assert offsets[A].tolist() == [200.0]
+    assert panel.variable("rh_pct")[A].tolist() == [60.0]
+    for variable in ("temp_c", "rh_pct"):
+        offsets = panel.offsets_s(variable)
+        assert offsets is not None
+        assert offsets[A].tolist() == [200.0]
     assert raw.variable("temp_c")[A].tolist() == [99.0]
+    assert raw.variable("rh_pct")[A].tolist() == [99.0]
 
 
 def test_dst_transitions_do_not_matter(series_at: SeriesAt) -> None:

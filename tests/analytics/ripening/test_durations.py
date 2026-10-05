@@ -109,6 +109,29 @@ def test_excluded_sample_leaves_its_own_interval_uncounted(
     assert hours[DAY] == pytest.approx(2.0)
 
 
+@pytest.mark.parametrize("missing", [Column.TEMP, Column.RH])
+def test_unflagged_half_row_is_not_a_valid_sample(
+    sensor_id: SensorId, durations: SampleDurations, missing: Column
+) -> None:
+    # Hour 1 misses one variable and carries no MISSING flag (qc = 0, as read from the
+    # store). Whole-row rule checked on the values: both masked columns are NaN there, so the
+    # frost hours count 2 h, not 3 h, whichever variable is missing.
+    temps = [-1.0, -1.0, -1.0, 5.0]
+    rh = [60.0] * 4
+    (temps if missing is Column.TEMP else rh)[1] = float("nan")
+    series = MeasurementSeries.from_records(
+        sensor_id, local_stamps(DAY, [0, 1, 2, 3]), temps, rh, qc=[0] * 4
+    )
+    mask = int(QcFlag.DEFAULT_EXCLUDE)
+    temp_c = masked_values(series, Column.TEMP, mask)
+    rh_pct = masked_values(series, Column.RH, mask)
+    assert np.isnan(temp_c[1])
+    assert np.isnan(rh_pct[1])
+    hours = durations.hours_by_day(series, temp_c, lambda t: t <= 0)
+    assert hours[DAY] == pytest.approx(2.0)
+    assert durations.weighted_mean(series, rh_pct, np.ones(4, dtype=bool)) == 60.0
+
+
 def test_irregular_sampling_gives_the_same_hours(
     sensor_id: SensorId, durations: SampleDurations
 ) -> None:

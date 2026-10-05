@@ -73,6 +73,8 @@ the rule in two different ways:
 | core (`MeasurementSeries.complete_mask`) | `True` only if both values are present and no flag of the exclusion mask is set |
 | core (`DailyWeather`) | uses `complete_mask`: a sample counts only with both values, regardless of the `MISSING` flag |
 | input validation (`values-present`) | a table in which one variable has no value at all is an ERROR (every row would be invalid) |
+| analytics (`ripening/durations.py` `masked_values`; `disease/botrytis.py` wetness periods; `disease/powdery_mildew.py` day assessment) | use `complete_mask` since WP-1.7: a temperature-only or humidity-only row is not a sample of any hour-based index |
+| alignment (`strategies.py` `SampleSet.from_series`, `grid.py` `usable_span`) | use `complete_mask` since WP-1.7: a half row is paired for neither variable and does not widen the grid |
 
 *Sets the `MISSING` flag* (the producers of the flag):
 
@@ -86,17 +88,13 @@ the rule in two different ways:
 
 | Layer | Location | What happens on unflagged data |
 |---|---|---|
-| analytics | `analytics/disease/botrytis.py:289-309` | a humidity-only row counts as wet and extends a wetness period |
-| analytics | `analytics/disease/powdery_mildew.py:72` | per-sample hours use temperature-only rows |
-| analytics | `analytics/ripening/durations.py:60,140,270` | values masked by flags only, `NaN` handled per variable |
-| alignment | `alignment/strategies.py:104` | grid points valid for one variable and not the other |
 | web | `DISPLAY_EXCLUDE_MASK` (= `DEFAULT_EXCLUDE`, 311) | a `null` without `MISSING` keeps the other value (see `docs/web.md`) |
 
 **Data read from the measurement store come back with `qc = 0`** (the store keeps no flags,
-§2.5). The QC pipeline (`QualityPipeline`, with `MissingValueCheck`) must therefore run on store
-data **before** analytics, alignment and the site export, or the locations above see unflagged
-half-rows. WP-1.7 (integration) wires this order and switches the analytics and alignment
-locations above to `MeasurementSeries.complete_mask`, so that they no longer depend on the flag.
+§2.5). The integration (WP-1.7, `sivin qc` / `sivin indices` / `sivin run`) therefore always runs
+the QC pipeline (`QualityPipeline`, with `MissingValueCheck`) on store data before daily
+aggregation and the indices; the site export (WP-3.2) must do the same. Since WP-1.7 the
+analytics and alignment locations above no longer depend on the flag.
 
 The `qc` field stays one flag set per row; the `NaN` of the other variable is not replaced.
 
