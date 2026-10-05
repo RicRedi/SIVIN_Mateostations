@@ -95,13 +95,13 @@ def test_index_on_two_hand_built_nights(make_context: ContextFactory) -> None:
     details = dict(result.details)
     assert details["n_events"] == 2
     assert details["wetness_proxy"] == "rh_pct >= 90"
-    assert details["event_001_start_utc"] == "2026-06-01T08:00:00+00:00"  # 10:00 CEST
-    assert details["event_001_duration_h"] == 3.0
-    assert details["event_001_mean_temp_c"] == 20.0
-    assert details["event_002_start_utc"] == "2026-06-01T19:00:00+00:00"  # 21:00 CEST
-    assert details["event_002_duration_h"] == 5.0
-    assert details["event_002_mean_temp_c"] == 15.0
-    assert details["event_002_infection_probability"] == pytest.approx(Y_5H_15C, abs=1e-7)
+    assert details["total_wetness_h"] == 8.0  # 3 h + 5 h
+    # Only the event with the highest Y (event 2) is in details.
+    assert details["max_infection_probability"] == pytest.approx(Y_5H_15C, abs=1e-7)
+    assert details["max_event_start_utc"] == "2026-06-01T19:00:00+00:00"  # 21:00 CEST
+    assert details["max_event_duration_h"] == 5.0
+    assert details["max_event_mean_temp_c"] == 15.0
+    assert not any(key.startswith("event_") for key in details)
 
 
 def test_events_carry_the_period(make_context: ContextFactory) -> None:
@@ -173,7 +173,7 @@ def test_short_events_and_events_without_temperature_are_left_out(
     long_only = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2), min_event_duration_h=4)
     result = BotrytisBroome(long_only).compute(ctx)
     assert result.details["n_events"] == 1
-    assert result.details["event_001_duration_h"] == 5.0
+    assert result.details["max_event_duration_h"] == 5.0
     for hour in (10, 11, 12):
         temps[hour] = NAN
     params = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2))
@@ -182,6 +182,20 @@ def test_short_events_and_events_without_temperature_are_left_out(
     assert without_temp.daily is not None
     # Jun 1 temperature coverage 21/24 = 0.875 < 0.9 and no scored event: NaN, not 0.
     assert math.isnan(without_temp.daily[date(2026, 6, 1)])
+
+
+def test_max_wetness_cap_limits_saturation(make_context: ContextFactory) -> None:
+    # 48 h at RH 95 %, 20 °C (synthetic fog spell): W = 48 h.
+    times = [f"2026-06-0{d} {h:02d}:00" for d in (1, 2) for h in range(24)]
+    ctx = make_context(times, [20.0] * 48, [95.0] * 48)
+    uncapped = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2))
+    # W = 48, T = 20: -2.647866 - 17.996496 + 59.13696 - 29.0112 = 9.481398 -> Y = 0.99992
+    assert BotrytisBroome(uncapped).compute(ctx).value == pytest.approx(0.9999237, abs=1e-6)
+    capped = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2), max_wetness_h=12.0)
+    result = BotrytisBroome(capped).compute(ctx)
+    # W capped at 12 h, T = 20 °C -> Y = 0.5949459 (see test above); duration still 48 h.
+    assert result.value == pytest.approx(0.5949459, abs=1e-7)
+    assert result.details["max_event_duration_h"] == 48.0
 
 
 def test_risk_bands(make_context: ContextFactory) -> None:

@@ -63,22 +63,32 @@ and 95 °F = 35.0 °C. Both band limits are inclusive.
    `onset_index_points`.
 2. **Heat and hours on the same day.** The heat penalty is applied independently of the
    hours rule, so a favourable day with heat nets $+20 - 10 = +10$ and a non-favourable heat day
-   $-20$. The rules list both conditions separately. Some descriptions limit the decrease
-   to 10 points per day; this is **[to be verified]** and listed as an owner question in
-   `docs/wp_log/WP-2.3.md`.
-3. **Heat before onset** is ignored. Heat does not reset the onset streak, because the rules
-   define the heat penalty only for the running index.
+   $-20$. This is a project interpretation **[to be verified]**: in the descriptions of the
+   index known to us, the two conditions are listed separately, but the original text was not
+   checked. Some descriptions limit the decrease to 10 points per day; this is also
+   **[to be verified]** and listed as an owner question in `docs/wp_log/WP-2.3.md`.
+3. **Heat before onset** is ignored and does not reset the onset streak. This is a project
+   interpretation **[to be verified]**: the descriptions known to us mention the heat penalty
+   only for the running index.
 4. **Undetermined days.** A day is *undetermined* when it is not favourable on the samples we
    have and its temperature coverage is below `analytics.min_daily_coverage`: the missing
    data could have held the run. Such a day **leaves the state unchanged**. While waiting,
-   the streak neither grows nor resets. Once active, the index gets neither +20 nor −10. A heat
+   the streak neither grows nor resets, but only for up to `max_undetermined_carry_days`
+   (default 1, project default **[to be tuned]**) consecutive undetermined days. A longer run of
+   undetermined days resets the streak, so "3 consecutive days" cannot span a long outage.
+   Once active, the index gets neither +20 nor −10. A heat
    period that was observed on such a day still subtracts its points. A day with low coverage
    that already shows a long enough run is favourable, because more data cannot undo an
    observed run.
 5. **The index stays active** until the end of the period once it has started, even if it
-   falls to 0. Restarting it would need a rule the sources do not state.
+   falls to 0. This is a project interpretation **[to be verified]**: the descriptions known to
+   us do not mention a restart, but the original text was not checked.
 6. **Day boundaries.** Runs are searched within one local calendar day (Europe/Prague). The
-   duration of the last sample of a day may reach a few minutes into the next day.
+   duration of the last sample of a day may reach a few minutes into the next day. **Known
+   limitation:** a run that crosses midnight is split into two runs, one per day. For example,
+   a band period from 21:00 to 03:00 gives about 3 h + 3 h, and neither day is favourable,
+   although the run lasted 6 h. Such warm nights are rare in South Moravia; the behaviour is
+   kept as is.
 
 ## Period and aggregation
 
@@ -91,9 +101,10 @@ and 95 °F = 35.0 °C. Both band limits are inclusive.
 - Completeness: `coverage` is the share of days in the period whose temperature coverage
   reaches `analytics.min_daily_coverage` (`ClimateIndex._season_days`). `complete` is
   `coverage >= analytics.min_season_coverage`.
-- Output: `value` is the season maximum of the index (points). `classification` is the class
-  of the **last** computed day. `daily` is the index at the end of each day. `details` holds
-  `onset_date`, `current_index_points`, `phase` and the counts of favourable, unfavourable,
+- Output: `value` is the season maximum of the index (points), and `classification` is the
+  class of that maximum. `daily` is the index at the end of each day. `details` holds
+  `onset_date`, `current_index_points`, `current_class` (class of the last computed day),
+  `phase` and the counts of favourable, unfavourable,
   undetermined and heat days.
 
 ## Parameters
@@ -108,6 +119,7 @@ WP).
 | `min_favourable_run_h` | 6 | h | Gubler et al. (1999); UC IPM |
 | `onset_days` | 3 | d | Gubler et al. (1999); UC IPM |
 | `onset_index_points` | 60 | points | interpretation (3 × 20) **[to be verified]** |
+| `max_undetermined_carry_days` | 1 | d | project default **[to be tuned]** |
 | `favourable_day_points` | 20 | points | Gubler et al. (1999); UC IPM |
 | `unfavourable_day_points` | 10 | points | Gubler et al. (1999); UC IPM |
 | `heat_temp_c` | 35.0 (95 °F) | °C | Gubler et al. (1999); UC IPM |

@@ -160,6 +160,15 @@ class BotrytisBroomeParams(IndexParams):
             "(report all) [to be tuned]."
         ),
     )
+    max_wetness_h: float | None = Field(
+        None,
+        gt=0.0,
+        description=(
+            "Optional cap (h) on the wetness duration W used in the model; long estimated "
+            "periods (W > 24 h) otherwise give Y close to 1. None (default): no cap. Project "
+            "choice."
+        ),
+    )
     coefficients: BroomeCoefficients = Field(
         default_factory=BroomeCoefficients,
         description="Logit coefficients of Broome et al. (1995) [to be verified].",
@@ -322,7 +331,8 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
     Result: ``value`` is the season maximum of the infection probability ``Y`` (0-1; 0 if no
     wetness period was estimated), ``daily`` the daily maximum of ``Y`` by the local date on
     which a period ends, from the first to the last day with samples in the period (0 on
-    covered days without a period, ``NaN`` on other days), ``details`` the events, and
+    covered days without a period, ``NaN`` on other days), ``details`` summary keys and the
+    event with the highest ``Y`` (the full list comes from :meth:`infection_events`), and
     ``estimated`` is always ``True``. Coverage counts the days of
     the period on which **both** temperature and humidity reach ``ctx.min_daily_coverage``.
     """
@@ -357,7 +367,7 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
                 logger.info("Wetness period from %s has no valid temperature.", period.start_utc)
                 continue
             probability = self.params.coefficients.infection_probability(
-                period.duration_h, period.mean_temp_c
+                self._model_wetness_h(period.duration_h), period.mean_temp_c
             )
             events.append(InfectionEvent(period, period.mean_temp_c, probability))
         return events
@@ -420,18 +430,24 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
             )
         return self._daily_series(days, [values[day] for day in days])
 
+    def _model_wetness_h(self, duration_h: float) -> float:
+        """Return the wetness duration W in hours used in the model (capped if configured)."""
+        cap = self.params.max_wetness_h
+        return duration_h if cap is None else min(duration_h, cap)
+
     def _details(self, events: Sequence[InfectionEvent]) -> dict[str, float | int | str]:
+        """Summary keys and the event with the highest Y (full list: :meth:`infection_events`)."""
         details: dict[str, float | int | str] = {
             "n_events": len(events),
             "wetness_proxy": f"rh_pct >= {self.params.wet_rh_threshold_pct:g}",
+            "total_wetness_h": sum(event.period.duration_h for event in events),
         }
-        for number, event in enumerate(events, start=1):
-            period = event.period
-            prefix = f"event_{number:03d}"
-            details[f"{prefix}_start_utc"] = period.start_utc.isoformat()
-            details[f"{prefix}_duration_h"] = period.duration_h
-            details[f"{prefix}_mean_temp_c"] = event.mean_temp_c
-            details[f"{prefix}_infection_probability"] = event.infection_probability
+        if events:
+            top = max(events, key=lambda event: event.infection_probability)
+            details["max_infection_probability"] = top.infection_probability
+            details["max_event_start_utc"] = top.period.start_utc.isoformat()
+            details["max_event_duration_h"] = top.period.duration_h
+            details["max_event_mean_temp_c"] = top.mean_temp_c
         return details
 
 

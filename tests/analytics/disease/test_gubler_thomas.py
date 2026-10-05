@@ -84,6 +84,23 @@ def test_state_machine_onset_growth_decline_heat_and_bounds() -> None:
     assert states[-1].day == date(2026, 6, 23)
 
 
+def test_long_outage_resets_the_onset_streak() -> None:
+    # Reviewer example: Jun 1 favourable, Jun 2-12 without data, Jun 13-14 favourable.
+    days = [assessment(1, FAV), *(assessment(d, UNK) for d in range(2, 13))]
+    days += [assessment(13, FAV), assessment(14, FAV), assessment(15, FAV)]
+    states = GublerThomasModel(GublerThomasParams()).run(days)
+    # Jun 2 is carried (1 <= max 1), Jun 3 resets the streak; Jun 13-15 are 3 new days.
+    assert states[0].streak_days == 1
+    assert states[1].streak_days == 1
+    assert states[2].streak_days == 0
+    assert [s.streak_days for s in states[12:14]] == [1, 2]
+    assert states[13].phase is Phase.WAITING_FOR_ONSET  # no onset on Jun 14
+    assert states[14].onset_date == date(2026, 6, 15)
+    assert states[14].index_points == 60
+    longer = GublerThomasModel(GublerThomasParams(max_undetermined_carry_days=11)).run(days)
+    assert longer[13].onset_date == date(2026, 6, 14)  # carried through 11 undetermined days
+
+
 def test_classes_follow_uc_ipm_limits() -> None:
     model = GublerThomasModel(GublerThomasParams())
     assert [model.classify(p) for p in (0, 30, 40, 50, 60, 100)] == [
@@ -135,7 +152,7 @@ def test_index_on_hand_built_hourly_days(make_context: ContextFactory) -> None:
     assert list(result.daily) == [0.0, 0.0, 60.0, 70.0, 60.0, 60.0, 80.0, 60.0, 80.0, 70.0]
     assert result.daily.index[0] == date(2026, 6, 1)
     assert result.value == 80.0
-    assert result.classification == "high"  # current index 70 >= 60
+    assert result.classification == "high"  # season maximum 80 >= 60
     assert result.unit == "points"
     assert result.estimated is False
     # Complete days (coverage >= 0.9): Jun 1-5 and Jun 8-10 = 8 of the 30 days of June.
@@ -151,6 +168,7 @@ def test_index_on_hand_built_hourly_days(make_context: ContextFactory) -> None:
         "n_heat_days": 2,  # Jun 4, 8
         "longest_run_h_max": 10.0,  # Jun 7
         "onset_date": "2026-06-03",
+        "current_class": "high",  # current index 70 >= 60
     }
 
 
@@ -222,6 +240,7 @@ def test_complete_season_and_registry(make_context: ContextFactory) -> None:
     assert result.complete is True
     assert result.value == 0.0
     assert result.classification == "low"
+    assert result.details["current_class"] == "low"
     assert result.details["phase"] == "waiting_for_onset"
     assert "onset_date" not in result.details
     assert result.daily is not None

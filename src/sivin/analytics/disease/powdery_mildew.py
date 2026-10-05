@@ -117,10 +117,10 @@ class PowderyMildewDayAssessor:
 class PowderyMildewGublerThomas(DiseaseIndex[GublerThomasParams]):
     """Gubler-Thomas powdery mildew risk index (UC Davis), 0-100 points.
 
-    Result: ``value`` is the season maximum of the index, ``classification`` the risk class of
-    the **last** day, ``daily`` the index at the end of each day from the first to the last day
-    with samples in the period (the model waits for onset before the first sample), and
-    ``details`` the onset date, the current index and day counts.
+    Result: ``value`` is the season maximum of the index and ``classification`` its risk
+    class; ``daily`` is the index at the end of each day from the first to the last day with
+    samples in the period (the model waits for onset before the first sample); ``details``
+    holds the onset date, the current index and its class (``current_class``) and day counts.
     ``coverage``/``complete`` follow ``ClimateIndex._season_days`` (temperature coverage).
     """
 
@@ -158,9 +158,12 @@ class PowderyMildewGublerThomas(DiseaseIndex[GublerThomasParams]):
             selection.coverage,
             value=float(daily.max()),
             complete=selection.complete,
-            classification=str(model.classify(current.index_points)),
+            classification=str(model.classify(max(s.index_points for s in states))),
             daily=daily,
-            details=_details(states, assessments),
+            details={
+                **_details(states, assessments),
+                "current_class": str(model.classify(current.index_points)),
+            },
         )
 
 

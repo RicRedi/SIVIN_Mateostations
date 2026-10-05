@@ -73,9 +73,10 @@ $RH \ge RH_{wet}$, with a default of 90 %. A **wetness period** is a run of wet 
     that has data, and `null` when the period has no samples.
   - `daily`: daily maximum of $Y$. It is 0 on covered days without a period and `NaN` on days
     that are neither covered nor have a period.
-  - `details`: `n_events`, `wetness_proxy` and, per event `NNN`, `event_NNN_start_utc`,
-    `event_NNN_duration_h`, `event_NNN_mean_temp_c` and `event_NNN_infection_probability`.
-    The typed list is available from `BotrytisBroome.infection_events(ctx)`.
+  - `details`: summary keys `n_events`, `wetness_proxy`, `total_wetness_h` and
+    `max_infection_probability`, plus the event with the highest $Y$: `max_event_start_utc`,
+    `max_event_duration_h` and `max_event_mean_temp_c`. The full list of events is available
+    from `BotrytisBroome.infection_events(ctx)`.
 
 ## Parameters
 
@@ -87,6 +88,7 @@ WP).
 | `wet_rh_threshold_pct` | 90 | % | project default, **to be tuned** (proxy, not from Broome et al.) |
 | `max_dry_interruption_h` | 1.0 | h | project default, **to be tuned** |
 | `min_event_duration_h` | 0 (report all) | h | project default, **to be tuned** |
+| `max_wetness_h` | none (no cap) | h | project choice; caps $W$ in the formula |
 | `coefficients.intercept` | −2.647866 | — | Broome et al. (1995) **[to be verified]** |
 | `coefficients.wetness_h` | −0.374927 | 1/h | Broome et al. (1995) **[to be verified]** |
 | `coefficients.wetness_temp` | 0.061601 | 1/(h·°C) | Broome et al. (1995) **[to be verified]** |
@@ -130,7 +132,11 @@ regression intercept and has no meaning outside the wetness durations the model 
   even when the berries stay dry.
 - **Range of validity.** The model was fitted on a limited range of wetness durations and
   temperatures (see the paper; not verified here). Values outside that range, for example
-  $W > 24$ h or $T$ near 0 °C or above 30 °C, are extrapolations.
+  $W > 24$ h or $T$ near 0 °C or above 30 °C, are extrapolations. With the humidity proxy,
+  multi-day fog or rain spells easily give $W > 24$ h, and $Y$ then **saturates near 1**: for
+  example, $W = 48$ h at 20 °C gives $Y = 0.99992$. The optional parameter `max_wetness_h`
+  (default: no cap, project choice) caps the $W$ used in the formula. The reported duration of
+  the period is not changed.
 - **Phenology** is not modelled: berries are susceptible at bloom and from veraison, and the
   default window also scores periods when no susceptible tissue is present.
 - **~30-minute sampling:** $W$ has a resolution of one sample (~0.5 h), and a single dry

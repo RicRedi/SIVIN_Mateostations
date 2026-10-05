@@ -62,14 +62,17 @@ RunFinder(max_interruption_s=0.0).find(timing, condition, valid) -> list[SampleR
 
 - `powdery_mildew_gt`:
   - `value` is the season maximum of the index (points).
-  - `classification` is the class of the last day (`low`/`moderate`/`high`).
+  - `classification` is the class of that season maximum (`low`/`moderate`/`high`).
   - `daily` is the index per local day.
-  - `details` has `onset_date`, `current_index_points`, `phase` and day counts.
+  - `details` has `onset_date`, `current_index_points`, `current_class` (class of the last
+    day), `phase` and day counts.
 - `botrytis_broome`:
   - `value` is the season maximum of Y (0-1).
   - `daily` is the daily maximum of Y.
-  - `details` has `n_events`, `wetness_proxy` and flat `event_NNN_*` keys (start, duration,
-    mean T, Y).
+  - `details` has the summary keys `n_events`, `wetness_proxy`, `total_wetness_h` and
+    `max_infection_probability`, plus the event with the highest Y (`max_event_start_utc`,
+    `max_event_duration_h`, `max_event_mean_temp_c`). The full list comes from
+    `infection_events(ctx)`.
   - `classification` is `None` unless `risk_bands` are configured.
 
 ## How it was verified
@@ -79,9 +82,10 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
 - `make lint`: `All checks passed!`, `43 files already formatted`.
 - `make type`: `Success: no issues found in 27 source files` (mypy `--strict`, no ignores in
   `src/`).
-- `make test`: `213 passed` (181 foundation + 32 new).
+- `make test`: `213 passed` (181 foundation + 32 new). Round 2: see below.
 - `make cov`: every module of `sivin/analytics/disease` is at 100 % (statements and
   branches, 492 statements and 86 branches in total). `TOTAL 1317 0 264 0 100%`.
+- Round 2: ROUND2_GATES
 - The test expectations were computed by hand, with the arithmetic in comments:
   - Gubler-Thomas state machine on a 23-day sequence: onset after a reset streak, growth to the
     bound of 100, +20/−10 heat on the same day, an undetermined day held, observed heat on an
@@ -125,7 +129,8 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
    brief's "at least one valid sample ≥ 35 °C", and it stays correct with denser sampling.
 3. **Undetermined days** (no qualifying run and temperature coverage below
    `min_daily_coverage`) leave the state unchanged. While waiting the streak is neither
-   counted nor reset. Once active there is no +20 and no −10, but observed heat still costs
+   counted nor reset, for at most `max_undetermined_carry_days` (default 1, project default
+   [to be tuned]) consecutive undetermined days; a longer run resets the streak (round 2). Once active there is no +20 and no −10, but observed heat still costs
    10 points. A low-coverage day that already shows a ≥ 6 h run counts as favourable.
 4. **Index at onset = 60** (3 × 20). **Heat and hours apply independently** on the same day
    (net +10 or −20). **Heat is ignored before onset.** The index stays active once started.
@@ -141,8 +146,13 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
    `classification` is `None`.
 9. **Broome coverage** uses days where both `temp_coverage` and `rh_coverage` reach the
    threshold (own helper; `ClimateIndex._season_days` checks temperature only).
-10. `details` only allows flat scalars, so the Broome events are flattened into `event_NNN_*`
-    keys. The structured list is available from `BotrytisBroome.infection_events()`.
+10. `details` only allows flat scalars, so Broome reports summary keys and the event with the
+    highest Y there (round 2; round 1 flattened every event). The structured list is
+    available from `BotrytisBroome.infection_events()`.
+11. **`max_wetness_h`** (round 2): an optional cap on the W used in the Broome formula
+    (default `None`, no cap; project choice), because Y saturates near 1 for W > 24 h.
+12. **Midnight split** (round 2, documented, behaviour unchanged): a Gubler-Thomas run that
+    crosses local midnight is split per day.
 
 ## Out of scope
 
@@ -154,10 +164,17 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
 - **`ClimateIndex._season_days` / `DailyWeather.complete_days`** filter on temperature coverage
   only. Humidity-based indices (here Botrytis; in WP-2.2 `dew_point`, `vpd`) need an RH-aware
   variant. Proposal: a `variables` argument, e.g. `_season_days(ctx, season, ("temp", "rh"))`.
-- **`IndexResult.details`** cannot hold lists or records. Per-event outputs (Botrytis
-  wetness events, later frost events) have to be flattened. Proposal: an optional
-  `events: tuple[Mapping[str, ...], ...]` field, or a separate events file in the site contract
-  (§2.6), if the web should show them.
+- **`IndexResult.details`** cannot hold lists or records, so per-event outputs (Botrytis
+  wetness events, later frost events) are reduced to summary keys. Proposal for a contract
+  change (owner approval, §0.3/3):
+  - add an optional field `events: tuple[Mapping[str, float | int | str], ...] = ()` to
+    `IndexResult`, with one record per event, for example
+    `{start_utc, end_utc, duration_h, mean_temp_c, infection_probability}`;
+  - in the site contract (§2.6), extend `indices/<season>.json` with an optional
+    `"events": [...]` per sensor and index, using Unix seconds for times like the rest of the
+    contract. Alternatively, write `site/data/index_events/<season>/<sensor_id>.json`, so that
+    the index summary stays small.
+  `BotrytisBroome.infection_events()` already returns the records this field would carry.
 - `DiseaseIndex._result` / `_model_days` / `_daily_series` would suit other index packages
   too (a generic result builder on `ClimateIndex`).
 
@@ -242,14 +259,14 @@ Reviewer: independent reviewer agent; nothing below was fixed by the reviewer.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | src/sivin/analytics/disease/gubler_thomas.py:303 | An undetermined day carries the onset streak without limit, so "3 consecutive days" can span weeks of outage | open |
-| minor | src/sivin/analytics/disease/powdery_mildew.py:409-419; docs/indices/powdery_mildew_gt.md:80 | A favourable run that crosses midnight is split per local day; the consequence is not documented | open |
-| minor | docs/indices/powdery_mildew_gt.md:66, :79 | Two unverified interpretations are justified with statements about "the rules"/"the sources" as if checked | open |
-| minor | src/sivin/analytics/disease/botrytis.py:423-435 | `details` grows by 4 keys per event without bound (hundreds per season) | open |
-| minor | docs/indices/botrytis_broome.md:131-133 | The fitted W/T range is not given; long RH ≥ 90 % periods saturate Y ≈ 1 | open |
-| nit | src/sivin/analytics/disease/botrytis.py:430 | `event_{number:03d}` breaks the lexical order beyond 999 events | open |
-| nit | docs/indices/downy_mildew.md:29 | "infection step ... depends on rain splash" mixes up dispersal (rain splash) and infection (leaf wetness) | open |
-| nit | src/sivin/analytics/disease/powdery_mildew.py:488-495 | `value` (season maximum) and `classification` (last day) describe different days, so the web may show "100, low" | open |
+| minor | src/sivin/analytics/disease/gubler_thomas.py:303 | An undetermined day carries the onset streak without limit, so "3 consecutive days" can span weeks of outage | fixed: `max_undetermined_carry_days` (default 1, [to be tuned]); test with the reviewer's example |
+| minor | src/sivin/analytics/disease/powdery_mildew.py:409-419; docs/indices/powdery_mildew_gt.md:80 | A favourable run that crosses midnight is split per local day; the consequence is not documented | fixed: documented as a known limitation (interpretation 6); behaviour unchanged |
+| minor | docs/indices/powdery_mildew_gt.md:66, :79 | Two unverified interpretations are justified with statements about "the rules"/"the sources" as if checked | fixed: both reworded as project interpretations [to be verified], also interpretation 3 |
+| minor | src/sivin/analytics/disease/botrytis.py:423-435 | `details` grows by 4 keys per event without bound (hundreds per season) | fixed: summary keys plus the max-Y event; full list via `infection_events()`; contract field proposed under Out of scope |
+| minor | docs/indices/botrytis_broome.md:131-133 | The fitted W/T range is not given; long RH ≥ 90 % periods saturate Y ≈ 1 | fixed: saturation documented; optional `max_wetness_h` cap (default None); test |
+| nit | src/sivin/analytics/disease/botrytis.py:430 | `event_{number:03d}` breaks the lexical order beyond 999 events | moot: per-event keys removed |
+| nit | docs/indices/downy_mildew.md:29 | "infection step ... depends on rain splash" mixes up dispersal (rain splash) and infection (leaf wetness) | fixed: dispersal and infection worded separately |
+| nit | src/sivin/analytics/disease/powdery_mildew.py:488-495 | `value` (season maximum) and `classification` (last day) describe different days, so the web may show "100, low" | fixed: `classification` is the class of `value`; last day's class in `details["current_class"]` |
 
 **Details and suggested fixes.**
 

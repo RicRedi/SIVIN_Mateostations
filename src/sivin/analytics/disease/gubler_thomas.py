@@ -18,7 +18,8 @@ choices of this project marked as such (see ``docs/indices/powdery_mildew_gt.md`
   favourable heat day nets +10). The index stays within 0-100.
 * **Undetermined day** (not enough data to decide whether it was favourable): the streak or the
   index is carried unchanged (project rule); a heat period that *was* observed still subtracts
-  its points.
+  its points. While waiting, at most ``max_undetermined_carry_days`` consecutive undetermined
+  days carry the streak; a longer run of them resets it (project rule [to be tuned]).
 """
 
 from __future__ import annotations
@@ -100,6 +101,14 @@ class GublerThomasParams(IndexParams):
         description=(
             "Index value (points) on the onset day: 3 onset days x 20 points. Interpretation of "
             "this project [to be verified]."
+        ),
+    )
+    max_undetermined_carry_days: int = Field(
+        1,
+        ge=0,
+        description=(
+            "Consecutive undetermined days (d) that may carry the onset streak; a longer run "
+            "of them resets it. Project default [to be tuned]."
         ),
     )
     favourable_day_points: int = Field(
@@ -197,6 +206,8 @@ class GublerThomasState:
         Waiting for onset or active.
     streak_days : int
         Consecutive favourable days counted towards the onset (0 once active).
+    undetermined_days : int
+        Consecutive undetermined days just before this state while waiting (0 once active).
     index_points : int
         Index value in points (0 while waiting).
     onset_date : datetime.date or None
@@ -206,6 +217,7 @@ class GublerThomasState:
     day: date | None
     phase: Phase
     streak_days: int
+    undetermined_days: int
     index_points: int
     onset_date: date | None
 
@@ -236,6 +248,7 @@ class GublerThomasModel:
             day=None,
             phase=Phase.WAITING_FOR_ONSET,
             streak_days=0,
+            undetermined_days=0,
             index_points=self._params.min_index_points,
             onset_date=None,
         )
@@ -301,17 +314,25 @@ class GublerThomasModel:
 
     def _wait(self, state: GublerThomasState, day: DayAssessment) -> GublerThomasState:
         if day.favourable is None:
-            return replace(state, day=day.day)
+            undetermined_days = state.undetermined_days + 1
+            carried = undetermined_days <= self._params.max_undetermined_carry_days
+            return replace(
+                state,
+                day=day.day,
+                streak_days=state.streak_days if carried else 0,
+                undetermined_days=undetermined_days,
+            )
         if not day.favourable:
-            return replace(state, day=day.day, streak_days=0)
+            return replace(state, day=day.day, streak_days=0, undetermined_days=0)
         streak_days = state.streak_days + 1
         if streak_days < self._params.onset_days:
-            return replace(state, day=day.day, streak_days=streak_days)
+            return replace(state, day=day.day, streak_days=streak_days, undetermined_days=0)
         logger.debug("Powdery mildew index starts on %s.", day.day)
         return GublerThomasState(
             day=day.day,
             phase=Phase.ACTIVE,
             streak_days=0,
+            undetermined_days=0,
             index_points=self._params.onset_index_points,
             onset_date=day.day,
         )

@@ -26,8 +26,8 @@ rainfall and/or leaf wetness as **inputs**:
 
 Our sensors measure **only air temperature and relative humidity** at ~30-minute intervals. A
 model run with rainfall and wetness replaced by a humidity proxy would no longer be either
-model. The infection step cannot be estimated from humidity, because it depends on rain
-splash. A result labelled "downy mildew" could not be validated and could mislead spraying
+model. Neither step can be estimated from humidity: dispersal of the zoospores depends on rain
+splash, and infection depends on free water on the leaf, which humidity does not measure. A result labelled "downy mildew" could not be validated and could mislead spraying
 decisions, so the project does not compute one.
 
 ## What would be needed
