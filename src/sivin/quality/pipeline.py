@@ -1,16 +1,21 @@
-"""The quality-control pipeline: checks and deployment detection in a fixed order.
+"""The quality-control pipeline: checks, the off-site log and deployment detection in order.
 
-Order (MIGRATION_PLAN §2.7):
+Order (MIGRATION_PLAN §2.7, §2.8):
 
 1. **Screening checks** on the whole series (default ``missing``, ``sampling``, ``range``):
    they find what is wrong regardless of where the sensor is, and the detector ignores samples
    they excluded (``MISSING``, ``OUT_OF_RANGE``) so that a gross error cannot fake a
    transition.
-2. **Deployment detection** on the whole series: ``deployment`` / ``retrieval`` events and
-   ``PRE_DEPLOYMENT`` for every sample recorded indoors.
-3. **Deployed checks** (default ``spike``, ``step``, ``persistence``) separately on every
-   continuous outdoor stretch. Indoor data are not checked against outdoor expectations, and
-   the jump at a deployment is never reported as a spike or step.
+2. **Off-site log** (if the pipeline has one): :class:`~sivin.quality.checks.offsite.OffSiteCheck`
+   sets ``PRE_DEPLOYMENT`` on every sample inside a logged period and reports each period as an
+   ``off_site`` event. The log is the source of truth for ``PRE_DEPLOYMENT``.
+3. **Deployment detection** on the whole series. In the default ``advisory`` mode it only warns
+   about indoor-like periods the log does not cover; in ``enforce`` mode it also sets
+   ``PRE_DEPLOYMENT`` on detected indoor samples.
+4. **Deployed checks** (default ``spike``, ``step``, ``persistence``) separately on every
+   continuous stretch without ``PRE_DEPLOYMENT`` from steps 2-3. Off-site data are not checked
+   against outdoor expectations, and the jump at a deployment is never reported as a spike or
+   step.
 
 All flags are OR-ed into the ``qc`` column (existing flags are kept).
 """
@@ -32,8 +37,15 @@ import sivin.quality.checks  # noqa: F401  (registers the built-in checks)
 from sivin.core.flags import QcFlag
 from sivin.core.schema import QC_DTYPE, Column, MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckRegistry, QualityCheck, check_registry
-from sivin.quality.deployment import DeploymentDetector, DeploymentResult, DeploymentSettings
+from sivin.quality.checks.offsite import OffSiteCheck
+from sivin.quality.deployment import (
+    DeploymentDetector,
+    DeploymentResult,
+    DeploymentSettings,
+    true_ranges,
+)
 from sivin.quality.events import QualityEvent
+from sivin.registry.offsite import OffSiteLog
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +75,10 @@ class QualityPipelineSettings(BaseModel):
     )
     detect_deployment: bool = Field(
         True,
-        description="Run deployment detection; if false, the whole series counts as outdoor.",
+        description=(
+            "Run deployment detection (advisory by default, see deployment.mode); if false, "
+            "only the off-site log decides which samples are off site."
+        ),
     )
     deployment: DeploymentSettings = Field(
         default_factory=DeploymentSettings, description="Deployment detector settings."
@@ -116,33 +131,41 @@ class QualityResult:
 
 
 class QualityPipeline:
-    """Run screening checks, deployment detection and deployed checks (module docstring).
+    """Run screening checks, the off-site log, detection and deployed checks (module docstring).
 
     Parameters
     ----------
     screening : sequence of QualityCheck
         Checks run on the whole series, in order.
     deployed : sequence of QualityCheck
-        Checks run on each outdoor stretch, in order.
+        Checks run on each stretch without ``PRE_DEPLOYMENT``, in order.
     detector : DeploymentDetector or None
-        The deployment detector; ``None`` treats the whole series as outdoor.
+        The deployment detector; ``None`` skips detection.
+    off_site_log : OffSiteLog or None, optional
+        The off-site log, the source of truth for ``PRE_DEPLOYMENT``; ``None`` = no periods
+        (every sample counts as recorded in the vineyard unless the detector enforces).
     """
 
-    __slots__ = ("_deployed", "_detector", "_screening")
+    __slots__ = ("_deployed", "_detector", "_off_site", "_screening")
 
     def __init__(
         self,
         screening: Sequence[QualityCheck[Any]],
         deployed: Sequence[QualityCheck[Any]],
         detector: DeploymentDetector | None,
+        off_site_log: OffSiteLog | None = None,
     ) -> None:
         self._screening = tuple(screening)
         self._deployed = tuple(deployed)
         self._detector = detector
+        self._off_site = None if off_site_log is None else OffSiteCheck(off_site_log)
 
     @classmethod
     def from_settings(
-        cls, settings: QualityPipelineSettings, registry: CheckRegistry = check_registry
+        cls,
+        settings: QualityPipelineSettings,
+        registry: CheckRegistry = check_registry,
+        off_site_log: OffSiteLog | None = None,
     ) -> QualityPipeline:
         """Build a pipeline from its settings.
 
@@ -152,6 +175,9 @@ class QualityPipeline:
             Enabled checks, their settings and the detector settings.
         registry : CheckRegistry, optional
             Where the check names are looked up.
+        off_site_log : OffSiteLog or None, optional
+            The off-site log (loaded with
+            :class:`~sivin.registry.offsite.OffSiteLogStore`).
 
         Returns
         -------
@@ -168,7 +194,12 @@ class QualityPipeline:
             return [registry.create(name, settings.check_settings.get(name)) for name in names]
 
         detector = DeploymentDetector(settings.deployment) if settings.detect_deployment else None
-        return cls(build(settings.screening_checks), build(settings.deployed_checks), detector)
+        return cls(
+            build(settings.screening_checks),
+            build(settings.deployed_checks),
+            detector,
+            off_site_log,
+        )
 
     def run(
         self,
@@ -182,7 +213,8 @@ class QualityPipeline:
         series : MeasurementSeries
             The measurements of one sensor.
         known_deployments : sequence of datetime, optional
-            Known deployment times (timezone-aware), e.g. ``placement.from`` of the registry.
+            Known deployment times (timezone-aware), e.g. ``placement.from`` of the registry;
+            passed to the detector.
 
         Returns
         -------
@@ -193,14 +225,18 @@ class QualityPipeline:
         events: list[QualityEvent] = []
         for check in self._screening:
             _collect(check.check(series), flags, events)
+        if self._off_site is not None:
+            _collect(self._off_site.check(series), flags, events)
         deployment = None
-        stretches: tuple[tuple[int, int], ...] = ((0, len(series)),) if len(series) else ()
         if self._detector is not None:
-            deployment = self._detector.detect(series.with_flags(flags), known_deployments)
+            logged = (
+                () if self._off_site is None else self._off_site.log.periods_for(series.sensor_id)
+            )
+            deployment = self._detector.detect(series.with_flags(flags), known_deployments, logged)
             _collect(deployment.outcome(), flags, events)
-            stretches = deployment.deployed_ranges()
+        off_site = (flags & np.int32(QcFlag.PRE_DEPLOYMENT)) != 0
         for check in self._deployed:
-            for start, stop in stretches:
+            for start, stop in true_ranges(~off_site):
                 outcome = check.check(_rows(series, start, stop))
                 _collect(outcome, flags[start:stop], events)
         flagged = series.with_flags(flags)

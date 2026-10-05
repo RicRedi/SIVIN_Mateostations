@@ -122,13 +122,14 @@ def test_formula_cells_without_cached_values_are_rejected() -> None:
     assert "'Teplota (°C)', 'Vlhkost (%)' contain no value in 48 data row(s)" in issue.message
 
 
-def test_one_empty_variable_is_a_warning(write_csv: CsvWriter) -> None:
+def test_one_empty_variable_is_an_error(write_csv: CsvWriter) -> None:
+    # Whole-row validity (owner decision 2026-10-05): without temperatures every row would be
+    # MISSING, so the export holds no valid measurement and is rejected.
     rows = [["2026-03-01 00:00:07", "", "86,7"], ["2026-03-01 00:30:32", "", "85,2"]]
     result = PortalCsvParser(make_settings()).parse(write_csv(rows))
-    frame = only_series(result)
-    assert result.report.rules() == {"values-present"}
-    assert frame["temp_c"].isna().all()
-    assert (frame["qc"] == 0).all()
+    assert result.series == ()
+    assert result.report.rules(Severity.ERROR) == {"values-present"}
+    assert "'Teplota (°C)' contain no value in 2 data row(s)" in result.report.errors[0].message
     empty = [["2026-03-01 00:00:07", "", ""], ["2026-03-01 00:30:32", "", ""]]
     report = PortalCsvParser(make_settings()).parse(write_csv(empty)).report
     assert report.rules(Severity.ERROR) == {"values-present"}
@@ -192,7 +193,9 @@ def test_truncated_last_csv_line_is_a_warning() -> None:
     assert (issue.rule, issue.row, issue.severity) == ("short-rows", 50, Severity.WARNING)
     assert frame["temp_c"].iloc[-1] == pytest.approx(3.9)
     assert np.isnan(frame["rh_pct"].iloc[-1])
-    assert frame["qc"].iloc[-1] == 0  # temperature is present: the row is not MISSING
+    # Whole-row validity: the humidity is missing, so the whole row is MISSING.
+    assert frame["qc"].iloc[-1] == int(QcFlag.MISSING)
+    assert (frame["qc"].iloc[:-1] == 0).all()
 
 
 def test_missing_file(tmp_path: Path) -> None:
@@ -212,7 +215,9 @@ def test_few_unparseable_values_become_missing(write_csv: CsvWriter) -> None:
     assert issue_temp.message.startswith("Column 'Teplota (°C)': 1 of 21 value(s)")
     assert issue_temp.row == 6
     assert "Vlhkost" in issue_rh.message
-    assert frame["qc"].tolist()[3:5] == [int(QcFlag.MISSING), 0]
+    # Row 4 lacks only its temperature; under whole-row validity it is MISSING too.
+    assert frame["qc"].tolist()[3:5] == [int(QcFlag.MISSING), int(QcFlag.MISSING)]
+    assert frame["qc"].tolist()[5] == 0
     assert np.isnan(frame["temp_c"].iloc[4])
     assert frame["rh_pct"].iloc[4] == pytest.approx(81.5)
 

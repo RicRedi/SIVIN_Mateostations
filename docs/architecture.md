@@ -49,16 +49,56 @@ changing one is a plan change approved by the owner.
 
 | Contract | Module | Summary |
 |---|---|---|
-| `SensorId` | `sivin.core.ids` | Canonical 8-digit serial (`77678271`). `SensorId.parse` accepts the portal name `8615620 77678271`, the GPX name `77678271 (VUT)` and export file names/paths. The legacy 4-digit suffix (`8271`) is ambiguous and only resolvable through the sensor registry. |
+| `SensorId` | `sivin.core.ids` | Canonical 8-digit serial (`77678271`). `SensorId.parse` accepts the portal name `8615620 77678271`, the GPX name `77678271 (VUT)` and export file names/paths, with spaces (`MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`) or with underscores (`MeteoData_8615620_77799986_VUT_20260301_223842.csv`, the spelling of the first real export). The legacy 4-digit suffix (`8271`) is ambiguous and only resolvable through the sensor registry. |
 | `QcFlag` | `sivin.core.flags` | `IntFlag` bit field per sample: `MISSING=1, OUT_OF_RANGE=2, SPIKE=4, STEP=8, STUCK=16, PRE_DEPLOYMENT=32, NEIGHBOR_OUTLIER=64, TIMESTAMP_SUSPECT=128, MANUAL_EXCLUDE=256`. `QcFlag.DEFAULT_EXCLUDE` (311) is the default exclusion mask for indices. |
-| `MeasurementSeries` | `sivin.core.schema` | Validated, immutable measurements of one sensor: `timestamp_utc` (`datetime64[ns, UTC]`, strictly increasing), `temp_c`, `rh_pct` (`float64`, `NaN` = missing), `qc` (`int32`), optional `source`. `to_frame()` adds `sensor_id` (long format). |
+| `MeasurementSeries` | `sivin.core.schema` | Validated, immutable measurements of one sensor: `timestamp_utc` (`datetime64[ns, UTC]`, strictly increasing), `temp_c`, `rh_pct` (`float64`, `NaN` = missing), `qc` (`int32`), optional `source`. `to_frame()` adds `sensor_id` (long format). `valid_mask(mask)` = not excluded by flags; `complete_mask(mask)` = additionally both values present (row validity, below). |
 | `LocalTimeConverter` | `sivin.core.timeutil` | Local wall-clock → UTC with deterministic daylight-saving handling. **Input must be in source order, oldest first** (never sorted by local time); decreasing unambiguous rows raise `ValueError`. Each fall-back transition is resolved on its own; only a single backward jump of the wall clock resolves it, anything else (e.g. no jump, several jumps) is a best guess flagged `unresolved`. Nonexistent spring times are shifted by the gap. Ambiguous and nonexistent rows are `suspect`; a suspect row that would duplicate another UTC instant becomes `NaT` + `unresolved`. Callers drop the `NaT` rows before `MeasurementSeries.from_records`. Also local calendar dates and UTC bounds of a local day (23 h / 25 h days). |
-| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day. Each variable is aggregated over its own valid values (present and not excluded): `temp_n_samples`/`temp_coverage`, `rh_n_samples`/`rh_coverage`. `n_samples` and `coverage` equal the temperature columns; `coverage` (share of the real day length covered by valid samples) is the column of the site contract. |
+| `DailyWeather` | `sivin.core.daily` | Daily min/mean/max of temperature and humidity per local calendar day over the **valid samples** (row validity, below). `n_samples` and `coverage` (share of the real day length covered by valid samples) are row-level; `coverage` is the column of the site contract. The per-variable columns `temp_n_samples`/`temp_coverage`, `rh_n_samples`/`rh_coverage` are kept for API stability and always equal the row-level values. |
 | `MonthDay`, `Season` | `sivin.core.season` | Periods given by month and day (vegetation season, Huglin period, single months). |
 | `ClimateIndex`, `IndexContext`, `IndexResult`, `IndexRegistry` | `sivin.analytics.base` | Extension point for indices: a new index is a subclass registered with `@index_registry.register`; parameters are frozen pydantic models. |
-| defaults | `sivin.core.defaults` | Shared default values (time zone, nominal 1825 s interval, coverage thresholds) without heavy imports. |
+| defaults | `sivin.core.defaults` | Shared default values (time zone, nominal sampling interval `DEFAULT_SAMPLING_INTERVAL_S` = 1830 s measured on the first real export, the legacy estimate `LEGACY_SAMPLING_INTERVAL_S` = 1825 s, coverage thresholds) without heavy imports. |
 | `SivinConfig` | `sivin.config` | `config/sivin.yaml` as frozen pydantic models (`extra="forbid"`): sections `paths`, `time`, `analytics`. |
 | `ProjectPaths` | `sivin.paths` | Project root discovery; configuration paths are relative to it. |
+
+### Row validity (owner decision 2026-10-05)
+
+A measurement is one row: a timestamp with a temperature and a humidity. **If one variable is
+missing at a given time, the whole measurement is invalid** (plan §0.5, §2.7). The layers apply
+the rule in two different ways:
+
+*Checked on the values* (correct for any input, flagged or not):
+
+| Layer | Rule |
+|---|---|
+| core (`MeasurementSeries.complete_mask`) | `True` only if both values are present and no flag of the exclusion mask is set |
+| core (`DailyWeather`) | uses `complete_mask`: a sample counts only with both values, regardless of the `MISSING` flag |
+| input validation (`values-present`) | a table in which one variable has no value at all is an ERROR (every row would be invalid) |
+
+*Sets the `MISSING` flag* (the producers of the flag):
+
+| Layer | Rule |
+|---|---|
+| parsers (`TabularExportReader.assemble`) | a row with `temp_c` **or** `rh_pct` missing gets `QcFlag.MISSING` |
+| quality control (`MissingValueCheck`) | default rule `any`: `MISSING` when one variable is `NaN` |
+
+*Relies on the `MISSING` flag* (correct only if the flag is set and the exclusion mask contains
+`MISSING`):
+
+| Layer | Location | What happens on unflagged data |
+|---|---|---|
+| analytics | `analytics/disease/botrytis.py:289-309` | a humidity-only row counts as wet and extends a wetness period |
+| analytics | `analytics/disease/powdery_mildew.py:72` | per-sample hours use temperature-only rows |
+| analytics | `analytics/ripening/durations.py:60,140,270` | values masked by flags only, `NaN` handled per variable |
+| alignment | `alignment/strategies.py:104` | grid points valid for one variable and not the other |
+| web | `DISPLAY_EXCLUDE_MASK` (= `DEFAULT_EXCLUDE`, 311) | a `null` without `MISSING` keeps the other value (see `docs/web.md`) |
+
+**Data read from the measurement store come back with `qc = 0`** (the store keeps no flags,
+§2.5). The QC pipeline (`QualityPipeline`, with `MissingValueCheck`) must therefore run on store
+data **before** analytics, alignment and the site export, or the locations above see unflagged
+half-rows. WP-1.7 (integration) wires this order and switches the analytics and alignment
+locations above to `MeasurementSeries.complete_mask`, so that they no longer depend on the flag.
+
+The `qc` field stays one flag set per row; the `NaN` of the other variable is not replaced.
 
 Internally all timestamps are UTC. Local time (`Europe/Prague`) is used only when parsing
 exports and for daily aggregation and display. Units: °C, %, kPa, m, seconds.

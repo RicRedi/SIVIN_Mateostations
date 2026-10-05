@@ -56,8 +56,8 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `data/DataClient` | Fetches contract files relative to the data base URL, validates and caches them (one request per file per page load; failed requests are retried on the next call). `getRawRange(id, start, end)` picks the **UTC** months overlapping `[start, end)` that the manifest lists, fetches them in parallel and merges them into one `RawSeries`. A listed month that cannot be loaded is an error; months not listed are skipped. |
 | `domain/RawSeries` | Columnar raw samples of one sensor, merged from monthly files, sorted by `t`, one sample per time. |
 | `domain/TimeSeries` | Immutable value object of one variable (`t[]`, `values[]`, `null` = no valid value). `withGapBreaks` inserts `null` where samples are too far apart so charts draw gaps. |
-| `domain/QcFlags` | `QcFlag` bits, `DEFAULT_EXCLUDE_MASK` = MISSING \| OUT_OF_RANGE \| SPIKE \| STUCK \| PRE_DEPLOYMENT \| MANUAL_EXCLUDE (§2.7) and the web's `DISPLAY_EXCLUDE_MASK` (the same without MISSING, see below); `QcMask` decides exclusion. |
-| `domain/Resampler` | Raw → chart series: QC-masked raw values (gap threshold 3 × 1825 s), or hourly means over UTC hours, stamped at the **centre** of the hour (`h + 1800`) so they line up with raw samples; an hour without valid values is `null`. Daily values are not computed in the browser; they come from `daily.json` and are drawn at local noon, the centre of the day. |
+| `domain/QcFlags` | `QcFlag` bits, `DEFAULT_EXCLUDE_MASK` = MISSING \| OUT_OF_RANGE \| SPIKE \| STUCK \| PRE_DEPLOYMENT \| MANUAL_EXCLUDE (§2.7) and the web's `DISPLAY_EXCLUDE_MASK` (equal to it, see below); `QcMask` decides exclusion. |
+| `domain/Resampler` | Raw → chart series: QC-masked raw values (gap threshold 3 × 1830 s, `NOMINAL_STEP_S`), or hourly means over UTC hours, stamped at the **centre** of the hour (`h + 1800`) so they line up with raw samples; an hour without valid values is `null`. Daily values are not computed in the browser; they come from `daily.json` and are drawn at local noon, the centre of the day. |
 | `domain/TimeZone` | Unix seconds ↔ wall-clock time of an IANA zone via `Intl` (DST-aware): local midnights, shifting by local days. |
 | `domain/WindowSpec`, `TimeWindow`, `TimeWindowFactory`, `ResolutionPolicy` | What the user asked for (`24h` / `7d` / `30d` / `season` / `custom`) → a concrete `[startT, endT)` with a resolution. Details below. |
 | `domain/alignSeries` | Puts several series on one union time axis for uPlot (`undefined` = no sample, skipped; `null` = gap). |
@@ -88,7 +88,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 - `custom` = whole local days from–to, both inclusive.
 - Automatic resolution (`ResolutionPolicy`): ≤ 8 days raw, ≤ 62 days hourly, longer daily. The
   user can override it; the choice is part of the URL.
-- Point caps for an explicit choice: raw up to 31 days (+1 h; ≈ 1470 samples per sensor), hourly
+- Point caps for an explicit choice: raw up to 31 days (+1 h; ≈ 1466 samples per sensor at 1830 s), hourly
   up to 92 days (+1 h; ≤ 2209 points per sensor). Beyond a cap the next coarser resolution is
   used, and the "shown" line under the controls names the resolution actually drawn.
 - A window that cannot be built (it should not happen after hash validation) falls back to the
@@ -96,15 +96,20 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 
 ### Quality flags in the chart
 
-`qc` is one flag set per row (§2.5/§2.6), while a row holds two values. The web therefore uses
-`DISPLAY_EXCLUDE_MASK` = OUT_OF_RANGE | SPIKE | STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE, i.e. the
-plan's DEFAULT_EXCLUDE **without MISSING**:
+`qc` is one flag set per row (§2.5/§2.6), while a row holds two values. By owner decision of
+2026-10-05 (plan §0.5) a measurement is valid only if **both** values are present: the pipeline
+sets MISSING when the temperature **or** the humidity of a row is missing. The web therefore
+uses `DISPLAY_EXCLUDE_MASK` = `DEFAULT_EXCLUDE_MASK` (311) = MISSING | OUT_OF_RANGE | SPIKE |
+STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 
-- MISSING is handled per value: a `null` value is missing, so a valid temperature is not hidden
-  because the humidity of the same row is `null` (and vice versa).
-- Every other excluding flag hides the whole row (both variables) at raw resolution and leaves
-  it out of hourly means. A temperature SPIKE therefore also hides that row's humidity; per-variable
-  QC flags would need a contract change (owner question).
+- Every excluding flag, MISSING included, hides the whole row (both variables) at raw
+  resolution and leaves it out of hourly means. A row whose humidity is `null` and which is
+  flagged MISSING therefore does not show its temperature either. (Before 2026-10-05 the web
+  used the mask without MISSING and kept the other variable of such a row.)
+- The web does not derive flags itself: in a row with a `null` value but without MISSING (data
+  that did not pass the pipeline's QC) the `null` is a gap and the other value is still drawn.
+- A temperature SPIKE also hides that row's humidity; per-variable QC flags would need a
+  contract change.
 - STEP, NEIGHBOR_OUTLIER and TIMESTAMP_SUSPECT are informative and do not hide data.
 - Daily values are taken from `daily.json` as delivered by the pipeline.
 
@@ -130,6 +135,39 @@ plan's DEFAULT_EXCLUDE **without MISSING**:
   | `#4a3aa7` | 8.56 |
   | `#c62f2f` | 5.46 |
 
+### Off-site periods
+
+`events/<id>.json` may contain interval events from the off-site log (plan §2.8,
+[sensors.md](sensors.md#off-site-log)):
+
+```json
+{ "type": "off_site", "t": 1780552800, "t_end": 1780668000, "source": "log",
+  "detail": "service: battery replacement" }
+```
+
+`t_end` (Unix seconds, exclusive) is required for `off_site` and is `null` while the sensor is
+still off site. On a point event (`deployment`, `retrieval`, `step`) a `t_end` is **ignored with
+a console warning** instead of rejecting the file (tolerant reading of optional fields, owner
+decision 2026-10-05), so a SiteBuilder that writes `t_end: null` on every event loses no markers. The contract types model this as a
+union (`PointSensorEvent | OffSiteEvent`, `isOffSiteEvent`), and `eventInWindow` keeps an
+`off_site` period that merely overlaps the chart window (a point event must lie inside it).
+
+`SeriesChart` draws every period that overlaps the window as a translucent grey band across the
+plotting area (uPlot `drawClear` hook, under grid and lines; an open period runs to the window
+end) and does **not draw that sensor's lines inside the band**: `withoutBands` blanks the
+values with `startT <= t < endT` and inserts a break at the band start, so no line bridges the
+band even when it holds no sample (daily means). This works from the event times alone; the
+samples are also `PRE_DEPLOYMENT`-flagged and hidden by the display mask, but the band does not
+depend on the flags. Lines of other compared sensors continue through the band. Each band has a
+focusable grey square handle at its centre (handles of bands at the same place, e.g. two
+compared sensors serviced together, are stacked downwards), whose accessible name and tooltip
+read
+"Mimo vinici: <detail> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
+vineyard"; open end "dosud" / "bis heute" / "ongoing"). The logic is in
+`src/ui/EventMarkers.ts` (`offSiteBands`, `withoutBands`, `EventMarkers.drawBands`).
+
+![Off-site band in the chart](wp_log/img/WP-1.8-offsite-band-chart.png)
+
 ## Data loading (contract §2.6)
 
 On start the app loads `manifest.json`, `sensors.geojson` and `latest.json` in parallel. Each
@@ -151,7 +189,8 @@ available through `DataClient.getIndices` but not displayed yet (WP-3.4).
 
 `web/public/data/` holds a **synthetic** data set generated by `scripts/generate-fixture.mjs`
 (seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, step 1825 s with
-a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB). It is
+a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB; sensor 77799986 has one synthetic
+`off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
 
 The badge is controlled at build time by `VITE_DEMO_DATA`: any value other than `false`

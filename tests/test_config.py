@@ -34,7 +34,7 @@ def test_defaults() -> None:
     assert config.paths.output_dir == Path("vystupy")
     assert config.time.source_timezone == "Europe/Prague"
     assert config.time.display_timezone == "Europe/Prague"
-    assert config.time.expected_interval_s == 1825.0
+    assert config.time.expected_interval_s == 1830.0
     assert config.analytics.min_daily_coverage == 0.9
     assert config.analytics.min_season_coverage == 0.9
     assert config.analytics.exclude_mask == int(QcFlag.DEFAULT_EXCLUDE) == 311

@@ -11,7 +11,12 @@ from tests.quality.synthetic import OFFICES, SENSOR, SyntheticSensor, Trace, Wea
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.boundaries import TransportSettings
-from sivin.quality.deployment import DeploymentDetector, DeploymentResult, DeploymentSettings
+from sivin.quality.deployment import (
+    DeploymentDetector,
+    DeploymentResult,
+    DeploymentSettings,
+    DetectorMode,
+)
 from sivin.quality.events import DeploymentEvent, EventKind, EventSource, QualityEvent, Severity
 from sivin.quality.timeline import IndoorInterval, KnownDeploymentReconciler, indoor_mask
 
@@ -19,6 +24,8 @@ SEEDS = range(6)
 SEASON_STARTS = ("2026-01-05", "2026-04-01", "2026-07-01", "2026-10-01")
 HOUR = pd.Timedelta(hours=1)
 DAY = pd.Timedelta(days=1)
+ENFORCE = DeploymentSettings(mode=DetectorMode.ENFORCE)
+"""These tests check the flagging behaviour of WP-1.5, available behind ``mode: enforce``."""
 
 
 def _sensor(seed: int, start: str = "2026-04-01") -> SyntheticSensor:
@@ -47,7 +54,7 @@ class TestOfficeThenVineyard:
     @pytest.mark.parametrize("start", SEASON_STARTS)
     def test_deployment_found_within_one_sample(self, seed: int, start: str) -> None:
         trace = _sensor(seed, start).trace([("indoor", 3), ("outdoor", 10)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], list(trace.boundaries))
         deployment = result.transitions[0]
         assert deployment.source is EventSource.DETECTED
@@ -71,7 +78,7 @@ class TestOfficeThenVineyard:
     def test_office_variants(self, office: str, start: str, seed: int) -> None:
         # 12 °C and 30 °C rooms lie outside a comfort band; the relative contrast finds them.
         trace = _sensor(seed, start).trace([("indoor", 3, OFFICES[office]), ("outdoor", 12)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], list(trace.boundaries))
 
     @pytest.mark.parametrize("start", ["2026-01-05", "2026-07-01"])
@@ -80,13 +87,15 @@ class TestOfficeThenVineyard:
         trace = _sensor(seed, start).trace(
             [("indoor", 3), ("outdoor", 12, Weather(cloudiness=1.0))]
         )
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], list(trace.boundaries))
 
     @pytest.mark.parametrize("seed", range(4))
     def test_car_transport_counts_as_pre_deployment_when_enabled(self, seed: int) -> None:
         trace = _sensor(seed).trace([("indoor", 3), ("car", 1.5 / 24, 35.0), ("outdoor", 12)])
-        settings = DeploymentSettings(transport=TransportSettings(enabled=True))
+        settings = DeploymentSettings(
+            mode=DetectorMode.ENFORCE, transport=TransportSettings(enabled=True)
+        )
         result = DeploymentDetector(settings).detect(trace.series())
         arrival = trace.boundaries[1]
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], [arrival])
@@ -96,7 +105,7 @@ class TestOfficeThenVineyard:
     def test_car_transport_stays_outdoor_by_default(self, seed: int) -> None:
         # Trimming is off by default: no vineyard sample is lost, the car rows may stay outdoor.
         trace = _sensor(seed).trace([("indoor", 3), ("car", 1.5 / 24, 35.0), ("outdoor", 12)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert _kinds(result) == [EventKind.DEPLOYMENT]
         deployed = _position(trace, result.transitions[0])
         assert trace.boundaries[0] - 1 <= deployed <= trace.boundaries[1]
@@ -104,7 +113,7 @@ class TestOfficeThenVineyard:
 
     def test_event_detail_comes_from_local_windows(self) -> None:
         trace = _sensor(1).trace([("indoor", 3), ("outdoor", 10)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         detail = result.transitions[0].detail
         assert detail.startswith("indoor → outdoor: level ")
         assert "daily spread x" in detail
@@ -122,7 +131,7 @@ class TestGapsAtTheBoundary:
         start = int(np.searchsorted(trace.t_s, boundary_s - before_h * 3600))
         stop = int(np.searchsorted(trace.t_s, boundary_s + after_h * 3600))
         gapped = trace.without_rows(start, stop)
-        result = DeploymentDetector().detect(gapped.series())
+        result = DeploymentDetector(ENFORCE).detect(gapped.series())
         _assert_transitions(gapped, result, [EventKind.DEPLOYMENT], [start])
 
 
@@ -131,7 +140,7 @@ class TestNoTransition:
     @pytest.mark.parametrize("start", SEASON_STARTS)
     def test_sixty_outdoor_days_raise_no_false_alarm(self, seed: int, start: str) -> None:
         trace = _sensor(seed, start).trace([("outdoor", 60)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert result.events == ()
         assert not result.pre_deployment.any()
 
@@ -141,7 +150,7 @@ class TestNoTransition:
         for seed in range(20):
             for weather in (Weather(), Weather(cloudiness=1.0)):
                 trace = _sensor(seed, "2026-06-01").trace([("outdoor", 92, weather)])
-                result = DeploymentDetector().detect(trace.series())
+                result = DeploymentDetector(ENFORCE).detect(trace.series())
                 n_false += len(result.transitions)
                 assert not result.pre_deployment.any()
         assert n_false / (40 * 92 / 365) <= 0.1
@@ -154,24 +163,24 @@ class TestNoTransition:
             fronts=((150, -8.0, 2.0), (210, -10.0, 1.0), (240, -7.0, 0.5)),
         )
         trace = _sensor(seed, "2026-01-01").trace([("outdoor", 365, weather)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert result.transitions == ()
         assert not result.pre_deployment.any()
 
     @pytest.mark.parametrize("seed", range(4))
     def test_cold_front_is_not_a_transition(self, seed: int) -> None:
         trace = _sensor(seed).trace([("outdoor", 10)]).with_ramp(240, -8.0, 7200.0)
-        assert DeploymentDetector().detect(trace.series()).events == ()
+        assert DeploymentDetector(ENFORCE).detect(trace.series()).events == ()
 
     def test_sensor_still_in_the_office_is_not_flagged(self) -> None:
         # No outdoor data to contrast with: nothing is decided, nothing is excluded.
         trace = _sensor(2).trace([("indoor", 4)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert result.events == ()
         assert not result.pre_deployment.any()
 
     def test_empty_series(self) -> None:
-        result = DeploymentDetector().detect(MeasurementSeries.empty(SENSOR))
+        result = DeploymentDetector(ENFORCE).detect(MeasurementSeries.empty(SENSOR))
         assert result.events == ()
         assert result.segments == ()
         assert result.pre_deployment.shape == (0,)
@@ -182,7 +191,7 @@ class TestService:
     @pytest.mark.parametrize("start", SEASON_STARTS)
     def test_retrieval_and_redeployment(self, seed: int, start: str) -> None:
         trace = _sensor(seed, start).trace([("outdoor", 10), ("indoor", 3), ("outdoor", 10)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         _assert_transitions(
             trace, result, [EventKind.RETRIEVAL, EventKind.DEPLOYMENT], list(trace.boundaries)
         )
@@ -192,7 +201,7 @@ class TestService:
 
     def test_retrieval_without_redeployment_only_warns(self) -> None:
         trace = _sensor(5).trace([("indoor", 2), ("outdoor", 8), ("indoor", 3)])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert _kinds(result) == [EventKind.DEPLOYMENT]
         (warning,) = result.warnings
         assert warning.kind is EventKind.UNCONFIRMED_TRANSITION
@@ -211,7 +220,7 @@ class TestLongSeries:
         for years in (1, 3, 5):
             start = int(np.searchsorted(trace.t_s, end_s - years * 365 * 86_400.0))
             part = trace.since(start)
-            result = DeploymentDetector().detect(part.series())
+            result = DeploymentDetector(ENFORCE).detect(part.series())
             results[years] = [
                 (e.kind, e.t_utc, e.confidence, e.detail)
                 for e in result.transitions
@@ -232,7 +241,7 @@ class TestKnownDeployments:
     def test_known_time_within_tolerance_overrides_detection(self) -> None:
         trace = self._trace()
         known = (trace.timestamp(trace.boundaries[0]) + 2 * HOUR).floor("s")
-        result = DeploymentDetector().detect(trace.series(), [known.to_pydatetime()])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known.to_pydatetime()])
         (deployment,) = result.transitions
         assert (deployment.t_utc, deployment.source, deployment.confidence) == (
             known,
@@ -251,14 +260,14 @@ class TestKnownDeployments:
     def test_known_time_earlier_than_detection_does_not_warn(self) -> None:
         trace = self._trace()
         known = trace.timestamp(trace.boundaries[0]) - 2 * HOUR
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert result.warnings == ()
         assert [t.t_utc for t in result.transitions] == [known]
 
     def test_mismatch_beyond_tolerance_warns_and_keeps_detection(self) -> None:
         trace = self._trace()
         known = trace.timestamp(trace.boundaries[0]) + 48 * HOUR
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert len(result.warnings) == 2
         assert all(w.kind is EventKind.DEPLOYMENT_MISMATCH for w in result.warnings)
         assert [(t.source, t.t_utc == known) for t in result.transitions] == [
@@ -273,7 +282,7 @@ class TestKnownDeployments:
     def test_known_time_inside_the_office_stay_ends_it(self) -> None:
         trace = self._trace()
         known = trace.timestamp(trace.boundaries[0]) - 30 * HOUR
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert [t.source for t in result.transitions] == [EventSource.REGISTRY]
         assert result.transitions[0].t_utc == known
         assert any("data from the known deployment on" in w.detail for w in result.warnings)
@@ -282,7 +291,7 @@ class TestKnownDeployments:
     def test_service_missing_in_the_registry_is_applied_with_a_warning(self) -> None:
         trace = _sensor(2).trace([("indoor", 3), ("outdoor", 12), ("indoor", 3), ("outdoor", 12)])
         known = trace.timestamp(trace.boundaries[0])
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert _kinds(result) == [EventKind.DEPLOYMENT, EventKind.RETRIEVAL, EventKind.DEPLOYMENT]
         assert [t.source for t in result.transitions] == [
             EventSource.REGISTRY,
@@ -299,7 +308,7 @@ class TestKnownDeployments:
             [("indoor", 3), ("outdoor", 12), ("car", 1 / 24, 30.0), ("outdoor", 12)]
         )
         known = [trace.timestamp(trace.boundaries[0]), trace.timestamp(trace.boundaries[2])]
-        result = DeploymentDetector().detect(trace.series(), known)
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), known)
         assert result.warnings == ()
         assert [t.t_utc for t in result.transitions] == known
         assert "known relocation" in result.transitions[1].detail
@@ -308,7 +317,7 @@ class TestKnownDeployments:
     def test_only_a_later_relocation_known(self) -> None:
         trace = _sensor(1).trace([("indoor", 3), ("outdoor", 30)])
         known = trace.timestamp(trace.boundaries[0]) + 20 * DAY
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert not result.pre_deployment[trace.boundaries[0] + 1 :].any()
         assert result.pre_deployment[: trace.boundaries[0] - 1].all()
         assert len(result.warnings) == 2
@@ -316,7 +325,7 @@ class TestKnownDeployments:
     def test_known_deployment_before_the_data(self) -> None:
         trace = _sensor(4).trace([("outdoor", 5)])
         known = trace.timestamp(0) - DAY
-        result = DeploymentDetector().detect(trace.series(), [known])
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), [known])
         assert not result.pre_deployment.any()
         assert [(e.kind, e.severity) for e in result.events] == [
             (EventKind.DEPLOYMENT, Severity.INFO)
@@ -328,14 +337,16 @@ class TestKnownDeployments:
             trace.timestamp(trace.boundaries[0]),
             trace.timestamp(trace.boundaries[1]) + 30 * HOUR,
         ]
-        result = DeploymentDetector().detect(trace.series(), known)
+        result = DeploymentDetector(ENFORCE).detect(trace.series(), known)
         assert any("inside a detected service visit" in w.detail for w in result.warnings)
         assert result.pre_deployment[trace.boundaries[1] + 1 : trace.boundaries[2] - 1].all()
 
     def test_tolerance_is_configurable(self) -> None:
         trace = self._trace()
         known = trace.timestamp(trace.boundaries[0]) + 2 * HOUR
-        strict = DeploymentDetector(DeploymentSettings(known_tolerance_s=3600.0))
+        strict = DeploymentDetector(
+            DeploymentSettings(mode=DetectorMode.ENFORCE, known_tolerance_s=3600.0)
+        )
         assert strict.settings.known_tolerance_s == 3600.0
         kinds = [e.kind for e in strict.detect(trace.series(), [known]).events]
         assert EventKind.DEPLOYMENT_MISMATCH in kinds
@@ -347,14 +358,14 @@ class TestKnownDeployments:
 
     def test_naive_known_time_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="timezone-aware"):
-            DeploymentDetector().detect(self._trace().series(), [pd.Timestamp("2026-04-04")])
+            DeploymentDetector(ENFORCE).detect(self._trace().series(), [pd.Timestamp("2026-04-04")])
 
 
 class TestRobustness:
     def test_temperature_only(self) -> None:
         trace = _sensor(6).trace([("indoor", 3), ("outdoor", 10)])
         trace = trace.with_missing(range(len(trace)), rh_only=True)
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         _assert_transitions(trace, result, [EventKind.DEPLOYMENT], list(trace.boundaries))
         assert result.segments[0].assessment.features.rh_median_pct is None
 
@@ -362,14 +373,14 @@ class TestRobustness:
         trace = _sensor(7).trace([("outdoor", 6)]).with_spike(150, delta_c=-500.0)
         qc = np.zeros(len(trace), dtype=np.int32)
         qc[150] = int(QcFlag.OUT_OF_RANGE)
-        result = DeploymentDetector().detect(trace.series().with_flags(qc))
+        result = DeploymentDetector(ENFORCE).detect(trace.series().with_flags(qc))
         assert result.events == ()
 
     def test_missing_rows_take_the_state_of_their_time(self) -> None:
         trace = _sensor(8).trace([("indoor", 3), ("outdoor", 10)])
         boundary = trace.boundaries[0]
         trace = trace.with_missing([boundary - 2, boundary + 2])
-        result = DeploymentDetector().detect(trace.series())
+        result = DeploymentDetector(ENFORCE).detect(trace.series())
         assert result.pre_deployment[boundary - 2]
         assert not result.pre_deployment[boundary + 2]
 

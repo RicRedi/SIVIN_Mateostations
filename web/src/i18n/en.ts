@@ -38,6 +38,8 @@ export const en: Dictionary = {
   eventDeployment: 'Deployed in the vineyard',
   eventRetrieval: 'Retrieved from the vineyard',
   eventStep: 'Level step',
+  eventOffSite: 'Not in the vineyard',
+  eventOngoing: 'ongoing',
   eventConfidence: 'confidence {pct} %',
   legendTitle: 'Latest temperature',
   legendStale: 'stale / no value',

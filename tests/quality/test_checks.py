@@ -37,15 +37,19 @@ class TestMissingValueCheck:
     def test_rule_all_flags_rows_without_any_value(self) -> None:
         nan = float("nan")
         trace = custom_trace([0, 1825, 3650], [1.0, nan, nan], [50.0, 50.0, nan])
-        outcome = MissingValueCheck().check(trace.series())
+        check = MissingValueCheck(MissingValueSettings(rule=MissingRule.ALL))
+        outcome = check.check(trace.series())
         assert _flagged(outcome.flags, QcFlag.MISSING) == [2]
         assert outcome.events == ()
 
-    def test_rule_any_flags_rows_with_one_missing_value(self) -> None:
+    def test_default_rule_any_flags_rows_with_one_missing_value(self) -> None:
+        # Owner decision 2026-10-05: one missing variable invalidates the whole row.
         nan = float("nan")
-        trace = custom_trace([0, 1825, 3650], [1.0, nan, nan], [50.0, 50.0, nan])
-        check = MissingValueCheck(MissingValueSettings(rule=MissingRule.ANY))
-        assert _flagged(check.check(trace.series()).flags, QcFlag.MISSING) == [1, 2]
+        trace = custom_trace([0, 1825, 3650, 5475], [1.0, nan, nan, 2.0], [50.0, 50.0, nan, nan])
+        assert MissingValueSettings().rule is MissingRule.ANY
+        outcome = MissingValueCheck().check(trace.series())
+        assert _flagged(outcome.flags, QcFlag.MISSING) == [1, 2, 3]
+        assert outcome.events == ()
 
     def test_complete_series_has_no_flag(self) -> None:
         outcome = MissingValueCheck().check(flat_trace([1.0, 2.0]).series())

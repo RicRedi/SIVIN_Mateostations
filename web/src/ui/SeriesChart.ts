@@ -9,7 +9,7 @@ import type { TimeZone } from '../domain/TimeZone';
 import { MS_PER_SECOND, SECONDS_PER_DAY } from '../domain/units';
 import type { I18n } from '../i18n/I18n';
 import { el } from './dom';
-import { EventMarkers } from './EventMarkers';
+import { EventMarkers, offSiteBands, withoutBands } from './EventMarkers';
 import type { SensorColors } from './SensorColors';
 
 /** Chart height in px on wide and on narrow containers. */
@@ -30,8 +30,9 @@ const AXIS_SIDE_RIGHT = 1 as uPlot.Axis.Side;
 
 /**
  * uPlot chart of temperature (left axis, °C) and relative humidity (right axis, %) for one or
- * more sensors, with sensor events as markers. Times are shown in the display time zone; `null`
- * values are drawn as gaps. Sensors that failed to load are listed with their error.
+ * more sensors, with sensor events as markers and `off_site` periods as grey bands in which the
+ * sensor's lines are not drawn. Times are shown in the display time zone; `null` values are drawn
+ * as gaps. Sensors that failed to load are listed with their error.
  */
 export class SeriesChart implements ChartView {
   private readonly message = el('p', { class: 'chart__message', role: 'status' });
@@ -95,9 +96,17 @@ export class SeriesChart implements ChartView {
     if (data.sensors.length === 0) {
       return;
     }
-    const aligned = alignSeries(data.sensors.flatMap((s) => [s.temp_c, s.rh_pct]));
+    const events = data.sensors.flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId })));
+    const bands = offSiteBands(events, data.window.startT, data.window.endT);
+    const aligned = alignSeries(
+      data.sensors.flatMap((s) => {
+        const own = bands.filter((band) => band.sensorId === s.sensorId);
+        return [withoutBands(s.temp_c, own), withoutBands(s.rh_pct, own)];
+      }),
+    );
     const plotData = [aligned.t, ...aligned.columns] as unknown as AlignedData;
-    this.markers.setEvents(data.sensors.flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId }))));
+    this.markers.setEvents(events);
+    this.markers.setBands(bands);
     this.plot = new uPlot(this.options(data), plotData, this.plotHost);
     this.plot.ctx.canvas.setAttribute('role', 'img');
     this.plot.ctx.canvas.setAttribute('aria-label', this.i18n.t('chartLabel'));
@@ -141,6 +150,11 @@ export class SeriesChart implements ChartView {
         { scale: 'rh', side: AXIS_SIDE_RIGHT, label: rhUnit, grid: { show: false } },
       ],
       hooks: {
+        drawClear: [
+          (u) => {
+            this.markers.drawBands(u);
+          },
+        ],
         draw: [
           (u) => {
             this.markers.drawLines(u);

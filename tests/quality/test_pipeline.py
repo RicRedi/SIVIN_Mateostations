@@ -11,6 +11,8 @@ from tests.quality.synthetic import SENSOR, SyntheticSensor, flat_trace
 from sivin.core.flags import QcFlag
 from sivin.core.schema import Column, MeasurementSeries
 from sivin.quality import (
+    DeploymentSettings,
+    DetectorMode,
     EventKind,
     QualityPipeline,
     QualityPipelineSettings,
@@ -26,9 +28,13 @@ def _rows_with(series: MeasurementSeries, flag: QcFlag) -> list[int]:
     return [int(i) for i in np.flatnonzero(_flags(series) & int(flag))]
 
 
+ENFORCE = QualityPipelineSettings(deployment=DeploymentSettings(mode=DetectorMode.ENFORCE))
+"""Detector flagging of WP-1.5, available behind ``deployment.mode: enforce``."""
+
+
 @pytest.fixture
 def pipeline() -> QualityPipeline:
-    return QualityPipeline.from_settings(QualityPipelineSettings())
+    return QualityPipeline.from_settings(ENFORCE)
 
 
 class TestPipeline:

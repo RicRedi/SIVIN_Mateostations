@@ -6,8 +6,8 @@ The provider's exports name their columns in Czech (``Datum a čas``, ``Teplota 
 diacritics and surrounding whitespace. A unit in parentheses or brackets must be one of the
 accepted units of the column, so ``Teplota (°F)`` is never read as °C.
 
-The formats are reconstructed from legacy code and not verified on a real export (owner
-questions Q1, Q2); every name is therefore configurable.
+The formats are reconstructed from legacy code; the CSV header names were confirmed by one real
+export (MIGRATION_PLAN §0.6.1), the other layouts are unverified, so every name is configurable.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
-from sivin.core.defaults import DEFAULT_TIMEZONE, LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S, DEFAULT_TIMEZONE
 from sivin.core.ids import SensorId
 
 
@@ -103,8 +103,8 @@ class ColumnAliases(BaseModel):
         min_length=1,
         description=(
             "Header names of the local timestamp column (Czech, German, English). "
-            "'Datum a čas' is the name used by the provider's exports according to the legacy "
-            "scripts [to be verified on a real export, Q1]."
+            "'Datum a čas' is the name used by the provider's exports (confirmed by the first "
+            "real export, MIGRATION_PLAN §0.6.1)."
         ),
     )
     temp_c: tuple[str, ...] = Field(
@@ -161,8 +161,8 @@ class ParserSettings(BaseModel):
     source_timezone: str = Field(
         DEFAULT_TIMEZONE,
         description=(
-            "IANA zone of the wall-clock timestamps in the exports. Not yet confirmed by a "
-            "real export (owner question Q2)."
+            "IANA zone of the wall-clock timestamps in the exports. The portal exports local "
+            "time (owner decision Q2, 2026-10-05)."
         ),
     )
     aliases: ColumnAliases = Field(
@@ -173,8 +173,8 @@ class ParserSettings(BaseModel):
         ge=1,
         description=(
             "Number of leading rows (count) searched for the header row, i.e. the first row "
-            "with a timestamp column. The legacy CSV has one title row ('Meteo Data;') before "
-            "the header; the XLSX layout is unverified (Q1)."
+            "with a timestamp column. The portal CSV has one title row ('Meteo Data;') before "
+            "the header (confirmed by a real export); the XLSX layout is unverified (Q11)."
         ),
     )
     day_first: StrictBool = Field(
@@ -191,8 +191,9 @@ class ParserSettings(BaseModel):
         description=(
             "Share (0-1, dimensionless) of the counted steps between consecutive timestamps "
             "that must go back in time for a table to be read as newest first and reversed. "
-            "Steps inside the repeated hour of a fall-back transition are not counted. The row "
-            "order of the real exports is unknown (Q1); project default [to be verified]."
+            "Steps inside the repeated hour of a fall-back transition are not counted. The first "
+            "real export is newest first (MIGRATION_PLAN §0.6.1); the share is a project "
+            "default [to be verified]."
         ),
     )
     newest_first_min_steps: StrictInt = Field(
@@ -239,11 +240,11 @@ class ParserSettings(BaseModel):
         ),
     )
     expected_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0.0,
         description=(
-            "Nominal sampling interval in seconds (1825 s from the legacy configs and "
-            "sampl_freq_basic.py); used by the day/month swap guard."
+            "Nominal sampling interval in seconds (1830 s, the median step of the first real "
+            "export, MIGRATION_PLAN §0.6.1); used by the day/month swap guard."
         ),
     )
     long_step_factor: float = Field(
@@ -251,7 +252,7 @@ class ParserSettings(BaseModel):
         gt=1.0,
         description=(
             "A step between consecutive timestamps longer than expected_interval_s times this "
-            "factor (dimensionless; 48 x 1825 s = 24.3 h) counts as long for the day/month swap "
+            "factor (dimensionless; 48 x 1830 s = 24.4 h) counts as long for the day/month swap "
             "guard. Project default [to be verified]."
         ),
     )

@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 from sivin.core.defaults import (
     DEFAULT_MIN_DAILY_COVERAGE,
     DEFAULT_MIN_SEASON_COVERAGE,
+    DEFAULT_SAMPLING_INTERVAL_S,
     DEFAULT_TIMEZONE,
-    LEGACY_SAMPLING_INTERVAL_S,
 )
 from sivin.core.flags import QcFlag
 
@@ -67,11 +67,12 @@ class TimeConfig(_Section):
         description="IANA zone for display and for local calendar days of daily aggregates.",
     )
     expected_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         description=(
-            "Nominal sampling interval in seconds; 1825 s comes from the legacy configs and "
-            "sampl_freq_basic.py. Used for daily coverage."
+            "Nominal sampling interval in seconds; 1830 s is the median step of the first real "
+            "export (sensor 77799986, 2025-07-30 to 2026-03-01, MIGRATION_PLAN §0.6.1), the "
+            "legacy configs estimated 1825 s. Used for daily coverage."
         ),
     )
 

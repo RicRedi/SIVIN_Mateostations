@@ -1,6 +1,7 @@
 export { ContractError } from './ContractError';
 export { parseDailyFile, parseRawMonthFile } from './validateSeries';
 export {
+  type ContractWarning,
   parseEventsFile,
   parseIndicesFile,
   parseLatestFile,
