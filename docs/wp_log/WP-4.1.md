@@ -165,7 +165,117 @@ In `/home/user/wt/wp-4.1` (Python 3.12 `.venv`):
    KB of changed JSON per day with 4 sensors, stored as deltas)?
 
 ## Review
-Verdict: _pending_
+
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, 2026-10-05. Reviewed `ea87c92...d21cdee` by reading and by
+local simulation; nothing was run on GitHub or against the portal.
+
+### Gates (observed in `/home/user/wt/wp-4.1`)
+
+- `make lint` → ruff check: all checks passed; ruff format: 295 files already formatted.
+- `make type` → `Success: no issues found in 179 source files`.
+- `make test` → 1939 passed. `make cov` → 1939 passed, total 99 %; `app/summary.py` 100 %,
+  `app/summary_formats.py` 100 %, `cli/commands/summary.py` 100 %, `app/factory.py` 99 %
+  (missed line 143 is pre-existing).
+- `actionlint 1.7.12` (+ `shellcheck-py`, throwaway venv in `/tmp/claude-0/review-4.1`) over all
+  workflows → no findings.
+
+### Own checks
+
+- **Cron gate:** the gate script extracted from the YAML was executed with a fake `date` for every
+  day of 2026, both crons (`0 4 * * *`, `0 5 * * *`) and start delays of 0, 30, …, 180 min:
+  exactly one `run=true` per day and delay, always for the cron that is 06:00 in Prague
+  (365 days, 0 deviations; DST days 2026-03-29 and 2026-10-25 included).
+- **Local end-to-end** (bare repo as origin, shallow clone as the runner, the step scripts
+  extracted from the YAML, the real `sivin`, SYNTHETIC export from `tests/app/project.py`):
+  first run creates the orphan `data` branch with README/.gitignore and pushes; second run
+  commits on top (shallow fetch is fine); a run with a SYNTHETIC 2-day export commits
+  `94 new rows from 1 files`; the `build-site` step on the pushed SHA reuses the sensor and
+  fills `web/public/data`; a concurrent push to `data` between checkout and commit makes the
+  plain `git push` fail (non-fast-forward, step exit 1, nothing forced).
+- `sivin build-site` works from a plain `pip install .` (no `ingest` extra, no selenium).
+- `sivin report` with a malformed run-log line (skipped with a warning), without `data/runs`
+  (prints the no-record text), with odd event documents (non-dict events, non-string fields,
+  `|`/`<b>` in the sensor id) → exit 0, well-formed table. Redaction-before-escaping is tested
+  with a password containing `_*|` (`tests/cli/test_report.py:125`), and it is applied in the
+  service before any format escapes (`summary.py:550-566`).
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | .github/workflows/pipeline.yml:305 | `SITE_BASE: /${{ github.event.repository.name }}/` is very likely empty on the daily `schedule` runs (the schedule event payload carries `schedule`/`workflow`, not `repository`; not verifiable here). Verified locally: with an empty name, `SITE_BASE=//` and Vite emits `src="//assets/index-….js"` (protocol-relative URL to host `assets`) → every scheduled deploy would publish a blank site; manual runs would be fine, so the first-run checklist would not catch it until the next morning. | open |
+| minor | .github/workflows/pipeline.yml:115-121, 205-217 | Exclusion of `data/downloads/` and `data/quarantine/` relies only on the `.gitignore` committed once to the `data` branch; the copy-out copies the whole `data/` and runs `git add -A`. Verified: after removing `.gitignore` from `data`, the next run committed `data/downloads/MeteoData_….csv` and the quarantined files to the public branch. | open |
+| minor | .github/workflows/pipeline.yml:27-29 | Workflow-level `concurrency` also covers the no-op gate run. GitHub keeps one pending run per group and cancels the older pending one, so the no-op cron an hour later (or any later trigger) cancels a real run (scheduled or manual) still waiting behind a long run. | open |
+| nit | .github/workflows/pipeline.yml:84, 256 | `ref: ${{ github.event.repository.default_branch }}` has the same empty-on-schedule issue; harmless (checkout falls back to the triggering ref = default branch), but fix together with the major. | open |
+| nit | .github/workflows/pipeline.yml:225 | A rejected push fails with git's generic hint only; an `::error::` line ("data branch changed meanwhile, re-run the workflow") would match docs/operations.md step 5. | open |
+| nit | .github/workflows/pipeline.yml:278-282 | In `build-site` the copy-in of the data commit runs under `set +e`, so a failed `cp` is ignored. | open |
+| nit | .github/workflows/pipeline.yml:211-215 | Commit-message counts come from the last line of the newest run-log file without the `--since` check of the summary; a malformed last line fails the commit step via `jq`. | open |
+| nit | src/sivin/app/summary_formats.py:252 | `markdown_text` does not neutralise GFM autolinks (bare `https://…`, `www.…`) or `$…$` math; texts come from the pipeline's own messages, so low risk. | open |
+| nit | docs/operations.md:254 | `git checkout <good sha> -- data site` keeps files added after `<good sha>` (e.g. a new year file); `git rm -r -q data site && git checkout <good sha> -- data site` restores the state exactly. | open |
+
+Suggested fixes:
+
+1. (major) Derive the base path without the event payload, e.g. in the build step
+   `SITE_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build`, or take `base_path` from
+   `actions/configure-pages` (also correct with a custom domain); use `github.event.repository.default_branch`
+   nowhere, or drop `ref:` (schedule and dispatch from `main` already check out `main`). Adjust
+   `tests/workflows/test_pipeline_workflow.py:280`.
+2. (minor) Enforce the exclusion in the workflow: after `cp -a data "$DATA_WORKTREE/data"`,
+   `rm -rf "$DATA_WORKTREE/data/downloads" "$DATA_WORKTREE/data/quarantine"` (paths from config
+   or constants), or rewrite the branch `.gitignore` on every run, or `git add` explicit paths;
+   add it to the workflow test.
+3. (minor) Put `concurrency: {group: pipeline, cancel-in-progress: false}` on `collect`,
+   `build-site` and `deploy` (or on `collect` plus a `pages` group on deploy) instead of the
+   workflow, so no-op gate runs never enter the group; document the remaining "one pending"
+   behaviour.
+
+### Security checklist
+
+- Secrets only in `collect` → `Run the pipeline` and `Job summary` (the latter needs them for
+  the redactor), via `env`; no `set -x`, no DEBUG, every `sivin` call at `--log-level INFO`.
+- Permissions: workflow `{}`; gate `{}`, collect `contents: write`, build-site `contents: read`,
+  deploy `pages: write` + `id-token: write`. Least privilege. (Nit-level remark, not a finding:
+  the collect checkout persists the write token in `.git/config` during `pip install` and
+  `sivin run`; acceptable for first-party code.)
+- No `pull_request_target`; no `${{ github.event.* }}` / `${{ inputs.* }}` inside `run:`
+  scripts (all through `env`).
+- Artifact: only `run-summary.md` (redacted) and `data/quarantine/*.report.json`; no downloads.
+- `git push origin HEAD:refs/heads/data` is never forced; verified rejection on divergence.
+- `.env` is never under `data/` and is not copied.
+- Pages artifact = `web/dist` only; the build state lives in `data/derived/` and is not copied
+  into `web/public/data`.
+
+### Correctness checklist
+
+- Exit codes: 0/1/4 publish, 2/3/5/130/empty fail after the summary (`Judge` step), job fails
+  in `Fail on a broken run`; with `full_site_build` the higher of run/build-site code wins. OK.
+- Orphan creation from a shallow clone and first run on an empty origin: OK (simulated).
+- Copy-in/out: both under `set -e` in `collect`; a failed `cp` stops before `git add`, so no
+  partial copy is committed. OK.
+- `build-site` checks out `needs.collect.outputs.data_sha` (the pushed or unchanged HEAD). OK.
+
+### Docs
+
+`docs/operations.md` is sufficient for the one-time setup and the first run (visibility, Pages
+source, secrets, checklist, manual runs, exit-code table, recovery). The base-path issue above
+would make step 5 of the checklist (the next morning) the first place it shows; after the fix,
+add to step 5 "open the portal after the scheduled run".
+
+### Deviations assessment
+
+1. **Cron gate (compare the fired cron with today's offset):** accept. Strictly better than the
+   plain hour check; verified for all of 2026 with delays up to 3 h. A dropped scheduled run
+   still means no run that day (documented).
+2. **`site/data` committed to `data`:** accept. Needed for the incremental build on a fresh
+   runner and makes every `data` commit deployable; growth is deltas of JSON.
+3. **Copy in/out instead of a config override:** accept; paths stay identical to local runs.
+4. **Quarantine not committed (reports as 14-day artifact):** accept the decision, but enforce it
+   in the workflow (minor finding above), not only via the branch `.gitignore`.
+5. **Checkout of the default branch:** accept the intent; implement without the event payload
+   (nit above).
+6. **`sivin report` in `cli/commands/summary.py`:** accept.
+7. **Keep-alive for the 60-day rule (open question 3):** recommend no keep-alive now; the daily
+   bot commits are likely activity, and the docs say how to notice and re-enable. Revisit only if
+   the banner ever appears.
