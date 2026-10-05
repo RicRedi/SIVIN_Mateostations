@@ -89,6 +89,11 @@ def day_first(stamp: datetime) -> str:
     return f"{stamp.day}.{stamp.month}.{stamp.year} {stamp:%H:%M:%S}"
 
 
+def month_first_text(stamp: datetime) -> str:
+    """Format a local time month first (``3/1/2026 00:00:07`` for 1 March), US style."""
+    return f"{stamp.month}/{stamp.day}/{stamp.year} {stamp:%H:%M:%S}"
+
+
 def csv_rows(samples: Samples) -> list[list[str]]:
     """Data rows of a portal CSV."""
     return [
@@ -167,6 +172,11 @@ def portal_csv_fixtures(root: Path, rng: np.random.Generator) -> None:
     write_text(broken / "fahrenheit_header" / PORTAL_CSV_NAME, portal_csv_text(rows, fahrenheit))
     kelvin = [[t, comma(float(temp.replace(",", ".")) + 273.15), rh] for t, temp, rh in rows]
     write_text(broken / "kelvin_values" / PORTAL_CSV_NAME, portal_csv_text(kelvin, LEGACY_HEADER))
+    every_third = [datetime(2026, 3, 1, 0, 0, 7) + 3 * k * INTERVAL for k in range(len(rows))]
+    month_first = [
+        [month_first_text(t), temp, rh] for t, (_, temp, rh) in zip(every_third, rows, strict=True)
+    ]
+    write_text(broken / "month_first" / PORTAL_CSV_NAME, portal_csv_text(month_first))
 
 
 def portal_xlsx_fixtures(root: Path, rng: np.random.Generator) -> None:
@@ -191,6 +201,15 @@ def portal_xlsx_fixtures(root: Path, rng: np.random.Generator) -> None:
     truncated = root / "broken" / "truncated_xlsx" / PORTAL_XLSX_NAME
     truncated.parent.mkdir(parents=True, exist_ok=True)
     truncated.write_bytes(data[: len(data) // 2])
+
+    formulas: list[Sequence[object]] = [(TITLE,), HEADER]
+    formulas += [
+        (t, f"=0+{temp}", f"=0+{rh}")
+        for t, temp, rh in zip(samples.local, samples.temp_c, samples.rh_pct, strict=True)
+    ]
+    write_workbook(
+        root / "broken" / "formula_values" / PORTAL_XLSX_NAME, [("Meteo Data", formulas)]
+    )
 
 
 def legacy_fixture(root: Path, rng: np.random.Generator) -> None:

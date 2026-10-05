@@ -101,7 +101,10 @@ class NumberParser:
         if isinstance(cell, bool):
             return None
         if isinstance(cell, int | float):
-            number = float(cell)
+            try:
+                number = float(cell)
+            except OverflowError:
+                return None
             return number if math.isfinite(number) else None
         if not isinstance(cell, str):
             return None
@@ -120,8 +123,10 @@ class TimestampParser:
 
     Accepted are spreadsheet date-time cells and text in ISO form (``2026-03-01 22:38:57``) or
     numeric day-first form (``5.1.2026 17:33:01``; month first if ``day_first`` is false),
-    with or without seconds. Date-only cells, timezone-aware values and dates outside the
-    ``datetime64[ns]`` range are unparseable.
+    with or without seconds. Date-only text (``2026-01-05``), ``datetime.date`` and
+    ``datetime.time`` values, timezone-aware values and dates outside the ``datetime64[ns]``
+    range are unparseable. A spreadsheet cell formatted as a date only is returned by openpyxl
+    as a ``datetime`` at midnight and is therefore read as local midnight.
 
     Parameters
     ----------
@@ -186,6 +191,73 @@ class TimestampParser:
             except ValueError:
                 continue
         return None
+
+
+class DateOrderCheck:
+    """Guard against day and month swapped in numeric text dates.
+
+    A month-first file whose days are all 12 or less is read day first without any parse
+    error, but every change of day becomes a step of about one month. The check counts the
+    *long* steps (longer than ``max_regular_step_s``) between consecutive timestamps under the
+    configured and the alternative date order. The date order is ambiguous if the alternative
+    order reads more cells, or reads as many and has fewer long steps.
+
+    Parameters
+    ----------
+    day_first : bool
+        The configured date order.
+    max_regular_step_s : float
+        Steps longer than this (in seconds) count as long.
+    """
+
+    __slots__ = ("_alternative", "_max_step")
+
+    def __init__(self, day_first: bool, max_regular_step_s: float) -> None:
+        self._alternative = TimestampParser(not day_first)
+        self._max_step = pd.Timedelta(seconds=max_regular_step_s)
+
+    def problem(self, cells: Sequence[object], parsed: pd.Series) -> str | None:
+        """Return why the date order is ambiguous, or ``None``.
+
+        Parameters
+        ----------
+        cells : sequence of object
+            The timestamp cells, one per data row.
+        parsed : pandas.Series
+            The cells read with the configured date order.
+
+        Returns
+        -------
+        str or None
+            A message if the alternative date order fits the data clearly better.
+        """
+        n_parsed = int(parsed.notna().sum())
+        if n_parsed < len(cells):
+            alternative = self._alternative.parse(cells)
+            n_alternative = int(alternative.notna().sum())
+            if n_alternative > n_parsed:
+                return (
+                    f"Ambiguous date order: {n_parsed} of {len(cells)} timestamp(s) read as "
+                    f"configured, {n_alternative} with day and month swapped. Check 'day_first'."
+                )
+        long_steps = self._long_steps(parsed)
+        if not long_steps:
+            return None
+        alternative = self._alternative.parse(cells)
+        if int(alternative.notna().sum()) < n_parsed:
+            return None
+        alternative_long = self._long_steps(alternative)
+        if alternative_long >= long_steps:
+            return None
+        return (
+            f"Ambiguous date order: read as configured, {long_steps} step(s) between consecutive "
+            f"timestamps are longer than {self._max_step}; with day and month swapped only "
+            f"{alternative_long}. Check 'day_first'."
+        )
+
+    def _long_steps(self, parsed: pd.Series) -> int:
+        steps = parsed.dropna().diff().abs()
+        return int((steps > self._max_step).sum())
 
 
 def _month_first(formats: Sequence[str]) -> tuple[str, ...]:

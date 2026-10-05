@@ -17,6 +17,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
@@ -24,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
-from sivin.core.defaults import DEFAULT_TIMEZONE
+from sivin.core.defaults import DEFAULT_TIMEZONE, LEGACY_SAMPLING_INTERVAL_S
 from sivin.core.ids import SensorId
 
 
@@ -184,14 +185,73 @@ class ParserSettings(BaseModel):
         ),
     )
     newest_first_min_share: float = Field(
-        0.9,
+        0.75,
         gt=0.5,
         le=1.0,
         description=(
-            "Share (0-1, dimensionless) of the steps between consecutive timestamps outside "
-            "daylight-saving hours that must go back in time for a table to be read as newest "
-            "first and reversed. The row order of the real exports is unknown (Q1); project "
+            "Share (0-1, dimensionless) of the counted steps between consecutive timestamps "
+            "that must go back in time for a table to be read as newest first and reversed. "
+            "Steps inside the repeated hour of a fall-back transition are not counted. The row "
+            "order of the real exports is unknown (Q1); project default [to be verified]."
+        ),
+    )
+    newest_first_min_steps: StrictInt = Field(
+        4,
+        ge=1,
+        description=(
+            "Minimum number of counted non-zero steps (count) needed to decide that a table is "
+            "newest first. A shorter table that steps back is read oldest first and reported. "
+            "Project default [to be verified]."
+        ),
+    )
+    max_backward_step_s: float = Field(
+        7200.0,
+        ge=3600.0,
+        description=(
+            "Rows more than this many seconds earlier than the latest local time already read "
+            "(clock reset, long overlap of concatenated exports) are dropped and reported. At "
+            "least 3600 s, the length of the repeated hour of a fall-back transition. Project "
             "default [to be verified]."
+        ),
+    )
+    earliest_timestamp: datetime = Field(
+        datetime(2020, 1, 1),
+        description=(
+            "Earliest plausible local timestamp; earlier rows (e.g. after a device clock reset) "
+            "are dropped and reported. The project started in 2025; project default "
+            "[to be tuned]."
+        ),
+    )
+    latest_timestamp: datetime | None = Field(
+        None,
+        description=(
+            "Latest plausible local timestamp. None: the run time plus 'max_future_s', in "
+            "source_timezone. Set explicitly only for reproducible tests or re-imports."
+        ),
+    )
+    max_future_s: float = Field(
+        86400.0,
+        ge=0.0,
+        description=(
+            "Seconds after the run time up to which a timestamp is still plausible (clock "
+            "drift, time zone confusion). Project default [to be tuned]."
+        ),
+    )
+    expected_interval_s: float = Field(
+        LEGACY_SAMPLING_INTERVAL_S,
+        gt=0.0,
+        description=(
+            "Nominal sampling interval in seconds (1825 s from the legacy configs and "
+            "sampl_freq_basic.py); used by the day/month swap guard."
+        ),
+    )
+    long_step_factor: float = Field(
+        48.0,
+        gt=1.0,
+        description=(
+            "A step between consecutive timestamps longer than expected_interval_s times this "
+            "factor (dimensionless; 48 x 1825 s = 24.3 h) counts as long for the day/month swap "
+            "guard. Project default [to be verified]."
         ),
     )
     csv_delimiter: str = Field(
@@ -221,6 +281,13 @@ class ParserSettings(BaseModel):
             ZoneInfo(value)
         except (ZoneInfoNotFoundError, ValueError) as error:
             raise ValueError(f"unknown IANA time zone {value!r}") from error
+        return value
+
+    @field_validator("earliest_timestamp", "latest_timestamp")
+    @classmethod
+    def _naive_local(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is not None:
+            raise ValueError("must be a naive local time in source_timezone")
         return value
 
     @field_validator("csv_encodings")

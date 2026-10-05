@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sivin.ingest.parsers.cells import NumberParser, TimestampParser
+from sivin.ingest.parsers.cells import DateOrderCheck, NumberParser, TimestampParser
 
 
 @pytest.mark.parametrize(
@@ -30,6 +30,9 @@ from sivin.ingest.parsers.cells import NumberParser, TimestampParser
         ("inf", None),
         ("1e999", None),
         (float("inf"), None),
+        (10**400, None),
+        ("9" * 400, None),
+        (-(10**309), None),
         (True, None),
         (datetime(2026, 1, 1), None),
     ],
@@ -55,6 +58,7 @@ def test_parse_column() -> None:
         (datetime(2026, 1, 5, 17, 33, 1), datetime(2026, 1, 5, 17, 33, 1)),
         (datetime(2026, 1, 5, tzinfo=UTC), None),
         (date(2026, 1, 5), None),
+        (datetime(2026, 1, 5), datetime(2026, 1, 5)),  # date-formatted cell: local midnight
         ("31.02.2026 10:00", None),
         ("1.1.9999 00:00", None),
         ("2026-01-05", None),
@@ -77,3 +81,28 @@ def test_parse_timestamp_column() -> None:
     assert result.dtype == "datetime64[ns]"
     assert result.iloc[0] == pd.Timestamp("2026-01-01")
     assert pd.isna(result.iloc[1])
+
+
+def test_date_order_check() -> None:
+    check = DateOrderCheck(day_first=True, max_regular_step_s=86400)
+    cells = ["1/3/2026 10:00", "1/3/2026 23:00", "1/4/2026 10:00", "1/5/2026 10:00"]
+    parsed = TimestampParser(day_first=True).parse(cells)
+    problem = check.problem(cells, parsed)
+    assert problem is not None
+    assert problem.startswith("Ambiguous date order: read as configured, 2 step(s)")
+    unique = ["13/3/2026 10:00", "1/3/2026 10:00", "1/4/2026 10:00"]
+    assert check.problem(unique, TimestampParser(day_first=True).parse(unique)) is None
+    regular = ["1/3/2026 10:00", "1/3/2026 10:30"]
+    assert check.problem(regular, TimestampParser(day_first=True).parse(regular)) is None
+
+
+def test_date_order_check_counts_readable_cells() -> None:
+    check = DateOrderCheck(day_first=True, max_regular_step_s=86400)
+    cells = ["1/5/2026 17:33:01", "1/5/2026 18:03:26", "1/13/2026 18:03:26"]
+    problem = check.problem(cells, TimestampParser(day_first=True).parse(cells))
+    assert problem == (
+        "Ambiguous date order: 2 of 3 timestamp(s) read as configured, 3 with day and month "
+        "swapped. Check 'day_first'."
+    )
+    garbage = ["x", "1.3.2026 10:00"]
+    assert check.problem(garbage, TimestampParser(day_first=True).parse(garbage)) is None

@@ -41,6 +41,11 @@ EXPECTED_RULES = (
     "short-rows",
     "numbers-parseable",
     "timestamps-parseable",
+    "values-present",
+    "date-order",
+    "timestamps-plausible",
+    "row-order",
+    "large-backward-steps",
     "duplicate-timestamps",
     "backward-steps",
     "daylight-saving",
@@ -60,7 +65,9 @@ def table(temp: list[float], rh: list[float]) -> TableInspection:
         sensor_id=SensorId("77678271"),
         header_row=1,
         source_rows=np.arange(2, n_rows + 2, dtype=np.int64),
-        times=TimeColumn("Datum", local, local.dt.tz_localize("UTC"), no, no.copy()),
+        times=TimeColumn(
+            "Datum", local, local.dt.tz_localize("UTC"), no, no.copy(), no.copy(), no.copy()
+        ),
         temp=ValueColumn("T", np.array(temp), no.copy()),
         rh=ValueColumn("RH", np.array(rh), no.copy()),
     )
@@ -154,11 +161,44 @@ def test_bounds_share_decides_the_severity() -> None:
     assert issue.message == (
         "1 temperature value(s) outside [-60, 70] °C (5.0% of present values, limit 5.0%)."
     )
-    rh = [50.0] * 18 + [-1.0, 101.0]
+    rh = [50.0] * 16 + [-1.0, 101.0, 102.0, 103.0]
     large = InputValidator().validate(ExportInspection(SOURCE, 10, tables=(table([1.0] * 20, rh),)))
     (issue,) = large.issues
     assert (issue.rule, issue.severity) == ("humidity-bounds", Severity.ERROR)
-    assert "10.0% of present values" in issue.message
+    assert "20.0% of present values" in issue.message
+
+
+@pytest.mark.parametrize(
+    ("n_bad", "n_rows", "severity"),
+    [
+        (3, 10, Severity.WARNING),  # 30 % but only min_error_rows (3) rows
+        (4, 10, Severity.ERROR),
+        (2, 2, Severity.ERROR),  # all rows
+        (1, 30, Severity.WARNING),
+    ],
+)
+def test_short_tables_need_more_than_min_error_rows(
+    n_bad: int, n_rows: int, severity: Severity
+) -> None:
+    temp = [99.0] * n_bad + [1.0] * (n_rows - n_bad)
+    inspection = ExportInspection(SOURCE, 10, tables=(table(temp, [50.0] * n_rows),))
+    (issue,) = InputValidator().validate(inspection).issues
+    assert issue.severity is severity
+
+
+def test_values_present() -> None:
+    nan = float("nan")
+    one = InputValidator().validate(
+        ExportInspection(SOURCE, 10, tables=(table([1.0, 2.0], [nan, nan]),))
+    )
+    (issue,) = one.issues
+    assert (issue.rule, issue.severity) == ("values-present", Severity.WARNING)
+    assert issue.message == (
+        "Column(s) 'RH' contain no value in 2 data row(s) "
+        "(empty cells, or formulas without cached results)."
+    )
+    none = InputValidator().validate(ExportInspection(SOURCE, 10, tables=(table([nan], [nan]),)))
+    assert none.rules(Severity.ERROR) == {"values-present"}
 
 
 def test_missing_sensor_without_reason() -> None:

@@ -15,7 +15,9 @@ import stat
 from abc import abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -25,7 +27,7 @@ from sivin.core.ids import SensorId
 from sivin.core.schema import QC_DTYPE, MeasurementSeries
 from sivin.core.timeutil import LocalTimeConverter
 from sivin.ingest.parsers.base import ExportParser, ParsedExport
-from sivin.ingest.parsers.cells import NumberParser, TimestampParser
+from sivin.ingest.parsers.cells import DateOrderCheck, NumberParser, TimestampParser
 from sivin.ingest.parsers.columns import CanonicalColumn, ColumnMapping, HeaderMatch, ParserSettings
 from sivin.ingest.parsers.order import RowOrder, RowOrderAnalyser
 from sivin.ingest.parsers.sources import CellGrid, Row
@@ -102,33 +104,54 @@ class TabularExportReader:
     converter : LocalTimeConverter, optional
         Local-to-UTC conversion; one for ``settings.source_timezone`` when omitted.
     order : RowOrderAnalyser, optional
-        Decides whether a table is reversed and how backward steps are repaired; one with
-        :class:`~sivin.ingest.parsers.order.SplitAtBackwardSteps` when omitted.
+        Decides whether a table is reversed, which rows are stale and how backward steps are
+        repaired; one built from ``settings`` when omitted.
+    now_utc : datetime.datetime, optional
+        The run time (timezone-aware), the base of the latest plausible timestamp; the current
+        time when omitted. Ignored if ``settings.latest_timestamp`` is set.
     """
 
-    __slots__ = ("_converter", "_mapping", "_numbers", "_order", "_search_rows", "_timestamps")
+    __slots__ = (
+        "_converter",
+        "_date_order",
+        "_mapping",
+        "_numbers",
+        "_order",
+        "_range",
+        "_search_rows",
+        "_timestamps",
+    )
 
     def __init__(
         self,
         settings: ParserSettings,
         converter: LocalTimeConverter | None = None,
         order: RowOrderAnalyser | None = None,
+        now_utc: datetime | None = None,
     ) -> None:
         self._mapping = ColumnMapping(settings.aliases)
         self._numbers = NumberParser()
         self._timestamps = TimestampParser(settings.day_first)
+        self._date_order = DateOrderCheck(
+            settings.day_first, settings.expected_interval_s * settings.long_step_factor
+        )
+        self._range = PlausibleRange.from_settings(settings, now_utc or datetime.now(UTC))
         self._converter = converter or LocalTimeConverter(settings.source_timezone)
         self._order = order or RowOrderAnalyser(
-            settings.source_timezone, settings.newest_first_min_share
+            settings.source_timezone,
+            settings.newest_first_min_share,
+            settings.newest_first_min_steps,
+            settings.max_backward_step_s,
         )
         self._search_rows = settings.header_search_rows
 
     def inspect(self, table: SensorTable) -> TableInspection:
         """Locate the header, map and parse the columns and convert the timestamps.
 
-        A table that is clearly newest first is reversed. Rows that still step back in local
-        time (clock correction, overlapping exports) are handled by the row-order repair
-        strategy: by default the rows are converted in separate monotonic segments.
+        Implausible timestamps are set aside, a table that is clearly newest first is
+        reversed, rows far earlier than rows before them are set aside, and the remaining
+        backward steps are repaired (by default: converted in separate monotonic segments).
+        See :mod:`sivin.ingest.parsers.order`.
 
         Parameters
         ----------
@@ -161,17 +184,25 @@ class TabularExportReader:
         )
         if not header.is_complete:
             return with_header
-        local = self._timestamps.parse(data.cells[CanonicalColumn.TIMESTAMP])
-        order = self._order.analyse(local)
+        cells = data.cells[CanonicalColumn.TIMESTAMP]
+        local = self._timestamps.parse(cells)
+        date_order_problem = self._date_order.problem(cells, local)
+        implausible = self._range.outside(local)
+        order = self._order.analyse(local.mask(implausible))
         if order.newest_first:
             data = _reversed(data)
             local = local.iloc[::-1].reset_index(drop=True)
+            implausible = implausible[::-1].copy()
         return replace(
             with_header,
             source_rows=data.source_rows,
             reversed_order=order.newest_first,
             backward_rows=data.source_rows[order.backward_steps],
-            times=self._time_column(header.headers[CanonicalColumn.TIMESTAMP], local, order),
+            order_undecided=order.undecided,
+            date_order_problem=date_order_problem,
+            times=self._time_column(
+                header.headers[CanonicalColumn.TIMESTAMP], local, implausible, order
+            ),
             temp=self._value_column(header, data, CanonicalColumn.TEMP),
             rh=self._value_column(header, data, CanonicalColumn.RH),
         )
@@ -237,14 +268,20 @@ class TabularExportReader:
             ),
         )
 
-    def _time_column(self, header: str, local: pd.Series, order: RowOrder) -> TimeColumn:
-        results = [self._converter.to_utc(local.iloc[segment]) for segment in order.segments]
+    def _time_column(
+        self, header: str, local: pd.Series, implausible: BoolArray, order: RowOrder
+    ) -> TimeColumn:
+        converted = local.mask(implausible | order.stale)
+        results = [self._converter.to_utc(converted.iloc[segment]) for segment in order.segments]
+        unresolved = np.concatenate([_as_bool(result.unresolved) for result in results])
         return TimeColumn(
             header=header,
             local=local,
             utc=pd.concat([result.timestamps_utc for result in results]),
             suspect=np.concatenate([_as_bool(result.suspect) for result in results]),
-            unresolved=np.concatenate([_as_bool(result.unresolved) for result in results]),
+            unresolved=unresolved | self._order.incomplete_transitions(converted, order),
+            implausible=implausible,
+            stale=order.stale,
         )
 
     def _value_column(
@@ -331,6 +368,59 @@ class TabularExportParser(ExportParser):
             missing_tables=loaded.missing_tables,
             ignored_tables=loaded.ignored_tables,
         )
+
+
+@dataclass(frozen=True)
+class PlausibleRange:
+    """The range of plausible naive local timestamps.
+
+    Attributes
+    ----------
+    earliest, latest : datetime.datetime
+        Inclusive bounds, naive local wall-clock time.
+    """
+
+    earliest: datetime
+    latest: datetime
+
+    @classmethod
+    def from_settings(cls, settings: ParserSettings, now_utc: datetime) -> PlausibleRange:
+        """Build the range of ``settings`` for a run at ``now_utc``.
+
+        Parameters
+        ----------
+        settings : ParserSettings
+            ``earliest_timestamp``, ``latest_timestamp`` or ``max_future_s``, and the zone.
+        now_utc : datetime.datetime
+            Timezone-aware run time.
+
+        Returns
+        -------
+        PlausibleRange
+            The range; ``latest`` is the run time plus ``max_future_s`` in local time unless
+            ``latest_timestamp`` is set.
+        """
+        latest = settings.latest_timestamp
+        if latest is None:
+            future = now_utc + timedelta(seconds=settings.max_future_s)
+            latest = future.astimezone(ZoneInfo(settings.source_timezone)).replace(tzinfo=None)
+        return cls(settings.earliest_timestamp, latest)
+
+    def outside(self, local: pd.Series) -> BoolArray:
+        """Tell which readable timestamps lie outside the range.
+
+        Parameters
+        ----------
+        local : pandas.Series
+            Naive local timestamps (``NaT`` is not outside).
+
+        Returns
+        -------
+        numpy.ndarray of bool
+            ``True`` for implausible rows.
+        """
+        outside = (local < pd.Timestamp(self.earliest)) | (local > pd.Timestamp(self.latest))
+        return np.asarray(outside.to_numpy(), dtype=np.bool_)
 
 
 def _file_size(path: Path) -> int | None:

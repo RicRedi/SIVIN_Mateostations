@@ -198,6 +198,26 @@ class ValidationSettings(BaseModel):
     rh_max_pct: float = Field(
         100.0, description="Upper bound of relative humidity in % (physical limit)."
     )
+    max_implausible_timestamp_share: float = Field(
+        0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Share of data rows (0-1, dimensionless) with a timestamp outside the plausible "
+            "range (ParserSettings.earliest_timestamp to the run time plus max_future_s). Above "
+            "it the file is rejected (ERROR); at or below it the rows are dropped (WARNING). "
+            "Project default [to be verified]."
+        ),
+    )
+    min_error_rows: StrictInt = Field(
+        3,
+        ge=0,
+        description=(
+            "A share threshold turns a finding into an ERROR only when more than this many rows "
+            "(count) are affected, or all of them; so one footer or comment row in a short file "
+            "is a WARNING. Project default [to be verified]."
+        ),
+    )
     max_out_of_bounds_share: float = Field(
         0.05,
         ge=0.0,
@@ -264,12 +284,18 @@ class TimeColumn:
     local : pandas.Series
         Naive local wall-clock timestamps (``datetime64[ns]``); ``NaT`` where unparseable.
     utc : pandas.Series
-        Timestamps converted to UTC (``datetime64[ns, UTC]``); ``NaT`` where unparseable or
-        where the daylight-saving conversion collided with another row.
+        Timestamps converted to UTC (``datetime64[ns, UTC]``); ``NaT`` where unparseable,
+        implausible, stale or where the daylight-saving conversion collided with another row.
     suspect : numpy.ndarray of bool
         Ambiguous or nonexistent local time (daylight-saving transition).
     unresolved : numpy.ndarray of bool
-        Subset of ``suspect`` whose UTC instant is a guess or ``NaT``.
+        Subset of ``suspect`` whose UTC instant is a guess or ``NaT``, including ambiguous rows
+        of a repaired table whose transition is not fully covered; these rows are dropped.
+    implausible : numpy.ndarray of bool
+        Readable local time outside the plausible range; not converted, dropped.
+    stale : numpy.ndarray of bool
+        More than the maximum backward step earlier than a row before it; not converted,
+        dropped.
     """
 
     header: str
@@ -277,6 +303,8 @@ class TimeColumn:
     utc: pd.Series
     suspect: BoolArray
     unresolved: BoolArray
+    implausible: BoolArray
+    stale: BoolArray
 
     @property
     def unparseable(self) -> BoolArray:
@@ -316,8 +344,13 @@ class TableInspection:
     reversed_order : bool
         ``True`` if the rows were recorded newest first and were reversed by the parser.
     backward_rows : numpy.ndarray of int64
-        Source row numbers of the rows (outside daylight-saving hours) that are earlier than
-        the row before them, after a possible reversal.
+        Source row numbers of the rows that are earlier than the row before them (steps
+        inside the repeated hour of a fall-back excluded), after a possible reversal.
+    order_undecided : bool
+        ``True`` if the table steps back in time but is too short to decide whether it is
+        newest first; it was read oldest first.
+    date_order_problem : str or None
+        Why the day/month order of the timestamps looks swapped, if it does.
     times, temp, rh : TimeColumn, ValueColumn or None
         Parsed columns; ``None`` when the header or a required column is missing.
     """
@@ -333,6 +366,8 @@ class TableInspection:
     short_rows: RowArray = field(default_factory=_no_rows)
     reversed_order: bool = False
     backward_rows: RowArray = field(default_factory=_no_rows)
+    order_undecided: bool = False
+    date_order_problem: str | None = None
     times: TimeColumn | None = None
     temp: ValueColumn | None = None
     rh: ValueColumn | None = None
@@ -610,6 +645,15 @@ def _share(count: int, total: int) -> float:
     return count / total if total else 0.0
 
 
+def _share_severity(count: int, total: int, limit: float, settings: ValidationSettings) -> Severity:
+    """ERROR if more than ``limit`` of ``total`` and more than ``min_error_rows`` (or all)."""
+    if total and count == total:
+        return Severity.ERROR
+    if _share(count, total) > limit and count > settings.min_error_rows:
+        return Severity.ERROR
+    return Severity.WARNING
+
+
 @validation_rules.register
 class FileExistsRule(ValidationRule):
     """The export path must be an existing file (ERROR)."""
@@ -669,7 +713,8 @@ class ExpectedTablesRule(ValidationRule):
         if inspection.ignored_tables:
             yield self._issue(
                 Severity.WARNING,
-                "Table(s) without a sensor mapping were not read: "
+                "Table(s) not read (only the first worksheet of a portal export and the mapped "
+                "worksheets of a legacy workbook are read): "
                 f"{', '.join(inspection.ignored_tables)}.",
             )
 
@@ -772,7 +817,7 @@ class NumbersParseableRule(TableRule):
                 continue
             share = _share(count, table.n_data_rows)
             limit = self.settings.max_unparseable_value_share
-            severity = Severity.ERROR if share > limit else Severity.WARNING
+            severity = _share_severity(count, table.n_data_rows, limit, self.settings)
             consequence = "file rejected" if severity is Severity.ERROR else "read as missing"
             yield self._issue(
                 severity,
@@ -803,7 +848,7 @@ class TimestampsParseableRule(TableRule):
             return
         share = _share(count, table.n_data_rows)
         limit = self.settings.max_unparseable_timestamp_share
-        severity = Severity.ERROR if share > limit else Severity.WARNING
+        severity = _share_severity(count, table.n_data_rows, limit, self.settings)
         consequence = "file rejected" if severity is Severity.ERROR else "rows dropped"
         yield self._issue(
             severity,
@@ -812,6 +857,122 @@ class TimestampsParseableRule(TableRule):
             table.first_row(unparseable),
             table.name,
         )
+
+
+@validation_rules.register
+class ValuesPresentRule(TableRule):
+    """A table must contain measured values.
+
+    No temperature **and** no humidity value at all (empty columns, or formula cells without
+    cached results, which openpyxl reads as empty) is an ERROR: the export holds no data. One
+    variable without any value is a WARNING: the other is still usable (e.g. a failed humidity
+    channel).
+    """
+
+    rule_id = "values-present"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield findings about empty value columns (see :meth:`TableRule.check_table`)."""
+        if table.temp is None or table.rh is None or not table.n_data_rows:
+            return
+        empty = [column.header for column in (table.temp, table.rh) if not len(column.present)]
+        if not empty:
+            return
+        both = len(empty) == 2
+        yield self._issue(
+            Severity.ERROR if both else Severity.WARNING,
+            f"Column(s) {', '.join(repr(name) for name in empty)} contain no value in "
+            f"{table.n_data_rows} data row(s) (empty cells, or formulas without cached "
+            "results)" + ("; the export holds no measurement." if both else "."),
+            table.header_row,
+            table.name,
+        )
+
+
+@validation_rules.register
+class DateOrderRule(TableRule):
+    """Day and month that look swapped (numeric text dates) are an ERROR."""
+
+    rule_id = "date-order"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield an ERROR for an ambiguous date order (see :meth:`TableRule.check_table`)."""
+        if table.date_order_problem is not None:
+            yield self._issue(Severity.ERROR, table.date_order_problem, table=table.name)
+
+
+@validation_rules.register
+class TimestampsPlausibleRule(TableRule):
+    """Timestamps must lie between the earliest plausible time and the run time (plus margin).
+
+    A share of implausible timestamps above ``max_implausible_timestamp_share`` is an ERROR; a
+    smaller share is a WARNING and the rows are dropped.
+    """
+
+    rule_id = "timestamps-plausible"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield findings about implausible timestamps (see :meth:`TableRule.check_table`)."""
+        if table.times is None:
+            return
+        implausible = table.times.implausible
+        count = int(implausible.sum())
+        if not count:
+            return
+        limit = self.settings.max_implausible_timestamp_share
+        severity = _share_severity(count, table.n_data_rows, limit, self.settings)
+        consequence = "file rejected" if severity is Severity.ERROR else "rows dropped"
+        yield self._issue(
+            severity,
+            f"{count} of {table.n_data_rows} timestamp(s) are outside the plausible range "
+            f"(device clock reset or wrong date?) ({_share(count, table.n_data_rows):.1%}, "
+            f"limit {limit:.1%}); {consequence}.",
+            table.first_row(implausible),
+            table.name,
+        )
+
+
+@validation_rules.register
+class RowOrderRule(TableRule):
+    """A table that steps back but is too short to tell whether it is newest first (WARNING)."""
+
+    rule_id = "row-order"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield a WARNING for an undecidable row order (see :meth:`TableRule.check_table`)."""
+        if table.order_undecided:
+            yield self._issue(
+                Severity.WARNING,
+                "Too few rows to decide whether the table is newest first; read oldest first.",
+                table=table.name,
+            )
+
+
+@validation_rules.register
+class LargeBackwardStepsRule(TableRule):
+    """Rows far earlier than data already read are dropped (WARNING).
+
+    A row more than ``ParserSettings.max_backward_step_s`` earlier than the latest local time
+    before it comes from a device clock reset or a long overlap of concatenated exports; the
+    rows before it are kept and it is dropped.
+    """
+
+    rule_id = "large-backward-steps"
+
+    def check_table(self, table: TableInspection) -> Iterator[ValidationIssue]:
+        """Yield a WARNING for dropped stale rows (see :meth:`TableRule.check_table`)."""
+        if table.times is None:
+            return
+        stale = table.times.stale
+        count = int(stale.sum())
+        if count:
+            yield self._issue(
+                Severity.WARNING,
+                f"{count} row(s) are far earlier than rows before them (clock reset or "
+                "overlapping exports?); dropped.",
+                table.first_row(stale),
+                table.name,
+            )
 
 
 @validation_rules.register
@@ -945,7 +1106,7 @@ class GrossBoundsRule(TableRule):
             return
         share = _share(count, len(column.present))
         limit = self.settings.max_out_of_bounds_share
-        severity = Severity.ERROR if share > limit else Severity.WARNING
+        severity = _share_severity(count, len(column.present), limit, self.settings)
         hint = " (wrong unit or swapped columns?)" if severity is Severity.ERROR else ""
         yield self._issue(
             severity,
@@ -992,7 +1153,7 @@ class HumidityFractionRule(TableRule):
 
     Such values lie inside the physical bounds, so :class:`HumidityBoundsRule` cannot see them.
     The file is rejected when the share of values at or below ``rh_fraction_max_pct`` exceeds
-    ``max_out_of_bounds_share``.
+    ``max_out_of_bounds_share`` (and their number ``min_error_rows``), or all values are.
     """
 
     rule_id = "humidity-fraction"
@@ -1003,8 +1164,10 @@ class HumidityFractionRule(TableRule):
             return
         present = table.rh.present
         threshold = self.settings.rh_fraction_max_pct
-        share = _share(int((present <= threshold).sum()), len(present))
-        if share > self.settings.max_out_of_bounds_share:
+        count = int((present <= threshold).sum())
+        share = _share(count, len(present))
+        limit = self.settings.max_out_of_bounds_share
+        if count and _share_severity(count, len(present), limit, self.settings) is Severity.ERROR:
             yield self._issue(
                 Severity.ERROR,
                 f"{share:.1%} of the relative humidity values are at or below {threshold:g} %; "

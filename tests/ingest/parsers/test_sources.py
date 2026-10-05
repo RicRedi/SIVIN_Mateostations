@@ -8,13 +8,12 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from sivin.ingest.parsers.columns import ParserSettings
 from sivin.ingest.parsers.portal import PortalCsvParser, PortalXlsxParser
 from sivin.ingest.parsers.sources import CsvGridReader, GridReadError, WorkbookReader
 from sivin.ingest.parsers.tabular import TabularExportReader
 from sivin.ingest.validation import TableInspection
 
-from ..conftest import PORTAL_CSV_NAME
+from ..conftest import PORTAL_CSV_NAME, make_settings
 
 XLSX_NAME = "MeteoData_8615620 77678271.xlsx"
 
@@ -56,7 +55,7 @@ def test_damaged_worksheet_xml(tmp_path: Path) -> None:
             target.writestr(item, data)
     with pytest.raises(GridReadError, match="damaged worksheet"):
         WorkbookReader().read(damaged)
-    assert PortalXlsxParser().parse(damaged).report.rules() == {"file-readable"}
+    assert PortalXlsxParser(make_settings()).parse(damaged).report.rules() == {"file-readable"}
 
 
 def test_workbook_with_chartsheet_only(tmp_path: Path) -> None:
@@ -65,16 +64,16 @@ def test_workbook_with_chartsheet_only(tmp_path: Path) -> None:
     workbook.create_chartsheet("Chart")
     workbook.remove(workbook["Sheet"])
     workbook.save(path)
-    report = PortalXlsxParser().parse(path).report
+    report = PortalXlsxParser(make_settings()).parse(path).report
     assert report.rules() == {"file-readable"}  # openpyxl cannot read a sheetless workbook
 
 
 def test_unusable_path(tmp_path: Path) -> None:
-    result = PortalCsvParser().parse(tmp_path / ("x" * 300) / PORTAL_CSV_NAME)
+    result = PortalCsvParser(make_settings()).parse(tmp_path / ("x" * 300) / PORTAL_CSV_NAME)
     assert result.report.rules() == {"file-exists"}
 
 
 def test_assemble_requires_a_validated_table() -> None:
-    reader = TabularExportReader(ParserSettings())
+    reader = TabularExportReader(make_settings())
     with pytest.raises(ValueError, match="not validated"):
         reader.assemble(TableInspection(name="t", sensor_id=None), "a.csv")

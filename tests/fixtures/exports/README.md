@@ -32,6 +32,8 @@ Regenerate (from the project root):
 | `broken/garbage_timestamps/` | portal CSV name | every fourth timestamp has a trailing `?` | ERROR `timestamps-parseable` |
 | `broken/fahrenheit_header/` | portal CSV name | header `Teplota (°F)` | ERROR `required-columns` |
 | `broken/kelvin_values/` | portal CSV name | temperature + 273.15 under header `Teplota` | ERROR `temperature-bounds` |
+| `broken/month_first/` | portal CSV name | timestamps month first (`3/1/2026` = 1 March, all days ≤ 12), every third sample | ERROR `date-order` |
+| `broken/formula_values/` | `MeteoData_8615620 77678271.xlsx` | value cells are formulas without cached results (read as empty) | ERROR `values-present` |
 | `broken/unknown_name/` | `export.csv` | valid content, no sensor in the name | ERROR `sensor-id` |
 | `broken/truncated_xlsx/` | `MeteoData_8615620 77678271.xlsx` | first half of the valid workbook | ERROR `file-readable` |
 | `broken/truncated_csv/` | portal CSV name | last line cut after the temperature | WARNING `short-rows` |

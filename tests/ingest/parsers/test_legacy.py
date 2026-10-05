@@ -13,7 +13,7 @@ from sivin.ingest.parsers.columns import ParserSettings
 from sivin.ingest.parsers.legacy import LegacyWorkbookParser
 from sivin.ingest.validation import Severity
 
-from ..conftest import EXPORTS
+from ..conftest import EXPORTS, make_settings
 
 WORKBOOK = EXPORTS / "legacy" / "data.xlsx"
 
@@ -37,14 +37,16 @@ def test_two_sheets_two_series(settings: ParserSettings) -> None:
 
 def test_explicit_mapping_with_missing_and_unmapped_sheets() -> None:
     mapping = {"8271": SensorId("77678271"), "9986": SensorId("77799986")}
-    parser = LegacyWorkbookParser(sheet_sensors=mapping)
+    parser = LegacyWorkbookParser(make_settings(), sheet_sensors=mapping)
     assert parser.sheet_sensors == mapping
     result = parser.parse(WORKBOOK)
     assert result.series == ()
     errors = [issue.message for issue in result.report.errors]
     warnings = [issue.message for issue in result.report.warnings]
     assert errors == ["Expected table(s) not found: 9986."]
-    assert warnings == ["Table(s) without a sensor mapping were not read: 0921."]
+    assert len(warnings) == 1
+    assert warnings[0].startswith("Table(s) not read (only the first worksheet")
+    assert warnings[0].endswith(": 0921.")
 
 
 def test_workbook_without_mapped_sheet(tmp_path: Path) -> None:
@@ -52,7 +54,7 @@ def test_workbook_without_mapped_sheet(tmp_path: Path) -> None:
     workbook = openpyxl.Workbook()
     workbook.active.title = "Notes"
     workbook.save(path)
-    parser = LegacyWorkbookParser(sheet_sensors={"8271": SensorId("77678271")})
+    parser = LegacyWorkbookParser(make_settings(), sheet_sensors={"8271": SensorId("77678271")})
     report = parser.parse(path).report
     assert report.rules(Severity.ERROR) == {"expected-tables"}
 
@@ -60,7 +62,7 @@ def test_workbook_without_mapped_sheet(tmp_path: Path) -> None:
 def test_no_tables_at_all(tmp_path: Path) -> None:
     path = tmp_path / "data.xlsx"
     openpyxl.Workbook().save(path)
-    parser = LegacyWorkbookParser(sheet_sensors={})
+    parser = LegacyWorkbookParser(make_settings(), sheet_sensors={})
     report = parser.parse(path).report
     assert [issue.message for issue in report.errors] == ["The file contains no table to read."]
 
@@ -70,7 +72,7 @@ def test_can_parse(settings: ParserSettings) -> None:
     assert parser.can_parse(Path("data.xlsx"))
     assert not parser.can_parse(Path("MeteoData_8615620 77678271.xlsx"))
     assert not parser.can_parse(Path("data.csv"))
-    assert not LegacyWorkbookParser().can_parse(Path("data.xlsx"))
+    assert not LegacyWorkbookParser(make_settings()).can_parse(Path("data.xlsx"))
 
 
 def test_corrupt_workbook(tmp_path: Path, settings: ParserSettings) -> None:

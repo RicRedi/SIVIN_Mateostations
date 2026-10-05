@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -15,6 +17,15 @@ EXPORTS = Path(__file__).resolve().parents[1] / "fixtures" / "exports"
 """Directory of the committed synthetic export fixtures."""
 
 PORTAL_CSV_NAME = "MeteoData_8615620 77678271 (VUT)_20260301_223857.csv"
+LATEST = datetime(2030, 1, 1)
+"""Fixed latest plausible timestamp, so that results do not depend on the day tests run."""
+
+
+def make_settings(**changes: Any) -> ParserSettings:
+    """Parser settings for tests: ``latest_timestamp`` fixed to :data:`LATEST`."""
+    return ParserSettings(**{"latest_timestamp": LATEST, **changes})
+
+
 LEGACY_SHEETS = {"8271": "77678271", "0921": "77680921"}
 
 
@@ -40,7 +51,7 @@ def make_fixtures() -> ModuleType:
 @pytest.fixture
 def settings() -> ParserSettings:
     """Parser settings with the legacy worksheet mapping of the fixture workbook."""
-    return ParserSettings(legacy_sheet_sensors=LEGACY_SHEETS)
+    return make_settings(legacy_sheet_sensors=LEGACY_SHEETS)
 
 
 CsvWriter = Callable[..., Path]

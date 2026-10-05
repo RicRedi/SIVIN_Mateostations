@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -93,3 +95,11 @@ def test_parser_settings_defaults_and_validation() -> None:
 def test_explicit_valid_settings() -> None:
     settings = ParserSettings(source_timezone="UTC", csv_encodings=("utf-8",))
     assert (settings.source_timezone, settings.csv_encodings) == ("UTC", ("utf-8",))
+
+
+def test_plausibility_bounds_must_be_naive() -> None:
+    with pytest.raises(ValidationError, match="naive local time"):
+        ParserSettings(earliest_timestamp=datetime(2020, 1, 1, tzinfo=UTC))
+    assert ParserSettings(latest_timestamp=datetime(2030, 1, 1)).latest_timestamp is not None
+    with pytest.raises(ValidationError):
+        ParserSettings(max_backward_step_s=1800.0)

@@ -7,6 +7,7 @@ cells of every type a CSV or workbook reader can return.
 from __future__ import annotations
 
 import random
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,9 +15,8 @@ import openpyxl
 import pytest
 
 from sivin.ingest.parsers.base import ParsedExport, parser_registry
-from sivin.ingest.parsers.columns import ParserSettings
 
-from .conftest import EXPORTS, LEGACY_SHEETS, PORTAL_CSV_NAME
+from .conftest import EXPORTS, LEGACY_SHEETS, PORTAL_CSV_NAME, make_settings
 
 SEED = 1825
 N_BYTE_MUTATIONS = 60
@@ -49,6 +49,13 @@ TOKENS: tuple[object, ...] = (
     0,
     -40.5,
     1e300,
+    10**400,
+    -(10**400),
+    "9" * 400,
+    "-inf",
+    "Infinity",
+    float("inf"),
+    float("nan"),
     True,
     datetime(2026, 3, 29, 2, 30),
     datetime(1900, 1, 1),
@@ -85,7 +92,7 @@ def mutate(data: bytes, rng: random.Random) -> bytes:
 def test_damaged_files_never_crash(relative: str, tmp_path: Path) -> None:
     rng = random.Random(f"{SEED}-{relative}")
     source = EXPORTS / relative
-    settings = ParserSettings(legacy_sheet_sensors=LEGACY_SHEETS)
+    settings = make_settings(legacy_sheet_sensors=LEGACY_SHEETS)
     parser = parser_registry.for_file(source, settings)
     original = source.read_bytes()
     for index in range(N_BYTE_MUTATIONS):
@@ -93,6 +100,35 @@ def test_damaged_files_never_crash(relative: str, tmp_path: Path) -> None:
         target.parent.mkdir()
         target.write_bytes(mutate(original, rng))
         check(parser.parse(target))
+
+
+def workbook_cell(cell: object) -> object:
+    """openpyxl cannot write these values; write their text instead (oversized cells: below)."""
+    unwritable = isinstance(cell, timedelta) or (
+        isinstance(cell, int | float) and not abs(cell) < 1e308
+    )
+    return str(cell) if unwritable else cell
+
+
+def test_oversized_integer_cell(tmp_path: Path) -> None:
+    """A 400-digit number in the sheet XML reaches the parser as a Python int (review t8)."""
+    source = tmp_path / "source.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Datum a čas", "Teplota (°C)", "Vlhkost (%)"])
+    workbook.active.append([datetime(2026, 1, 5, 17, 33, 1), 987654, 50])
+    workbook.active.append([datetime(2026, 1, 5, 18, 3, 1), 3.5, 50])
+    workbook.save(source)
+    target = tmp_path / "MeteoData_8615620 77678271.xlsx"
+    with zipfile.ZipFile(source) as reader, zipfile.ZipFile(target, "w") as writer:
+        for item in reader.infolist():
+            data = reader.read(item)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data.replace(b"987654", b"9" * 400)
+            writer.writestr(item, data)
+    result = parser_registry.for_file(target, make_settings()).parse(target)
+    check(result)
+    assert result.report.rules() == {"numbers-parseable"}
+    assert result.series[0].frame["temp_c"].isna().tolist() == [True, False]
 
 
 def random_rows(rng: random.Random) -> list[list[object]]:
@@ -105,7 +141,7 @@ def random_rows(rng: random.Random) -> list[list[object]]:
 
 def test_random_grids_never_crash(tmp_path: Path) -> None:
     rng = random.Random(SEED)
-    settings = ParserSettings(legacy_sheet_sensors=LEGACY_SHEETS, header_search_rows=3)
+    settings = make_settings(legacy_sheet_sensors=LEGACY_SHEETS, header_search_rows=3)
     for index in range(N_RANDOM_GRIDS):
         folder = tmp_path / str(index)
         folder.mkdir()
@@ -119,7 +155,7 @@ def test_random_grids_never_crash(tmp_path: Path) -> None:
         workbook = openpyxl.Workbook()
         workbook.active.title = rng.choice(("8271", "0921"))
         for row in rows:
-            workbook.active.append([c if not isinstance(c, timedelta) else str(c) for c in row])
+            workbook.active.append([workbook_cell(c) for c in row])
         for name in ("MeteoData_8615620 77678271.xlsx", "data.xlsx"):
             path = folder / name
             workbook.save(path)
