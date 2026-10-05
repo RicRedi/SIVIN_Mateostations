@@ -85,7 +85,11 @@ All commands were run in `/home/user/wt/wp-2.3` with a uv-created `.venv` (Pytho
 - `make test`: `213 passed` (181 foundation + 32 new). Round 2: see below.
 - `make cov`: every module of `sivin/analytics/disease` is at 100 % (statements and
   branches, 492 statements and 86 branches in total). `TOTAL 1317 0 264 0 100%`.
-- Round 2: ROUND2_GATES
+- Round 2 (after fixing the review findings and merging `wp/0.1-foundation` at `8f354c0`):
+  `make lint` → `All checks passed!`, `43 files already formatted`; `make type` →
+  `Success: no issues found in 27 source files`; `make test` → `224 passed` (34 disease
+  tests); `make cov` → every module of `sivin/analytics/disease` at 100 % (499 statements,
+  86 branches), `TOTAL 1342 0 272 0 100%`.
 - The test expectations were computed by hand, with the arithmetic in comments:
   - Gubler-Thomas state machine on a 23-day sequence: onset after a reset streak, growth to the
     bound of 100, +20/−10 heat on the same day, an undetermined day held, observed heat on an
