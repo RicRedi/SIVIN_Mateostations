@@ -369,3 +369,69 @@ contacted. Results:
 
 - WP-1.2: a truncated export with 1 of 7 timestamps unreadable (14.3 %, "limit 5.0 %") is only a
   WARNING and the file is accepted (`timestamps-parseable`).
+
+### Round 2
+
+Verdict: CHANGES_REQUESTED (round 2)
+
+Reviewer: independent reviewer agent; head `06914ff` (fixes `759443e`, `9140889`, `1c26216`).
+
+Gates (run by the reviewer): `make lint` → `All checks passed!`; `make type` → `Success: no
+issues found in 158 source files`; `make test` → `1702 passed`; `make cov` → `1702 passed`,
+total 99.89 % (`sivin/app/*`, `sivin/config/*`, `logging_setup.py`, `storage/store.py`,
+`ingest/validation.py` 100 %).
+
+Re-run of the operator project (`/tmp/claude-0/review-1.7/proj2`, same real and SYNTHETIC
+exports, portal URL `127.0.0.1:9`) and of the round-1 probes:
+
+- `ingest` → 3 imported, 99999999 **moved** to quarantine; second `ingest` → `+0 new`. `qc`,
+  `indices --season 2025`, `run --skip-fetch` exit 0/1 as before; the off-site flags of 77799986 are unchanged.
+- **Dry run:** a tree hash (`find -print0 | sha256sum`) before and after `qc --dry-run`, `indices
+  --dry-run`, `run --dry-run`, `run --skip-fetch --dry-run` and `ingest --dry-run`, with a rejectable
+  file in `data/downloads`, shows **no change**. `run --dry-run` with the fake portal: no
+  download, tree unchanged, "Note: fetch skipped in dry-run".
+- **Portal down:** without credentials `fetch` → 4 and `run` → 4. `run` still ingests nothing new,
+  runs QC and the indices, records `fetch: ...` and prints `DATA_SOURCE_UNAVAILABLE`. With credentials
+  and no browser/portal, `run` → 4. A Selenium `WebDriverException` during login → 4.
+- **Merge in place:** a corrupt store file of 77680921 → `indices`/`qc` exit 1; the file keeps all
+  3 sensors × 17 indices. The failed entries keep their previous values with `status: failed`,
+  `error` and the old `computed_at`, and the events file keeps its content with `status: failed`.
+  `indices --sensor 77678271 --index huglin` leaves 17/17/17 entries.
+  `qc --from/--to` restricts only the summary; the events file still has 3520 samples and 6 events.
+- **Quarantine failure** (patched `read_bytes`/`move`/`copy` raising `PermissionError`): the file
+  fails with `rejected: ...; quarantine failed: ...`, the next (good) file is imported, outcome 1. A name
+  collision gets the `_<UTC time>` suffix; nothing is overwritten.
+- **Interval-derived defaults:** at 1830 s `config show` is identical to round 1 (apart from
+  `quarantine_mode`). At 600 s: duration caps 1500, linear `max_gap_s` 900, spike `min/max` 600/1800,
+  precip counter 900. At 5000 s it loads. An explicit value is kept. The error message names
+  `time.expected_interval_s`. `config show` output reloads to the same config.
+- **Secrets in logs:** with `--log-level DEBUG` and the fake portal (whose `send_keys` logs on
+  Selenium's wire logger), neither the user name nor the password appears in the output. The
+  round-1 `RemoteConnection` reproduction is now a test.
+- **WP-1.2 timestamp rule:** the real export (trailing `;` line) still passes, with 3520 rows.
+  Daily-sized portal exports (48 rows + `;`, 48 rows + `;;;;;`) pass, and 2 rows + `;` passes.
+  48 rows + a text footer is 1/49 = 2 %, a WARNING. Only a *text* footer in a file of
+  fewer than 20 rows is now rejected; the portal does not write one. Not harmful.
+  Truncation of the last line of a long export stays a WARNING (share below 5 %), which is
+  harmless because the rows before it are complete.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | src/sivin/app/fetch.py:121-125; src/sivin/cli/common.py:50-52; src/sivin/app/run.py (record failures) | Redaction covers only `logging` records. A credential that appears in the **message of an exception** reaches unredacted (a) standard error (`Error: Portal session failed: ...` via `typer.echo`, and `FAILED fetch: ...`) and (b) the run record `data/runs/<date>.jsonl`, which WP-4.1 commits to the public `data` branch. Reproduced with the WP-1.3 fake portal: the password element's `send_keys` raises `WebDriverException(f"... cannot type {text!r} ...")`. `sivin fetch` (exit 4) prints the password, and `sivin run` prints it and writes it into the run record. The first `send_keys` does the same with the user name. Chromedriver errors are not known to echo typed text, so the likelihood is low, but the plan forbids printing or committing credentials and the round-2 brief explicitly covers exceptions raised from Selenium. Fix: redact the message of `SourceUnavailableError` with the credentials `FetchService` holds (or a shared `redact()` from `logging_setup`), so it is safe in stderr, the run record and derived JSON; add a test with the raising fake element. | open |
+| minor | src/sivin/logging_setup.py:79-81 | `SecretRedactor` replaces every occurrence of `SIVIN_USER`/`SIVIN_PASSWORD`, without a minimum length. With `SIVIN_USER=u SIVIN_PASSWORD=e` every log line is mangled (`Load***d 4 s***nsors from /tmp/cla***d***-0/...`). A real user name that is a common word (e.g. `vut`, `sivin`) would mangle paths and messages and reveal the value by its pattern. Suggest skipping values shorter than ~4 characters (and documenting it), or redacting the user name only inside credential-bearing contexts. | open |
+| nit | src/sivin/app/indices.py / app/quality.py (`error` fields) | `error` texts in the derived JSON (a WP-3.2 input, published) contain absolute runner paths, e.g. `/home/runner/.../data/raw/77680921/2025.csv:17233: ...`. Consider making paths relative to the project root. | open |
+| nit | src/sivin/app/indices.py (`IndicesWriter.update`) | Merged entries are never pruned: a sensor removed from the store or the registry, or an index removed from the registry, stays in `indices/<season>.json` with its last values and `status: ok`. Only deleting the file clears it. Document it, or drop sensors/indices that are no longer registered. | open |
+| nit | docs/cli.md:108 | With the new default `quarantine_mode: move`, `sivin ingest ~/somewhere/file.csv` moves the user's own file into `data/quarantine/` when it is rejected. This is documented for downloads; one sentence for explicit FILE arguments would avoid surprise. | open |
+
+Round-1 findings: all four majors, the four minors and the three nits are verified **fixed** as described in their
+Status column. Major 1 is fixed for log records only; the remaining exception-message path is the new major above.
+
+Assessment of the round-2 deviations:
+
+- **Exit code 4:** good for WP-4.1. `run` ends with 4 even when other steps also failed, because 4
+  is the highest code; the job summary should still list the other failures.
+- **Merging derived files in place, with `status`/`computed_at`:** behaves as described. Giving up
+  byte stability means one data-branch diff per day, which is acceptable with the daily commit.
+- **Default `move`:** fine for unattended runs.
+- **Interval-derived defaults:** consistent; the defaults at 1830 s are unchanged.
+- **WP-1.2 `min_error_rows` reversal for `timestamps-parseable`:** not harmful for real portal files (see above).
