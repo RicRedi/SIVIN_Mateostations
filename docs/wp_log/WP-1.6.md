@@ -14,6 +14,19 @@ with a `time x sensor` table per variable (`temp_c`, `rh_pct`), a validity mask,
 `pairwise_differences` and `complete_rows`. `AlignmentConfig` is the proposed config section.
 `docs/alignment.md` documents the method, formulas, parameters and recommended use.
 
+**Round 2** addressed the review (round 1) with the orchestrator's decisions:
+- The default nearest tolerance is now derived from the sampling: `expected_interval_s / 2 +
+  margin_s` = 1825/2 + 20 = 932.5 s. The margin is [to be tuned], and `tolerance_s` is still
+  available as an explicit override. With it, ~1825 s sampling fills the 1800 s grid (coverage
+  0.9997, complete rows 0.9994 on a synthetic year of 30 sensors). The docs now say that one
+  sample can serve two grid points.
+- `pairwise_differences` has categorical (int8-coded) sensor labels and an optional ordered
+  `pairs=` filter; its memory cost is documented.
+- Grid times are computed once per `TimeGrid`.
+- The grid step must be at least 1 s and a whole number of nanoseconds.
+- `AlignmentConfig.params` is a read-only mapping that serialises as a plain dict.
+- `AlignmentStrategy.__init_subclass__` checks that `params_model` matches the generic argument.
+
 ## Changed files
 
 - `src/sivin/alignment/__init__.py` (re-exports), `registry.py` (`ClassRegistry`), `grid.py`
@@ -36,21 +49,44 @@ GridPolicy(step_s=1800.0, span=UnionSpan())   # frozen; grid_for(spans) -> TimeG
 SpanRule (ABC, rule_id, bounds(spans, step)); UnionSpan "union"; OverlapSpan "overlap"
 AlignmentStrategy[P] (ABC, strategy_id, params_model, provides_offsets, align(samples, grid),
                       from_params(mapping))
-NearestWithinTolerance "nearest_within_tolerance" (NearestParams.tolerance_s: float | None)
+NearestWithinTolerance "nearest_within_tolerance" (NearestParams: tolerance_s: float | None,
+    expected_interval_s = 1825, margin_s = 20; property tolerance_s -> 932.5 by default)
 LinearInterpolation "linear_interpolation" (LinearParams.max_gap_s = 2737.5)
 SampleSet.from_series(series, variable, exclude_mask); AlignedValues(grid_values, valid, offset_s)
 strategy_registry, span_registry (ClassRegistry: register, get, ids, in, len)
 SensorAligner(strategy, grid_policy=None, exclude_mask=QcFlag.DEFAULT_EXCLUDE)
     .align(series, grid=None) -> AlignedPanel; .grid_for(series); .from_config(cfg, mask)
 AlignedPanel: variable(name), validity(name), offsets_s(name) -> DataFrame | None,
-    pairwise_differences(name), complete_rows(name), sensors, variables, times,
+    pairwise_differences(name, pairs=None), complete_rows(name), sensors, variables, times,
     strategy_id, is_empty, len
-AlignmentConfig(strategy, params, grid_step_s, span)   # frozen, extra="forbid"
+AlignmentConfig(strategy, params, grid_step_s, span)   # frozen, extra="forbid", params read-only
 ```
 
 ## How it was verified
 
-All commands in `/home/user/wt/wp-1.6`:
+All commands in `/home/user/wt/wp-1.6`.
+
+Round 2:
+
+- `make lint`: passed.
+- `make type`: no issues in 26 source files.
+- `make test`: 288 passed (107 in `tests/alignment`).
+- `make cov`: 288 passed; every alignment module at 100 % statements and branches (546
+  statements, 86 branches).
+- New tests:
+  - default tolerance 932.5 s and its boundary (932.5 s valid, 932.5 s + 1 ns invalid);
+  - slip worked example with `tolerance_s = 900` (one empty point) and with the defaults (no
+    empty point, sample 36 serves two points);
+  - synthetic year, 30 sensors, period 1825 ± 0.5 s, whole-second timestamps, overlap grid:
+    per-sensor coverage ≈ 1.0 (abs 1e-3), complete rows > 99 %, max offset ≤ 932.5 s;
+  - `pairs=` filter (orientation and order), categorical int8 codes and ≤ 18 B/row, bad pairs;
+  - step validation (< 1 s, not whole nanoseconds), read-only and serialisable `params`,
+    `params_model` / generic-argument mismatch.
+- Scratch measurement with all 435 pairs of a synthetic year of 30 sensors:
+  `pairwise_differences` gave 7.62 M rows, 137 MB result, ~412 MB tracemalloc peak while
+  building, 2.0 s (round 1: 965 MB result).
+
+Round 1:
 
 - `make lint` → ruff check: all checks passed; ruff format --check: all files formatted.
 - `make type` → `mypy --strict`: no issues found in 26 source files.
@@ -71,8 +107,8 @@ All commands in `/home/user/wt/wp-1.6`:
 
 ## What did not work / what was not verified
 
-- No real export was available: the defaults `max_gap_s = 2737.5 s` and `tolerance_s = step/2`
-  are project choices marked [to be verified] and not tuned on real data. The claimed drift
+- No real export was available: the defaults `max_gap_s = 2737.5 s` and `margin_s = 20 s`
+  (tolerance 932.5 s) are project choices marked [to be verified / to be tuned] and not tuned on real data. The claimed drift
   pattern (≈1825 s, unsynchronised clocks) is taken from the legacy configs, not measured here.
 - Run time and memory were not benchmarked beyond the single timing above.
 - `NEIGHBOR_OUTLIER` detection that would consume the panel is not part of this WP.
@@ -85,8 +121,8 @@ All commands in `/home/user/wt/wp-1.6`:
 - The grid span is derived from *usable* rows (not excluded by the mask, at least one variable
   not `NaN`), not from all rows, so e.g. office records flagged `PRE_DEPLOYMENT` do not widen a
   union grid. Series without usable rows do not empty an `overlap` grid.
-- With the default inclusive tolerance of half the step, a sample exactly half-way between two
-  grid points serves both (documented and tested).
+- With the default tolerance (932.5 s), one sample may serve two neighbouring grid points. This
+  is documented and tested.
 - Sensor columns are ordered by sensor id, not by input order, for deterministic output.
 - A generic `ClassRegistry` lives in `sivin.alignment.registry` (the shared `IndexRegistry` is
   specific to `ClimateIndex`).
@@ -95,6 +131,11 @@ All commands in `/home/user/wt/wp-1.6`:
 
 - `epoch_ns` (tz-aware times → int64 ns) in `sivin/alignment/grid.py` is generally useful; it
   could move to `sivin/core/timeutil.py` (WP-0.1 contract owner) later.
+- `SampleSet.from_series` and `usable_span` read `MeasurementSeries.frame`, which copies the
+  frame each time (three copies per series per `align`). This is cheap at the measured sizes; a
+  read-only column accessor on `MeasurementSeries` (WP-0.1 contract) would avoid the copies.
+- `pairwise_differences` over all pairs still peaks at about 3 times the size of its result
+  while building. With hundreds of sensors, callers must pass `pairs`.
 - `ClassRegistry` duplicates the shape of `sivin.analytics.base.IndexRegistry`; a shared generic
   registry in `sivin.core` could serve QC checks, parsers, strategies and indices alike.
 - Neighbour QC (`NEIGHBOR_OUTLIER`) should use `NearestWithinTolerance` + `OverlapSpan` and
@@ -107,11 +148,13 @@ All commands in `/home/user/wt/wp-1.6`:
    build the aligner with `SensorAligner.from_config(cfg.alignment, cfg.analytics.exclude_mask)`.
    Proposed CLI: `sivin align [--sensor ID ...] [--from/--to ISO] [--strategy ...] --out FILE`
    writing the wide table of each variable (CSV) for inspection. Agree?
-2. Default strategy: `nearest_within_tolerance` (measured values only) was chosen as the safer
-   default; spatial analysis would rather use `linear_interpolation`. Should the default differ
-   per consumer (QC vs. WP-2.4), i.e. one config subsection per consumer?
+2. Default strategy: `nearest_within_tolerance` stays the default (orchestrator decision,
+   round 2). Spatial analysis would rather use `linear_interpolation`. Should the default
+   differ per consumer (QC vs. WP-2.4), i.e. one config subsection per consumer?
 3. Is 1.5 × 1825 s an acceptable default `max_gap_s`, or should interpolation bridge a single
    missing sample (≈ 2 × 1825 s plus margin)?
+4. `NearestParams.expected_interval_s` duplicates `time.expected_interval_s`. In WP-1.7, should
+   the factory pass the global value in so the two cannot diverge?
 
 No contract from §2 or WP-0.1 needed changing.
 
@@ -161,13 +204,13 @@ and an empty pairwise frame; overlap grid ignores a sensor without usable data (
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | src/sivin/alignment/strategies.py:290, config.py:34, docs/alignment.md:63,119 | Default `nearest_within_tolerance` with τ = Δ/2 = 900 s leaves one empty grid point per ~73 for every sensor sampling at 1825 s (periodic gap every ~18 h). Per sensor that is only 1.4 %, but the gaps fall at different times per sensor, so `complete_rows` keeps only 67 % of the year for 30 sensors (measured), and union-span charts (recommended in the doc) show a broken line every 18 h. The maximum distance from a grid point to the nearest sample of an uninterrupted 1825 s record is 912.5 s, so Δ/2 is structurally too small for the actual sampling. Fix: make the default tolerance derive from the sampling interval, e.g. `max(Δ, LEGACY_SAMPLING_INTERVAL_S)/2` plus a named jitter margin (≈ 930 s gave 100 % coverage, max offset 916 s), marked [to be verified]; keep τ = Δ/2 available as a "never reuse a sample" option; update docs, worked-example test and `NearestParams` description. Alternatively make `linear_interpolation` the config default and state that nearest is for QC only. | open |
-| major | src/sivin/alignment/panel.py:205-243 | `pairwise_differences` materialises every pair × every grid point with per-row Python-string labels: 30 sensors × 1 year → 7.4 M rows, 965 MB, 2.3 s; 100 sensors → 11 GB, 40 s. This contradicts brief point 4 ("memory-efficient for a year … × tens of sensors"), and neighbour QC needs only neighbour pairs. Fix: use a categorical dtype (or the sensor index as small int) for `sensor_a`/`sensor_b`, and accept an optional `pairs` argument (iterable of `(SensorId, SensorId)`) so consumers can restrict to neighbours; add a size test. | open |
-| minor | src/sivin/alignment/registry.py:18 | `ClassRegistry` is a sixth near-identical registry in the code base (`IndexRegistry` in core analytics; sibling branches add `ParserRegistry`, `ValidationRuleRegistry`, `NamedRegistry[T]`, `CheckRegistry`). Acceptable inside this WP because `core` is out of scope and the worker flagged it, but the owner should schedule one generic registry in `sivin.core` (this `ClassRegistry` is a good candidate) and migrate the others. | open |
-| minor | src/sivin/alignment/strategies.py:93, grid.py:262 | `SampleSet.from_series` / `usable_span` go through `series.frame`, which copies the whole frame, and `TimeGrid.times_ns`/`__len__` rebuild the `date_range` on every call (2·N+ times per `align`). Not a problem at the measured size; cache the grid times (e.g. `functools.cached_property` is not usable with slots, so compute once in `align`) and use `series.timestamps`/column accessors if available. | open |
-| nit | src/sivin/alignment/grid.py:70,223 | A step below 1 ns (e.g. `step_s=1e-10`) passes validation and fails later in pandas with `ZeroDivisionError`; a non-integer-nanosecond step is silently rounded. Require `step_s >= 1` (or a whole number of seconds) with a clear error. | open |
-| nit | src/sivin/alignment/config.py:41 | `params: dict[str, float \| None]` is a mutable dict inside a frozen model and hard-codes that every strategy parameter is a float; a future non-numeric parameter would need a contract change. Consider `Mapping[str, Any]` validated by the strategy's model (already done in `_valid_params`) or a discriminated union of the params models. | open |
-| nit | src/sivin/alignment/strategies.py:176,273,354 | `params_model` is typed `type[StrategyParams]`, not tied to `P`, so `__init__`/`from_params` need `cast`; a mismatch between the generic argument and `params_model` would not be caught by mypy. Acceptable, but a one-line class-creation check (`__init_subclass__`) would make it safe. | open |
+| major | src/sivin/alignment/strategies.py:290, config.py:34, docs/alignment.md:63,119 | Default `nearest_within_tolerance` with τ = Δ/2 = 900 s leaves one empty grid point per ~73 for every sensor sampling at 1825 s (periodic gap every ~18 h). Per sensor that is only 1.4 %, but the gaps fall at different times per sensor, so `complete_rows` keeps only 67 % of the year for 30 sensors (measured), and union-span charts (recommended in the doc) show a broken line every 18 h. The maximum distance from a grid point to the nearest sample of an uninterrupted 1825 s record is 912.5 s, so Δ/2 is structurally too small for the actual sampling. Fix: make the default tolerance derive from the sampling interval, e.g. `max(Δ, LEGACY_SAMPLING_INTERVAL_S)/2` plus a named jitter margin (≈ 930 s gave 100 % coverage, max offset 916 s), marked [to be verified]; keep τ = Δ/2 available as a "never reuse a sample" option; update docs, worked-example test and `NearestParams` description. Alternatively make `linear_interpolation` the config default and state that nearest is for QC only. | fixed (round 2): default τ = expected_interval_s/2 + margin_s (1825/2 + 20 = 932.5 s), margin [to be tuned], `tolerance_s` kept as override, nearest stays default; docs say one sample may serve two grid points; synthetic-year test: coverage ≈ 1.0 |
+| major | src/sivin/alignment/panel.py:205-243 | `pairwise_differences` materialises every pair × every grid point with per-row Python-string labels: 30 sensors × 1 year → 7.4 M rows, 965 MB, 2.3 s; 100 sensors → 11 GB, 40 s. This contradicts brief point 4 ("memory-efficient for a year … × tens of sensors"), and neighbour QC needs only neighbour pairs. Fix: use a categorical dtype (or the sensor index as small int) for `sensor_a`/`sensor_b`, and accept an optional `pairs` argument (iterable of `(SensorId, SensorId)`) so consumers can restrict to neighbours; add a size test. | fixed (round 2): categorical int8-coded labels, optional ordered `pairs=` filter, memory cost documented (≈18 B/row; 30 sensors × year: 137 MB, was 965 MB); tests for filter, dtype and size |
+| minor | src/sivin/alignment/registry.py:18 | `ClassRegistry` is a sixth near-identical registry in the code base (`IndexRegistry` in core analytics; sibling branches add `ParserRegistry`, `ValidationRuleRegistry`, `NamedRegistry[T]`, `CheckRegistry`). Acceptable inside this WP because `core` is out of scope and the worker flagged it, but the owner should schedule one generic registry in `sivin.core` (this `ClassRegistry` is a good candidate) and migrate the others. | accepted (orchestrator): a generic registry in core is planned later |
+| minor | src/sivin/alignment/strategies.py:93, grid.py:262 | `SampleSet.from_series` / `usable_span` go through `series.frame`, which copies the whole frame, and `TimeGrid.times_ns`/`__len__` rebuild the `date_range` on every call (2·N+ times per `align`). Not a problem at the measured size; cache the grid times (e.g. `functools.cached_property` is not usable with slots, so compute once in `align`) and use `series.timestamps`/column accessors if available. | partly fixed (round 2): grid times and ns computed once in `TimeGrid.__post_init__`; the `series.frame` copies are accepted (no column accessor in the WP-0.1 contract; noted in Out of scope) |
+| nit | src/sivin/alignment/grid.py:70,223 | A step below 1 ns (e.g. `step_s=1e-10`) passes validation and fails later in pandas with `ZeroDivisionError`; a non-integer-nanosecond step is silently rounded. Require `step_s >= 1` (or a whole number of seconds) with a clear error. | fixed (round 2): `validate_step_s` requires a finite step ≥ 1 s that is a whole number of nanoseconds (TimeGrid, GridPolicy, AlignmentConfig); tested |
+| nit | src/sivin/alignment/config.py:41 | `params: dict[str, float \| None]` is a mutable dict inside a frozen model and hard-codes that every strategy parameter is a float; a future non-numeric parameter would need a contract change. Consider `Mapping[str, Any]` validated by the strategy's model (already done in `_valid_params`) or a discriminated union of the params models. | fixed (round 2): `params: Mapping[str, Any]`, stored as a read-only `MappingProxyType`, serialised as a dict, validated by the strategy's model |
+| nit | src/sivin/alignment/strategies.py:176,273,354 | `params_model` is typed `type[StrategyParams]`, not tied to `P`, so `__init__`/`from_params` need `cast`; a mismatch between the generic argument and `params_model` would not be caught by mypy. Acceptable, but a one-line class-creation check (`__init_subclass__`) would make it safe. | fixed (round 2): `AlignmentStrategy.__init_subclass__` rejects a `params_model` that is not a subclass of the generic argument `P`; tested |
 
 ### Deviations assessment
 

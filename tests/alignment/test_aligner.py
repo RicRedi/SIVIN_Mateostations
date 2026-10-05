@@ -137,6 +137,46 @@ def test_pairwise_differences_only_where_both_valid(
     assert first_ac["delta_temp_c"] == pytest.approx((10 + 1800 / 1825) - (30 + 920 / 1820))
 
 
+def test_pairwise_differences_for_requested_pairs(
+    drifting: list[MeasurementSeries], grid: TimeGrid
+) -> None:
+    panel = SensorAligner(NearestWithinTolerance()).align(drifting, grid)
+
+    diffs = panel.pairwise_differences("temp_c", pairs=[(C, A), (SensorId(B), SensorId(A))])
+
+    pairs = list(zip(diffs["sensor_a"], diffs["sensor_b"], strict=True))
+    assert pairs == [(C, A)] * 5 + [(B, A)] * 5
+    # C - A = 20, 20, 19, 19, 19 (orientation as requested); B - A = 10 everywhere.
+    assert diffs["delta_temp_c"].tolist() == [20.0, 20, 19, 19, 19] + [10.0] * 5
+    assert panel.pairwise_differences("temp_c", pairs=[]).empty
+
+
+def test_pairwise_differences_labels_are_categorical(
+    drifting: list[MeasurementSeries], grid: TimeGrid
+) -> None:
+    panel = SensorAligner(NearestWithinTolerance()).align(drifting, grid)
+
+    diffs = panel.pairwise_differences("temp_c")
+
+    for column in ("sensor_a", "sensor_b"):
+        assert isinstance(diffs[column].dtype, pd.CategoricalDtype)
+        assert list(diffs[column].cat.categories) == [A, B, C]
+        assert diffs[column].cat.codes.dtype == np.int8
+    # 8 B time + 8 B difference + 2 x 1 B codes per row, plus constant overhead.
+    assert diffs.memory_usage(index=False).sum() < 18 * len(diffs) + 1024
+
+
+def test_pairwise_differences_rejects_bad_pairs(
+    drifting: list[MeasurementSeries], grid: TimeGrid
+) -> None:
+    panel = SensorAligner(NearestWithinTolerance()).align(drifting, grid)
+
+    with pytest.raises(KeyError, match="not in the panel"):
+        panel.pairwise_differences("temp_c", pairs=[(A, "99999999")])
+    with pytest.raises(ValueError, match="same sensor twice"):
+        panel.pairwise_differences("temp_c", pairs=[(A, A)])
+
+
 def test_complete_rows(drifting: list[MeasurementSeries], grid: TimeGrid) -> None:
     panel = SensorAligner(LinearInterpolation()).align(drifting, grid)
 
@@ -282,24 +322,43 @@ def test_n_sensors_without_code_changes(series_at: SeriesAt) -> None:
     )
 
 
-def test_a_year_of_many_sensors_is_vectorised() -> None:
-    """Synthetic year of 30 min data for 30 sensors; checks shape, not timing."""
-    rng = np.random.default_rng(seed=16)
+def synthetic_year(n_sensors: int, seed: int) -> list[MeasurementSeries]:
+    """Synthetic year: period 1825 s +- 0.5 s, random phase, whole-second timestamps."""
+    rng = np.random.default_rng(seed=seed)
     n_samples = 17_280  # 1825 s apart: ~1 year
     series = []
-    for i in range(30):
-        start = T0 + pd.Timedelta(seconds=float(rng.uniform(0, 1800)))
-        times = start + pd.to_timedelta(np.arange(n_samples) * 1825.0, unit="s")
+    for i in range(n_sensors):
+        period_s = 1825.0 + float(rng.uniform(-0.5, 0.5))
+        offsets_s = np.round(float(rng.uniform(0, 1800)) + np.arange(n_samples) * period_s)
+        times = T0 + pd.to_timedelta(offsets_s, unit="s")
         temps = rng.normal(10.0, 5.0, n_samples)
         series.append(
             MeasurementSeries.from_records(SensorId(f"{20000000 + i}"), times, temps, temps)
         )
+    return series
 
-    panel = SensorAligner(LinearInterpolation()).align(series)
+
+def test_a_year_of_many_sensors_is_vectorised() -> None:
+    """Synthetic year of 30 min data for 30 sensors; checks shape, not timing."""
+    panel = SensorAligner(LinearInterpolation()).align(synthetic_year(30, seed=16))
 
     assert panel.variable("temp_c").shape[1] == 30
     assert len(panel) > 17_500
     assert panel.validity("temp_c").to_numpy().mean() > 0.99
+
+
+def test_default_nearest_covers_a_year_of_1825_s_sampling() -> None:
+    """With default parameters, ~1825 s sampling fills the 1800 s grid (overlap span)."""
+    aligner = SensorAligner(NearestWithinTolerance(), GridPolicy(span=OverlapSpan()))
+
+    panel = aligner.align(synthetic_year(30, seed=17))
+
+    coverage = panel.validity("temp_c").to_numpy().mean(axis=0)
+    assert coverage.min() == pytest.approx(1.0, abs=1e-3)
+    assert len(panel.complete_rows("temp_c")) / len(panel) > 0.99
+    offsets = panel.offsets_s("temp_c")
+    assert offsets is not None
+    assert np.nanmax(offsets.to_numpy()) <= 932.5
 
 
 def test_rejects_no_series() -> None:

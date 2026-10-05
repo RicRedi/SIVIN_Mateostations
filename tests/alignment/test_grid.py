@@ -65,10 +65,26 @@ def test_times_ns_are_epoch_nanoseconds() -> None:
     np.testing.assert_array_equal(grid.times_ns, [0, 1_800_000_000_000, 3_600_000_000_000])
 
 
-@pytest.mark.parametrize("step_s", [0.0, -1.0, float("nan"), float("inf")])
+@pytest.mark.parametrize("step_s", [0.0, -1.0, 1e-10, 0.5, float("nan"), float("inf")])
 def test_grid_rejects_invalid_step(step_s: float) -> None:
-    with pytest.raises(ValueError, match="positive and finite"):
+    with pytest.raises(ValueError, match=r"at least 1\.0 s"):
         TimeGrid(T0, at(3600), step_s=step_s)
+
+
+def test_grid_rejects_step_that_is_not_whole_nanoseconds() -> None:
+    with pytest.raises(ValueError, match="whole number of nanoseconds"):
+        TimeGrid(T0, at(3600), step_s=1.0000000001)
+
+
+@pytest.mark.parametrize("step_s", [1.0, 1.1, 1800.5])
+def test_grid_accepts_whole_nanosecond_steps(step_s: float) -> None:
+    assert TimeGrid(T0, at(4000), step_s=step_s).times[1] - T0 == pd.Timedelta(seconds=step_s)
+
+
+def test_grid_times_are_computed_once() -> None:
+    grid = TimeGrid(T0, at(3600))
+
+    assert grid.times is grid.times
 
 
 def test_grid_rejects_end_before_start() -> None:
@@ -134,7 +150,7 @@ def test_policy_without_spans_gives_none() -> None:
 
 
 def test_policy_rejects_invalid_step() -> None:
-    with pytest.raises(ValueError, match="positive and finite"):
+    with pytest.raises(ValueError, match=r"at least 1\.0 s"):
         GridPolicy(step_s=0.0)
 
 

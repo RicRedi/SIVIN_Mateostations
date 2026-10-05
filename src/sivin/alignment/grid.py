@@ -33,6 +33,14 @@ It is the round value closest to the sensors' nominal sampling interval of 1825 
 (:data:`sivin.core.defaults.LEGACY_SAMPLING_INTERVAL_S`).
 """
 
+MIN_GRID_STEP_S: Final = 1.0
+"""Smallest accepted grid step in seconds; the sensors sample about every 1825 s, so anything
+finer is a configuration error rather than a use case."""
+
+_NS_PER_S: Final = 1_000_000_000
+_WHOLE_NS_TOLERANCE: Final = 1e-3
+"""Allowed deviation (ns) of ``step_s * 1e9`` from an integer, for float representation error."""
+
 DataSpan = tuple[pd.Timestamp, pd.Timestamp]
 """First and last usable instant (UTC) of one series, inclusive."""
 
@@ -52,25 +60,28 @@ class TimeGrid:
     end : pandas.Timestamp
         Upper bound (inclusive); timezone-aware, not before ``start``.
     step_s : float
-        Distance between grid points in seconds, positive and finite. Default 1800 s (30 min).
+        Distance between grid points in seconds: at least 1 s and a whole number of
+        nanoseconds. Default 1800 s (30 min).
 
     Raises
     ------
     ValueError
-        If a bound is naive, ``end`` is before ``start`` or ``step_s`` is not positive.
+        If a bound is naive, ``end`` is before ``start`` or ``step_s`` is invalid.
     """
 
     start: pd.Timestamp
     end: pd.Timestamp
     step_s: float = DEFAULT_GRID_STEP_S
+    _times: pd.DatetimeIndex = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "start", _utc(self.start, "start"))
         object.__setattr__(self, "end", _utc(self.end, "end"))
-        if not (math.isfinite(self.step_s) and self.step_s > 0):
-            raise ValueError(f"Grid step must be positive and finite, got {self.step_s} s.")
+        validate_step_s(self.step_s)
         if self.end < self.start:
             raise ValueError(f"Grid end {self.end} is before its start {self.start}.")
+        times = pd.date_range(self.start, self.end, freq=self.step, name=str(Column.TIMESTAMP))
+        object.__setattr__(self, "_times", times.as_unit("ns"))
 
     @classmethod
     def from_series(
@@ -110,9 +121,8 @@ class TimeGrid:
 
     @property
     def times(self) -> pd.DatetimeIndex:
-        """The grid points, ``datetime64[ns, UTC]``, named ``timestamp_utc``."""
-        index = pd.date_range(self.start, self.end, freq=self.step, name=str(Column.TIMESTAMP))
-        return index.as_unit("ns")
+        """The grid points, ``datetime64[ns, UTC]``, named ``timestamp_utc`` (computed once)."""
+        return self._times
 
     @property
     def times_ns(self) -> npt.NDArray[np.int64]:
@@ -120,7 +130,7 @@ class TimeGrid:
         return epoch_ns(self.times)
 
     def __len__(self) -> int:
-        return len(self.times)
+        return len(self._times)
 
 
 class SpanRule(ABC):
@@ -211,7 +221,8 @@ class GridPolicy:
     Parameters
     ----------
     step_s : float
-        Grid step in seconds. Default 1800 s (30 min, MIGRATION_PLAN §2.7).
+        Grid step in seconds, at least 1 s and a whole number of nanoseconds. Default 1800 s
+        (30 min, MIGRATION_PLAN §2.7).
     span : SpanRule
         Which span to cover. Default :class:`UnionSpan`.
     """
@@ -220,8 +231,7 @@ class GridPolicy:
     span: SpanRule = field(default_factory=UnionSpan)
 
     def __post_init__(self) -> None:
-        if not (math.isfinite(self.step_s) and self.step_s > 0):
-            raise ValueError(f"Grid step must be positive and finite, got {self.step_s} s.")
+        validate_step_s(self.step_s)
 
     def grid_for(self, spans: Sequence[DataSpan]) -> TimeGrid | None:
         """Build the grid covering ``spans`` according to the span rule.
@@ -241,6 +251,35 @@ class GridPolicy:
         if bounds is None:
             return None
         return TimeGrid(bounds[0], bounds[1], self.step_s)
+
+
+def validate_step_s(step_s: float) -> float:
+    """Check that a grid step is usable.
+
+    Parameters
+    ----------
+    step_s : float
+        Grid step in seconds.
+
+    Returns
+    -------
+    float
+        ``step_s`` unchanged.
+
+    Raises
+    ------
+    ValueError
+        If ``step_s`` is not finite, below :data:`MIN_GRID_STEP_S` (1 s) or not a whole number
+        of nanoseconds.
+    """
+    if not (math.isfinite(step_s) and step_s >= MIN_GRID_STEP_S):
+        raise ValueError(
+            f"Grid step must be finite and at least {MIN_GRID_STEP_S} s, got {step_s}."
+        )
+    step_ns = step_s * _NS_PER_S
+    if abs(step_ns - round(step_ns)) > _WHOLE_NS_TOLERANCE:
+        raise ValueError(f"Grid step must be a whole number of nanoseconds, got {step_s} s.")
+    return step_s
 
 
 def usable_span(series: MeasurementSeries, exclude_mask: int) -> DataSpan | None:

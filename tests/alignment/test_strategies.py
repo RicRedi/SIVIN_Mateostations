@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,12 +12,15 @@ from pydantic import ValidationError
 from sivin.alignment.grid import TimeGrid
 from sivin.alignment.strategies import (
     DEFAULT_MAX_GAP_S,
+    DEFAULT_TOLERANCE_MARGIN_S,
     AlignedValues,
+    AlignmentStrategy,
     LinearInterpolation,
     LinearParams,
     NearestParams,
     NearestWithinTolerance,
     SampleSet,
+    StrategyParams,
     strategy_registry,
 )
 from sivin.core.flags import QcFlag
@@ -41,21 +46,26 @@ def grid(last_s: float, step_s: float = 1800.0) -> TimeGrid:
     return TimeGrid(T0, at(last_s), step_s)
 
 
-def test_nearest_default_tolerance_is_half_the_step() -> None:
-    assert NearestWithinTolerance().tolerance_s(grid(0, step_s=1800.0)) == 900.0
-    assert NearestWithinTolerance(NearestParams(tolerance_s=60.0)).tolerance_s(grid(0)) == 60.0
+def test_nearest_default_tolerance_is_half_the_interval_plus_margin() -> None:
+    # 1825 / 2 + 20 = 932.5 s
+    assert DEFAULT_TOLERANCE_MARGIN_S == 20.0
+    assert NearestWithinTolerance().tolerance_s == 932.5
+    derived = NearestParams(expected_interval_s=1000.0, margin_s=0.0)
+    assert NearestWithinTolerance(derived).tolerance_s == 500.0
+    override = NearestParams(tolerance_s=60.0, margin_s=500.0)
+    assert NearestWithinTolerance(override).tolerance_s == 60.0
 
 
 def test_nearest_tolerance_boundary_is_inclusive() -> None:
     strategy = NearestWithinTolerance()
 
-    at_limit = strategy.align(samples([900.0], [1.0]), grid(0))
-    beyond = strategy.align(samples([900.000000001], [1.0]), grid(0))
+    at_limit = strategy.align(samples([932.5], [1.0]), grid(0))
+    beyond = strategy.align(samples([932.500000001], [1.0]), grid(0))
 
     assert at_limit.valid.tolist() == [True]
     assert at_limit.grid_values.tolist() == [1.0]
     assert at_limit.offset_s is not None
-    assert at_limit.offset_s.tolist() == [900.0]
+    assert at_limit.offset_s.tolist() == [932.5]
     assert beyond.valid.tolist() == [False]
     assert np.isnan(beyond.grid_values).all()
     assert beyond.offset_s is not None
@@ -97,7 +107,7 @@ def test_nearest_half_way_sample_serves_both_neighbours() -> None:
 def test_nearest_grid_outside_samples() -> None:
     result = NearestWithinTolerance().align(samples([3600.0], [5.0]), grid(7200))
 
-    # Grid points 0, 1800, 3600, 5400, 7200 s: only 3600 s is within 900 s of the sample.
+    # Grid points 0, 1800, 3600, 5400, 7200 s: only 3600 s is within 932.5 s of the sample.
     assert result.valid.tolist() == [False, False, True, False, False]
 
 
@@ -110,18 +120,19 @@ def test_nearest_without_samples_is_all_invalid() -> None:
 
 
 def test_nearest_slip_of_1825_s_sampling_on_1800_s_grid() -> None:
-    """A clock drifting 25 s per sample against the grid loses one grid point in 73.
+    """A clock drifting 25 s per sample against the grid, with tolerance = half the grid step.
 
     Samples at 10 + 1825 k s (k = 0..72). For grid point m (1800 m s), sample k = m is
     10 + 25 m s away: within 900 s for m <= 35. At m = 36 (64800 s) the neighbours are
-    k = 35 (63885 s, 915 s away) and k = 36 (65710 s, 910 s away): no sample. From m = 37 on,
-    sample k = m - 1 is 1815 - 25 m s away (890 s at m = 37 down to 15 s at m = 72), and
-    m = 73 (131400 s) takes k = 72 (131410 s, 10 s away).
+    k = 35 (63885 s, 915 s away) and k = 36 (65710 s, 910 s away): no sample within 900 s.
+    From m = 37 on, sample k = m - 1 is 1815 - 25 m s away (890 s at m = 37 down to 15 s at
+    m = 72), and m = 73 (131400 s) takes k = 72 (131410 s, 10 s away).
     """
     k = np.arange(73)
     data = samples((10 + 1825 * k).tolist(), k.astype(float).tolist())
 
-    result = NearestWithinTolerance().align(data, grid(73 * 1800))
+    half_step = NearestWithinTolerance(NearestParams(tolerance_s=900.0))
+    result = half_step.align(data, grid(73 * 1800))
 
     assert np.flatnonzero(~result.valid).tolist() == [36]
     expected = np.concatenate([np.arange(36), [NAN], np.arange(36, 73)])
@@ -136,6 +147,24 @@ def test_nearest_slip_of_1825_s_sampling_on_1800_s_grid() -> None:
     assert np.flatnonzero(~filled.valid).tolist() == [0]
     # m = 36 lies between k = 35 (63885 s) and k = 36 (65710 s): 35 + 915 / 1825.
     assert filled.grid_values[36] == pytest.approx(35 + 915 / 1825)
+
+
+def test_nearest_default_tolerance_covers_the_slip() -> None:
+    """Same samples with the default tolerance 932.5 s: m = 36 takes k = 36 (910 s away).
+
+    Sample k = 36 then serves both m = 36 and m = 37 (890 s away), and no grid point is empty.
+    """
+    k = np.arange(73)
+    data = samples((10 + 1825 * k).tolist(), k.astype(float).tolist())
+
+    result = NearestWithinTolerance().align(data, grid(73 * 1800))
+
+    assert result.valid.all()
+    expected = np.concatenate([np.arange(37), np.arange(36, 73)])
+    np.testing.assert_array_equal(result.grid_values, expected)
+    assert result.offset_s is not None
+    assert result.offset_s[36] == 910.0
+    assert result.offset_s[37] == 890.0
 
 
 def test_linear_default_max_gap() -> None:
@@ -255,6 +284,17 @@ def test_strategy_from_raw_parameters() -> None:
 def test_invalid_raw_parameters_fail(raw: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
         LinearInterpolation.from_params(raw)
+
+
+def test_params_model_must_match_the_generic_argument() -> None:
+    with pytest.raises(TypeError, match=r"declared as AlignmentStrategy\[NearestParams\]"):
+
+        class Mismatched(AlignmentStrategy[NearestParams]):
+            strategy_id: ClassVar[str] = "mismatched"
+            params_model: ClassVar[type[StrategyParams]] = LinearParams
+
+            def align(self, samples: SampleSet, grid: TimeGrid) -> AlignedValues:
+                raise NotImplementedError
 
 
 def test_strategies_are_registered() -> None:

@@ -7,19 +7,32 @@ workpackage (WP-1.7); until then it is used directly, e.g. by
 
 from __future__ import annotations
 
-from typing import Self
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     ValidationError,
+    field_serializer,
     field_validator,
     model_validator,
 )
 
-from sivin.alignment.grid import DEFAULT_GRID_STEP_S, OverlapSpan, UnionSpan, span_registry
+from sivin.alignment.grid import (
+    DEFAULT_GRID_STEP_S,
+    OverlapSpan,
+    UnionSpan,
+    span_registry,
+    validate_step_s,
+)
 from sivin.alignment.strategies import NearestWithinTolerance, strategy_registry
+
+
+def _empty_params() -> Mapping[str, Any]:
+    return MappingProxyType({})
 
 
 class AlignmentConfig(BaseModel):
@@ -38,19 +51,23 @@ class AlignmentConfig(BaseModel):
             "or 'linear_interpolation'."
         ),
     )
-    params: dict[str, float | None] = Field(
-        default_factory=dict,
+    params: Mapping[str, Any] = Field(
+        default_factory=_empty_params,
         description=(
-            "Parameters of the strategy, all in seconds: 'tolerance_s' for "
-            "nearest_within_tolerance (default half the grid step), 'max_gap_s' for "
-            "linear_interpolation (default 2737.5 s). Empty = defaults."
+            "Parameters of the strategy (read-only mapping), validated by the strategy's own "
+            "model; units in the key names. nearest_within_tolerance: 'tolerance_s' (explicit "
+            "override), 'expected_interval_s' (default 1825 s), 'margin_s' (default 20 s); "
+            "linear_interpolation: 'max_gap_s' (default 2737.5 s). Empty = defaults."
         ),
     )
     grid_step_s: float = Field(
         DEFAULT_GRID_STEP_S,
-        gt=0,
+        ge=1,
         allow_inf_nan=False,
-        description="Grid step in seconds; default 1800 s (30 min, MIGRATION_PLAN §2.7).",
+        description=(
+            "Grid step in seconds (at least 1 s, whole nanoseconds); default 1800 s "
+            "(30 min, MIGRATION_PLAN §2.7)."
+        ),
     )
     span: str = Field(
         UnionSpan.rule_id,
@@ -59,6 +76,20 @@ class AlignmentConfig(BaseModel):
             f"data) or '{OverlapSpan.rule_id}' (every sensor with data has data)."
         ),
     )
+
+    @field_validator("params")
+    @classmethod
+    def _read_only_params(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("params")
+    def _plain_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
+
+    @field_validator("grid_step_s")
+    @classmethod
+    def _valid_step(cls, value: float) -> float:
+        return validate_step_s(value)
 
     @field_validator("strategy")
     @classmethod

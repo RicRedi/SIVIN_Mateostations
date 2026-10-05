@@ -128,6 +128,21 @@ def test_config_rejects_invalid_values(raw: dict[str, object], message: str) -> 
         AlignmentConfig.model_validate(raw)
 
 
+def test_config_params_are_read_only_and_serialisable() -> None:
+    config = AlignmentConfig(params={"tolerance_s": 600.0})
+
+    with pytest.raises(TypeError):
+        config.params["tolerance_s"] = 1.0  # type: ignore[index]
+    assert config.model_dump()["params"] == {"tolerance_s": 600.0}
+    assert '"params":{"tolerance_s":600.0}' in config.model_dump_json()
+    assert AlignmentConfig.model_validate(config.model_dump()) == config
+
+
+def test_config_rejects_step_that_is_not_whole_nanoseconds() -> None:
+    with pytest.raises(ValidationError, match="whole number of nanoseconds"):
+        AlignmentConfig(grid_step_s=1.0000000001)
+
+
 def test_config_is_frozen() -> None:
     config = AlignmentConfig()
 

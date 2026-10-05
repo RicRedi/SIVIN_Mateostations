@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import itertools
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from sivin.alignment.strategies import AlignedValues
@@ -202,57 +203,84 @@ class AlignedPanel:
         complete = self._valid[name].all(axis=1)
         return values.loc[complete].copy()
 
-    def pairwise_differences(self, name: str) -> pd.DataFrame:
-        """Return ``A - B`` for every pair of sensors at every grid point where both are valid.
+    def pairwise_differences(
+        self,
+        name: str,
+        pairs: Iterable[tuple[SensorId | str, SensorId | str]] | None = None,
+    ) -> pd.DataFrame:
+        """Return ``A - B`` for pairs of sensors at every grid point where both are valid.
 
-        Pairs follow the column order: for sensors ``s1, s2, s3`` the pairs are
-        ``(s1, s2), (s1, s3), (s2, s3)``.
+        By default every pair in column order: for sensors ``s1, s2, s3`` the pairs are
+        ``(s1, s2), (s1, s3), (s2, s3)``. The result has one row per pair and valid grid
+        point, about 18 bytes each (8 time, 8 difference, 2 x 1 sensor code for fewer than 128
+        sensors): a year of 30 min data for 30 sensors (435 pairs) is about 7.6 M rows,
+        ~140 MB. Pass ``pairs`` to request only the pairs needed, e.g. neighbours.
 
         Parameters
         ----------
         name : str
             Variable name.
+        pairs : iterable of (SensorId or str, SensorId or str), optional
+            Ordered pairs ``(A, B)`` to compute, in the given order; all pairs when omitted.
 
         Returns
         -------
         pandas.DataFrame
             Long format with columns ``timestamp_utc`` (UTC), ``sensor_a``, ``sensor_b``
-            (strings) and ``delta_<name>`` (difference in the unit of the variable), ordered by
-            pair and then by time; empty for fewer than two sensors.
+            (categorical, categories = all sensor ids of the panel) and ``delta_<name>``
+            (difference in the unit of the variable), ordered by pair and then by time.
+            Empty for fewer than two sensors.
 
         Raises
         ------
         KeyError
-            If the variable was not aligned.
+            If the variable was not aligned or a pair names a sensor not in the panel.
+        ValueError
+            If a pair names the same sensor twice.
         """
         values = self._table(self._values, name).to_numpy()
         valid = self._valid[name].to_numpy()
-        labels = [str(sensor) for sensor in self._sensors]
-        parts: list[pd.DataFrame] = [self._empty_differences(name)]
-        for i, j in itertools.combinations(range(len(labels)), 2):
-            both = valid[:, i] & valid[:, j]
-            n_rows = int(both.sum())
-            parts.append(
-                pd.DataFrame(
-                    {
-                        str(Column.TIMESTAMP): self._times[both],
-                        SENSOR_A: pd.array([labels[i]] * n_rows, dtype="str"),
-                        SENSOR_B: pd.array([labels[j]] * n_rows, dtype="str"),
-                        DELTA_PREFIX + name: values[both, i] - values[both, j],
-                    }
-                )
-            )
-        return pd.concat(parts, ignore_index=True)
-
-    def _empty_differences(self, name: str) -> pd.DataFrame:
+        index_pairs = self._pair_indices(pairs)
+        code_dtype = np.min_scalar_type(len(self._sensors))
+        rows: list[npt.NDArray[np.intp]] = [np.array([], dtype=np.intp)]
+        codes_a: list[npt.NDArray[np.integer]] = [np.array([], dtype=code_dtype)]
+        codes_b: list[npt.NDArray[np.integer]] = [np.array([], dtype=code_dtype)]
+        deltas: list[npt.NDArray[np.float64]] = [np.array([], dtype=np.float64)]
+        for i, j in index_pairs:
+            both = np.flatnonzero(valid[:, i] & valid[:, j])
+            rows.append(both)
+            codes_a.append(np.full(len(both), i, dtype=code_dtype))
+            codes_b.append(np.full(len(both), j, dtype=code_dtype))
+            deltas.append(values[both, i] - values[both, j])
+        categories = pd.Index([str(sensor) for sensor in self._sensors], dtype="str")
         return pd.DataFrame(
             {
-                str(Column.TIMESTAMP): pd.DatetimeIndex([], dtype=TIMESTAMP_DTYPE),
-                SENSOR_A: pd.array([], dtype="str"),
-                SENSOR_B: pd.array([], dtype="str"),
-                DELTA_PREFIX + name: np.array([], dtype=np.float64),
+                str(Column.TIMESTAMP): self._times[np.concatenate(rows)],
+                SENSOR_A: pd.Categorical.from_codes(np.concatenate(codes_a), categories),
+                SENSOR_B: pd.Categorical.from_codes(np.concatenate(codes_b), categories),
+                DELTA_PREFIX + name: np.concatenate(deltas),
             }
         )
+
+    def _pair_indices(
+        self, pairs: Iterable[tuple[SensorId | str, SensorId | str]] | None
+    ) -> list[tuple[int, int]]:
+        if pairs is None:
+            return list(itertools.combinations(range(len(self._sensors)), 2))
+        positions = {str(sensor): k for k, sensor in enumerate(self._sensors)}
+        result: list[tuple[int, int]] = []
+        for first, second in pairs:
+            try:
+                i, j = positions[str(first)], positions[str(second)]
+            except KeyError:
+                raise KeyError(
+                    f"Pair ({first}, {second}) names a sensor not in the panel; "
+                    f"sensors: {list(positions)}."
+                ) from None
+            if i == j:
+                raise ValueError(f"Pair ({first}, {second}) names the same sensor twice.")
+            result.append((i, j))
+        return result
 
     def _table(self, tables: Mapping[str, pd.DataFrame], name: str) -> pd.DataFrame:
         try:
@@ -283,7 +311,7 @@ class AlignedPanel:
 
     def _frame(
         self,
-        arrays: Sequence[np.typing.NDArray[np.generic] | None],
+        arrays: Sequence[npt.NDArray[np.generic] | None],
         columns: pd.Index,
         dtype: type[np.generic],
     ) -> pd.DataFrame:

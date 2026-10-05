@@ -57,12 +57,22 @@ v(g) = \begin{cases} v_{i^*} & |t_{i^*} - g| \le \tau \\ \text{invalid} & \text{
 
 - Values are measured values, never modified. The offset $|t_{i^*} - g|$ in seconds is kept in
   `AlignedPanel.offsets_s(variable)` for diagnostics.
-- Tolerance $\tau$ (`tolerance_s`) defaults to $\Delta/2$, so every sample reaches the grid point
-  nearest to it. The bound is inclusive: a sample exactly half-way between two grid points
-  serves both.
-- With a 1825 s interval on a 1800 s grid, the sensor's samples slip by 25 s per step; about one
-  grid point in 73 then has no sample within $\Delta/2$ and stays invalid (worked example in
-  `tests/alignment/test_strategies.py::test_nearest_slip_of_1825_s_sampling_on_1800_s_grid`).
+- The tolerance is derived from the sensors' sampling, not from the grid:
+
+  $$\tau = \frac{T}{2} + m$$
+
+  with the expected sampling interval $T$ (`expected_interval_s`, default 1825 s) and a jitter
+  margin $m$ (`margin_s`, default 20 s, [to be tuned]), i.e. 932.5 s. In an uninterrupted record
+  no instant is farther than $T/2$ from a sample, so every grid point gets a value.
+  `tolerance_s` overrides the derived value explicitly. The bound is inclusive.
+- **One sample can serve two neighbouring grid points.** The sensors sample more slowly
+  (1825 s) than the grid (1800 s), so there are about 240 fewer samples than grid points per
+  year; the samples slip by 25 s per step and once every ~73 grid points one sample is the
+  nearest for two of them. With $\tau = \Delta/2 = 900$ s (`tolerance_s: 900`, "never reuse a
+  sample" except exactly half-way) that grid point stays empty instead, at a different time for
+  every sensor: worked examples in `tests/alignment/test_strategies.py`
+  (`test_nearest_slip_of_1825_s_sampling_on_1800_s_grid`,
+  `test_nearest_default_tolerance_covers_the_slip`). The offsets table shows reuse.
 
 ### `linear_interpolation` (`LinearInterpolation`)
 
@@ -79,11 +89,15 @@ $$v(g) = v_l + (v_r - v_l)\,\frac{g - t_l}{t_r - t_l}, \qquad \text{valid only i
 
 Proposed configuration section `alignment` (model `sivin.alignment.AlignmentConfig`; wiring into
 `config/sivin.yaml` is part of WP-1.7). The exclusion mask is `analytics.exclude_mask`.
+`params` is a read-only mapping validated by the chosen strategy's parameter model; the grid
+step must be at least 1 s and a whole number of nanoseconds.
 
 | Key | Default | Unit | Origin |
 |---|---|---|---|
 | `strategy` | `nearest_within_tolerance` | — | project choice |
-| `params.tolerance_s` | half of `grid_step_s` (900 s) | s | project choice: every sample reaches its nearest grid point |
+| `params.tolerance_s` | unset (derived: `expected_interval_s / 2 + margin_s` = 932.5 s) | s | explicit override |
+| `params.expected_interval_s` | 1825 | s | legacy configs, `sampl_freq_basic.py` (same as `time.expected_interval_s`) |
+| `params.margin_s` | 20 | s | project choice [to be tuned on real data]: clock jitter |
 | `params.max_gap_s` | 2737.5 (= 1.5 × 1825) | s | project choice [to be verified on real data]: bridges neighbouring samples with room for jitter, not a missing sample |
 | `grid_step_s` | 1800 | s | MIGRATION_PLAN §2.7 (30 min) |
 | `span` | `union` | — | project choice |
@@ -104,8 +118,14 @@ alignment:
 | `validity(name)` | same shape, `bool` |
 | `offsets_s(name)` | same shape, seconds; `None` for interpolation |
 | `complete_rows(name)` | rows of `variable(name)` where every sensor is valid |
-| `pairwise_differences(name)` | long frame `timestamp_utc, sensor_a, sensor_b, delta_<name>` = A − B where both are valid; pairs in column order |
+| `pairwise_differences(name, pairs=None)` | long frame `timestamp_utc, sensor_a, sensor_b, delta_<name>` = A − B where both are valid; all pairs in column order, or only the ordered `pairs` given; sensor labels categorical |
 | `sensors`, `variables`, `times`, `strategy_id`, `is_empty` | metadata |
+
+**Memory of `pairwise_differences`.** One row per pair and valid grid point, about 18 bytes
+(8 time, 8 difference, 1 + 1 categorical code). All pairs grow as $N(N-1)/2$: a synthetic year
+of 30 sensors gives 7.6 M rows, 137 MB of result (peak ~410 MB while building, 2 s in this
+sandbox); 100 sensors would be about 11 times more. Consumers that need only neighbours (QC)
+should pass `pairs`.
 
 Columns are ordered by sensor id regardless of input order. Any N ≥ 1 works without code
 changes. If no grid can be derived (no usable data, or no overlap) the panel has zero rows.
@@ -114,7 +134,7 @@ changes. If no grid can be derived (no usable data, or no overlap) the panel has
 
 | Task | Strategy | Span | Why |
 |---|---|---|---|
-| Neighbour QC (`NEIGHBOR_OUTLIER`, WP-1.5 follow-up) | `nearest_within_tolerance`, optionally a smaller `tolerance_s` | `overlap` | compares measured values only, never interpolated ones; `offsets_s` shows how far apart in time the compared samples are; `pairwise_differences` gives A − B directly |
+| Neighbour QC (`NEIGHBOR_OUTLIER`, WP-1.5 follow-up) | `nearest_within_tolerance`, optionally a smaller `tolerance_s` | `overlap` | compares measured values only, never interpolated ones; `offsets_s` shows how far apart in time the compared samples are; `pairwise_differences(name, pairs=neighbours)` gives A − B directly |
 | Spatial analysis (WP-2.4) | `linear_interpolation` | `overlap` | values represent the same instant; `complete_rows` gives snapshots where all sensors are valid |
 | Comparison charts | `nearest_within_tolerance` (raw values) or `linear_interpolation` (smooth) | `union` | nothing is dropped; invalid cells become gaps |
 
@@ -124,10 +144,10 @@ Daily climate indices do not need alignment: they use each sensor's own `DailyWe
 
 - Linear interpolation in time assumes the variable changes roughly linearly between two samples
   about 30 min apart. Rapid changes (fronts, sunrise on a sensor screen) are smoothed.
-- Nearest-sample values can be up to `tolerance_s` away from the grid instant; at the default
-  that is 15 min. Differences between sensors then include a temporal component, which is why
+- Nearest-sample values can be up to the tolerance away from the grid instant; at the default
+  that is 932.5 s (about 15.5 min). Differences between sensors then include a temporal component, which is why
   the offsets are reported.
-- The defaults of `tolerance_s` and `max_gap_s` are project choices, not taken from literature,
+- The defaults of `margin_s` and `max_gap_s` are project choices, not taken from literature,
   and have not been tuned on real exports (none available to this workpackage).
 - Sample timestamps are taken as given. Clock *errors* (a sensor's clock being wrong in absolute
   terms) cannot be detected or corrected by alignment.

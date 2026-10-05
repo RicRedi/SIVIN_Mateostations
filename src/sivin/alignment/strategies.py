@@ -13,7 +13,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Self, cast
+from typing import Any, ClassVar, Final, Self, cast, get_args, get_origin
 
 import numpy as np
 import numpy.typing as npt
@@ -39,6 +39,15 @@ sample (which makes a gap of about 2 x 1825 s).
 
 DEFAULT_MAX_GAP_S: Final = MAX_GAP_FACTOR * LEGACY_SAMPLING_INTERVAL_S
 """Default largest distance in seconds between two samples that may be interpolated (2737.5 s)."""
+
+DEFAULT_TOLERANCE_MARGIN_S: Final = 20.0
+"""Default margin in seconds added to half the sampling interval for the nearest tolerance.
+
+Project choice [to be tuned on real data]: in an uninterrupted record sampled every
+``expected_interval_s``, no instant is farther than half the interval from a sample; the margin
+absorbs clock jitter. With the nominal 1825 s it gives 932.5 s, so 1825 s sampling covers every
+point of an 1800 s grid.
+"""
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -174,10 +183,32 @@ class AlignmentStrategy[P: StrategyParams](ABC):
     """Identifier under which the strategy is registered (e.g. in the configuration)."""
 
     params_model: ClassVar[type[StrategyParams]] = StrategyParams
-    """Pydantic model of the strategy's parameters."""
+    """Pydantic model of the strategy's parameters; must be the type argument ``P``."""
 
     provides_offsets: ClassVar[bool] = False
     """Whether :meth:`align` reports the offset of the sample used for every grid point."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Check that :attr:`params_model` matches the generic argument ``P``.
+
+        Raises
+        ------
+        TypeError
+            If the class parametrises :class:`AlignmentStrategy` with a params class that
+            :attr:`params_model` is not a subclass of.
+        """
+        super().__init_subclass__(**kwargs)
+        declared_args = [
+            get_args(base)[0]
+            for base in getattr(cls, "__orig_bases__", ())
+            if get_origin(base) is AlignmentStrategy
+        ]
+        for declared in declared_args:
+            if isinstance(declared, type) and not issubclass(cls.params_model, declared):
+                raise TypeError(
+                    f"{cls.__name__}.params_model is {cls.params_model.__name__}, but the class "
+                    f"is declared as AlignmentStrategy[{declared.__name__}]."
+                )
 
     def __init__(self, params: P | None = None) -> None:
         if params is None:
@@ -245,9 +276,27 @@ class NearestParams(StrategyParams):
         gt=0,
         allow_inf_nan=False,
         description=(
-            "Largest distance in seconds (inclusive) between a grid point and the sample "
-            "assigned to it. Default (null): half the grid step, so every sample can reach "
-            "the grid point nearest to it."
+            "Explicit override of the largest distance in seconds (inclusive) between a grid "
+            "point and the sample assigned to it. Default (null): expected_interval_s / 2 + "
+            "margin_s."
+        ),
+    )
+    expected_interval_s: float = Field(
+        LEGACY_SAMPLING_INTERVAL_S,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Nominal sampling interval of the sensors in seconds; 1825 s from the legacy "
+            "configs and sampl_freq_basic.py (same as time.expected_interval_s)."
+        ),
+    )
+    margin_s: float = Field(
+        DEFAULT_TOLERANCE_MARGIN_S,
+        ge=0,
+        allow_inf_nan=False,
+        description=(
+            "Margin in seconds added to half the sampling interval for clock jitter; "
+            "default 20 s, project choice [to be tuned on real data]."
         ),
     )
 
@@ -258,36 +307,33 @@ class NearestWithinTolerance(AlignmentStrategy[NearestParams]):
 
     For a grid point :math:`g` and usable sample times :math:`t_i`, the chosen sample is
     :math:`i^* = \arg\min_i |t_i - g|`, ties resolved to the earlier sample; the grid point is
-    valid if :math:`|t_{i^*} - g| \le \tau` with tolerance :math:`\tau` (default: half the grid
-    step). The value is not modified, and the offset :math:`|t_{i^*} - g|` is reported in
-    seconds. With :math:`\tau` equal to half the step, a sample exactly half-way between two
-    grid points is used for both.
+    valid if :math:`|t_{i^*} - g| \le \tau`. The tolerance defaults to
+    :math:`\tau = T/2 + m` with the expected sampling interval :math:`T` and a jitter margin
+    :math:`m` (932.5 s by default), so an uninterrupted record covers every grid point even when
+    it samples more slowly than the grid (1825 s against 1800 s); ``tolerance_s`` overrides it.
+    The value is not modified, and the offset :math:`|t_{i^*} - g|` is reported in seconds.
+    One sample may serve two neighbouring grid points.
 
     Parameters
     ----------
     params : NearestParams, optional
-        ``tolerance_s``; defaults when omitted.
+        ``tolerance_s`` or ``expected_interval_s`` and ``margin_s``; defaults when omitted.
     """
 
     strategy_id: ClassVar[str] = "nearest_within_tolerance"
     params_model: ClassVar[type[StrategyParams]] = NearestParams
     provides_offsets: ClassVar[bool] = True
 
-    def tolerance_s(self, grid: TimeGrid) -> float:
-        """Return the effective tolerance in seconds for ``grid``.
+    @property
+    def tolerance_s(self) -> float:
+        """Effective tolerance in seconds.
 
-        Parameters
-        ----------
-        grid : TimeGrid
-            The target grid; its step sets the default.
-
-        Returns
-        -------
-        float
-            ``tolerance_s`` if configured, else half of ``grid.step_s``.
+        ``params.tolerance_s`` if set, else ``expected_interval_s / 2 + margin_s``.
         """
         configured = self.params.tolerance_s
-        return grid.step_s / 2 if configured is None else configured
+        if configured is not None:
+            return configured
+        return self.params.expected_interval_s / 2 + self.params.margin_s
 
     def align(self, samples: SampleSet, grid: TimeGrid) -> AlignedValues:
         """See :meth:`AlignmentStrategy.align`."""
@@ -310,7 +356,7 @@ class NearestWithinTolerance(AlignmentStrategy[NearestParams]):
         take_before = dist_before_ns <= dist_after_ns
         chosen = np.where(take_before, before_idx, after_idx)
         distance_ns = np.minimum(dist_before_ns, dist_after_ns)
-        valid = distance_ns <= round(self.tolerance_s(grid) * NS_PER_S)
+        valid = distance_ns <= round(self.tolerance_s * NS_PER_S)
         values = np.where(valid, samples.sample_values[chosen], np.nan)
         offset_s = np.where(valid, distance_ns / NS_PER_S, np.nan)
         return AlignedValues(values.astype(np.float64), valid, offset_s.astype(np.float64))
