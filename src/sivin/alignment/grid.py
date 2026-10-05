@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_GRID_STEP_S: Final = 1800.0
 """Default grid step in seconds: 30 min, the default named in MIGRATION_PLAN §2.7.
 
-It is the round value closest to the sensors' nominal sampling interval of 1825 s
-(:data:`sivin.core.defaults.LEGACY_SAMPLING_INTERVAL_S`).
+It is the round value closest to the sensors' nominal sampling interval of 1830 s
+(:data:`sivin.core.defaults.DEFAULT_SAMPLING_INTERVAL_S`).
 """
 
 MIN_GRID_STEP_S: Final = 1.0
-"""Smallest accepted grid step in seconds; the sensors sample about every 1825 s, so anything
+"""Smallest accepted grid step in seconds; the sensors sample about every 1830 s, so anything
 finer is a configuration error rather than a use case."""
 
 _NS_PER_S: Final = 1_000_000_000
@@ -285,6 +285,10 @@ def validate_step_s(step_s: float) -> float:
 def usable_span(series: MeasurementSeries, exclude_mask: int) -> DataSpan | None:
     """Return the first and last usable instant of a series.
 
+    A row is usable if it is a complete measurement (temperature and humidity present, the
+    whole-row rule of :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`) and not
+    excluded by ``exclude_mask``.
+
     Parameters
     ----------
     series : MeasurementSeries
@@ -299,8 +303,7 @@ def usable_span(series: MeasurementSeries, exclude_mask: int) -> DataSpan | None
         :meth:`TimeGrid.from_series`).
     """
     frame = series.frame
-    has_value = frame[Column.TEMP].notna() | frame[Column.RH].notna()
-    times = frame.loc[series.valid_mask(exclude_mask) & has_value, Column.TIMESTAMP]
+    times = frame.loc[series.complete_mask(exclude_mask), Column.TIMESTAMP]
     if times.empty:
         return None
     return times.iloc[0], times.iloc[-1]

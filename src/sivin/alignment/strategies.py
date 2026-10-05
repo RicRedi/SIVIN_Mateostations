@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from sivin.alignment.grid import TimeGrid, epoch_ns
 from sivin.alignment.registry import ClassRegistry
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.schema import Column, MeasurementSeries
 
 logger = logging.getLogger(__name__)
@@ -32,20 +32,20 @@ NS_PER_S: Final = 1_000_000_000
 MAX_GAP_FACTOR: Final = 1.5
 """Default ``max_gap_s`` of :class:`LinearInterpolation` as a multiple of the sampling interval.
 
-Project choice [to be verified on real data]: 1.5 x the nominal 1825 s bridges two neighbouring
+Project choice [to be verified on real data]: 1.5 x the nominal 1830 s bridges two neighbouring
 samples of an uninterrupted record, with room for clock jitter and drift, but not a missing
-sample (which makes a gap of about 2 x 1825 s).
+sample (which makes a gap of about 2 x 1830 s).
 """
 
-DEFAULT_MAX_GAP_S: Final = MAX_GAP_FACTOR * LEGACY_SAMPLING_INTERVAL_S
-"""Default largest distance in seconds between two samples that may be interpolated (2737.5 s)."""
+DEFAULT_MAX_GAP_S: Final = MAX_GAP_FACTOR * DEFAULT_SAMPLING_INTERVAL_S
+"""Default largest distance in seconds between two samples that may be interpolated (2745 s)."""
 
 DEFAULT_TOLERANCE_MARGIN_S: Final = 20.0
 """Default margin in seconds added to half the sampling interval for the nearest tolerance.
 
 Project choice [to be tuned on real data]: in an uninterrupted record sampled every
 ``expected_interval_s``, no instant is farther than half the interval from a sample; the margin
-absorbs clock jitter. With the nominal 1825 s it gives 932.5 s, so 1825 s sampling covers every
+absorbs clock jitter. With the nominal 1830 s it gives 935 s, so 1830 s sampling covers every
 point of an 1800 s grid.
 """
 
@@ -97,11 +97,14 @@ class SampleSet:
         Returns
         -------
         SampleSet
-            Samples that are neither excluded nor ``NaN``.
+            Samples of complete rows (temperature **and** humidity present, the whole-row rule
+            of :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`) that are not
+            excluded. The rule is checked on the values, so a row with one variable missing is
+            skipped for both variables even when it carries no ``MISSING`` flag.
         """
         frame = series.frame
         values = frame[variable].to_numpy(dtype=np.float64)
-        usable = series.valid_mask(exclude_mask).to_numpy() & ~np.isnan(values)
+        usable = series.complete_mask(exclude_mask).to_numpy()
         times_ns = epoch_ns(frame[Column.TIMESTAMP])
         return cls(times_ns[usable], values[usable])
 
@@ -282,12 +285,13 @@ class NearestParams(StrategyParams):
         ),
     )
     expected_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         allow_inf_nan=False,
         description=(
-            "Nominal sampling interval of the sensors in seconds; 1825 s from the legacy "
-            "configs and sampl_freq_basic.py (same as time.expected_interval_s)."
+            "Nominal sampling interval of the sensors in seconds. Set from "
+            "time.expected_interval_s by the configuration (WP-1.7); default 1830 s, the "
+            "median step of the first real export."
         ),
     )
     margin_s: float = Field(
@@ -309,8 +313,8 @@ class NearestWithinTolerance(AlignmentStrategy[NearestParams]):
     :math:`i^* = \arg\min_i |t_i - g|`, ties resolved to the earlier sample; the grid point is
     valid if :math:`|t_{i^*} - g| \le \tau`. The tolerance defaults to
     :math:`\tau = T/2 + m` with the expected sampling interval :math:`T` and a jitter margin
-    :math:`m` (932.5 s by default), so an uninterrupted record covers every grid point even when
-    it samples more slowly than the grid (1825 s against 1800 s); ``tolerance_s`` overrides it.
+    :math:`m` (935 s by default), so an uninterrupted record covers every grid point even when
+    it samples more slowly than the grid (1830 s against 1800 s); ``tolerance_s`` overrides it.
     The value is not modified, and the offset :math:`|t_{i^*} - g|` is reported in seconds.
     One sample may serve two neighbouring grid points.
 
@@ -371,7 +375,7 @@ class LinearParams(StrategyParams):
         allow_inf_nan=False,
         description=(
             "Largest distance in seconds (inclusive) between the two usable samples that "
-            "enclose a grid point for it to be interpolated. Default 1.5 x 1825 s = 2737.5 s "
+            "enclose a grid point for it to be interpolated. Default 1.5 x 1830 s = 2745 s "
             "(neighbouring samples only); project choice, to be verified on real data."
         ),
     )

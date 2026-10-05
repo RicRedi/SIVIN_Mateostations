@@ -47,9 +47,9 @@ def grid(last_s: float, step_s: float = 1800.0) -> TimeGrid:
 
 
 def test_nearest_default_tolerance_is_half_the_interval_plus_margin() -> None:
-    # 1825 / 2 + 20 = 932.5 s
+    # 1830 / 2 + 20 = 935 s
     assert DEFAULT_TOLERANCE_MARGIN_S == 20.0
-    assert NearestWithinTolerance().tolerance_s == 932.5
+    assert NearestWithinTolerance().tolerance_s == 935.0
     derived = NearestParams(expected_interval_s=1000.0, margin_s=0.0)
     assert NearestWithinTolerance(derived).tolerance_s == 500.0
     override = NearestParams(tolerance_s=60.0, margin_s=500.0)
@@ -59,13 +59,13 @@ def test_nearest_default_tolerance_is_half_the_interval_plus_margin() -> None:
 def test_nearest_tolerance_boundary_is_inclusive() -> None:
     strategy = NearestWithinTolerance()
 
-    at_limit = strategy.align(samples([932.5], [1.0]), grid(0))
-    beyond = strategy.align(samples([932.500000001], [1.0]), grid(0))
+    at_limit = strategy.align(samples([935.0], [1.0]), grid(0))
+    beyond = strategy.align(samples([935.000000001], [1.0]), grid(0))
 
     assert at_limit.valid.tolist() == [True]
     assert at_limit.grid_values.tolist() == [1.0]
     assert at_limit.offset_s is not None
-    assert at_limit.offset_s.tolist() == [932.5]
+    assert at_limit.offset_s.tolist() == [935.0]
     assert beyond.valid.tolist() == [False]
     assert np.isnan(beyond.grid_values).all()
     assert beyond.offset_s is not None
@@ -107,7 +107,7 @@ def test_nearest_half_way_sample_serves_both_neighbours() -> None:
 def test_nearest_grid_outside_samples() -> None:
     result = NearestWithinTolerance().align(samples([3600.0], [5.0]), grid(7200))
 
-    # Grid points 0, 1800, 3600, 5400, 7200 s: only 3600 s is within 932.5 s of the sample.
+    # Grid points 0, 1800, 3600, 5400, 7200 s: only 3600 s is within 935 s of the sample.
     assert result.valid.tolist() == [False, False, True, False, False]
 
 
@@ -150,7 +150,7 @@ def test_nearest_slip_of_1825_s_sampling_on_1800_s_grid() -> None:
 
 
 def test_nearest_default_tolerance_covers_the_slip() -> None:
-    """Same samples with the default tolerance 932.5 s: m = 36 takes k = 36 (910 s away).
+    """Same samples with the default tolerance 935 s: m = 36 takes k = 36 (910 s away).
 
     Sample k = 36 then serves both m = 36 and m = 37 (890 s away), and no grid point is empty.
     """
@@ -168,8 +168,9 @@ def test_nearest_default_tolerance_covers_the_slip() -> None:
 
 
 def test_linear_default_max_gap() -> None:
-    assert DEFAULT_MAX_GAP_S == 2737.5
-    assert LinearInterpolation().max_gap_s == 2737.5
+    # 1.5 x 1830 s
+    assert DEFAULT_MAX_GAP_S == 2745.0
+    assert LinearInterpolation().max_gap_s == 2745.0
 
 
 def test_linear_interpolates_by_time_weight() -> None:
@@ -199,7 +200,7 @@ def test_linear_gap_longer_than_max_gap_stays_empty() -> None:
     default = LinearInterpolation().align(data, grid(3600))
     wide = LinearInterpolation(LinearParams(max_gap_s=3600.0)).align(data, grid(3600))
 
-    # 3600 s > 2737.5 s: the middle point stays empty, the end points are exact samples.
+    # 3600 s > 2745 s: the middle point stays empty, the end points are exact samples.
     assert default.valid.tolist() == [True, False, True]
     assert np.isnan(default.grid_values[1])
     # A gap equal to max_gap_s is still bridged: midpoint value 15.
@@ -227,7 +228,7 @@ def test_linear_single_sample_only_fills_its_own_grid_point() -> None:
     assert result.valid.tolist() == [False, True, False]
 
 
-def test_sample_set_skips_excluded_and_nan_samples() -> None:
+def test_sample_set_skips_excluded_samples_and_unflagged_half_rows() -> None:
     series = MeasurementSeries.from_records(
         SensorId("11111111"),
         [at(0), at(100), at(200), at(300)],
@@ -241,12 +242,15 @@ def test_sample_set_skips_excluded_and_nan_samples() -> None:
     rh = SampleSet.from_series(series, "rh_pct", mask)
     unmasked = SampleSet.from_series(series, "temp_c", 0)
 
-    # SPIKE is excluded by default, STEP is informative only.
-    assert temp.sample_values.tolist() == [5.0, 6.0]
-    assert (temp.times_ns - T0_NS).tolist() == [200 * NS, 300 * NS]
-    assert rh.sample_values.tolist() == [50.0, 60.0]
-    assert unmasked.sample_values.tolist() == [99.0, 5.0, 6.0]
-    assert len(temp) == 2
+    # SPIKE is excluded by default, STEP is informative only. The rows at 100 s and 300 s
+    # miss one variable without a MISSING flag (qc = 0): under the whole-row rule they are
+    # invalid for both variables.
+    assert temp.sample_values.tolist() == [5.0]
+    assert (temp.times_ns - T0_NS).tolist() == [200 * NS]
+    assert rh.sample_values.tolist() == [60.0]
+    assert (rh.times_ns - T0_NS).tolist() == [200 * NS]
+    assert unmasked.sample_values.tolist() == [99.0, 5.0]
+    assert len(temp) == 1
 
 
 def test_sample_set_validation() -> None:

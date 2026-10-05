@@ -66,7 +66,7 @@ configured through `classes`.
 
 ## Assumptions and limitations
 
-- In-canopy sensors, ~1825 s sampling; $(T_{max}+T_{min})/2$ from samples is close to but not
+- In-canopy sensors, ~1830 s sampling; $(T_{max}+T_{min})/2$ from samples is close to but not
   identical with screen-station values.
 - Missing days in a part of the season bias the mean towards the other part (e.g. missing July
   days lower GST); check `coverage` and `details["n_missing_days"]` (incomplete days of the

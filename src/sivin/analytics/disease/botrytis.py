@@ -250,9 +250,11 @@ class InfectionEvent:
 class WetnessPeriodDetector:
     """Estimate wetness periods as runs of samples with high relative humidity.
 
-    A sample is wet if its humidity is valid (present, not excluded by QC) and at least
-    ``wet_rh_threshold_pct``. Dry spells up to ``max_dry_interruption_h`` are bridged; invalid
-    samples and data gaps end a period.
+    A sample is wet if it is a valid measurement (temperature **and** humidity present, not
+    excluded by QC; the whole-row rule of
+    :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`, checked on the values) and its
+    humidity is at least ``wet_rh_threshold_pct``. Dry spells up to ``max_dry_interruption_h``
+    are bridged; invalid samples (including a humidity-only row) and data gaps end a period.
 
     Parameters
     ----------
@@ -287,11 +289,10 @@ class WetnessPeriodDetector:
         """
         frame = series.frame
         timing = self._params.sampling.durations().measure(frame[Column.TIMESTAMP])
-        usable = series.valid_mask(exclude_mask).to_numpy()
+        usable = series.complete_mask(exclude_mask).to_numpy()
         rh_pct = frame[Column.RH].to_numpy(dtype=np.float64)
-        rh_valid = usable & ~np.isnan(rh_pct)
-        wet = rh_valid & (rh_pct >= self._params.wet_rh_threshold_pct)
-        runs = self._runs.find(timing, wet, rh_valid)
+        wet = usable & (rh_pct >= self._params.wet_rh_threshold_pct)
+        runs = self._runs.find(timing, wet, usable)
         local_dates = LocalTimeConverter(timezone).local_dates(frame[Column.TIMESTAMP])
         periods = [self._period(run, frame, timing, usable, local_dates) for run in runs]
         return [p for p in periods if p.duration_h >= self._params.min_event_duration_h]
@@ -307,11 +308,9 @@ class WetnessPeriodDetector:
         span = slice(run.first, run.last + 1)
         temp_c = frame[Column.TEMP].to_numpy(dtype=np.float64)[span]
         weights_s = timing.durations_s[span]
-        has_temp = usable[span] & ~np.isnan(temp_c)
+        valid = usable[span]
         mean_temp_c = (
-            float(np.average(temp_c[has_temp], weights=weights_s[has_temp]))
-            if has_temp.any()
-            else None
+            float(np.average(temp_c[valid], weights=weights_s[valid])) if valid.any() else None
         )
         start_utc = frame[Column.TIMESTAMP].iloc[run.first]
         last_utc = frame[Column.TIMESTAMP].iloc[run.last]

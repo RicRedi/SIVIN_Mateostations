@@ -112,7 +112,7 @@ warm" / "hot"); the labels `warm` / `very_warm` are kept.
 
 ## Assumptions and limitations
 
-- Only temperature is used; ~1825 s sampling slightly underestimates $T_{max}$.
+- Only temperature is used; ~1830 s sampling slightly underestimates $T_{max}$.
 - In-canopy sensors measure vineyard microclimate, not the screen temperature of the stations
   the classes were derived from.
 - Incomplete days are skipped, which lowers the sum; check `n_missing_days`.

@@ -9,6 +9,11 @@ The measurement store keeps the canonical measurements of every sensor as plain 
 <root>/
   raw/<sensor_id>/<YYYY>.csv     one file per sensor and UTC calendar year
   runs/<YYYY-MM-DD>.jsonl        run log, one file per UTC date of the run start
+  derived/events/<sensor_id>.json   QC events per sensor (sivin qc / run, WP-1.7)
+  derived/indices/<season>.json     index results per season (sivin indices / run, WP-1.7)
+  quarantine/<file>                 rejected exports (sivin ingest, WP-1.7)
+  quarantine/<file>.report.json     their validation report
+  downloads/                        exports saved by sivin fetch (ingest.portal.download_dir)
 ```
 
 - `<root>` is `paths.data_dir` of the configuration (`data/`). In production it is the `data/`
@@ -21,7 +26,10 @@ The measurement store keeps the canonical measurements of every sensor as plain 
   local time on 1 January (23:30 UTC on 31 December in winter) is stored in the previous
   year's file. `MeasurementStore.read` hides this: it reads every file that overlaps the
   requested interval.
-- `data/derived/events/` of §2.5 is written by later workpackages, not by the store.
+- `derived/`, `quarantine/` and `downloads/` are written by the application services
+  (`sivin.app`), not by the store; their locations are `paths.derived_dir`,
+  `paths.quarantine_dir` and `ingest.portal.download_dir` ([configuration.md](configuration.md)).
+  See [Derived data](#derived-data-wp-17).
 - Hidden files `.<name>.*.tmp` are leftovers of an interrupted write (see *Atomic writes*);
   the store ignores them and they can be deleted.
 
@@ -49,7 +57,7 @@ the same bytes (git sees no change when nothing changed).
 | `precip_mm` | precipitation in the interval since the previous sample (export column `Srážky (mm)`) | mm | decimal number, see below | empty field |
 | `precip_total_mm` | the device's cumulative precipitation counter (`Celkové srážky (mm)`) | mm | decimal number, see below | empty field |
 | `battery_v` | battery voltage (`Nabití baterie (V)`) | V | decimal number, see below | empty field |
-| `source` | name of the last export that contributed a value to the row | — | text | empty field = unknown |
+| `source` | short identifier of the last export that contributed a value to the row (see [Source identifiers](#source-identifiers-wp-17)) | — | text | empty field = unknown |
 
 **Numbers.** `.` is the decimal point, positional notation (never an exponent), at least one
 digit after the point, and otherwise the **shortest** digit string that reads back as exactly
@@ -78,9 +86,10 @@ threshold never requires rewriting the raw data, and the raw files hold only wha
 measured. `MANUAL_EXCLUDE` cannot be recomputed from raw values: it is an owner decision. It
 will come from a human-edited exclusions file that the QC pipeline applies at build time (a
 later workpackage); it is never stored in the raw files. If a series passed to `append`
-carries any QC bits, the store logs a **warning** with the number of rows per flag, so a
-caller that set flags (in particular `MANUAL_EXCLUDE`) by mistake notices that they are not
-kept.
+carries any QC bits, the store logs the number of rows per flag: at DEBUG when only the flags
+every parser sets are present (`MISSING`, `TIMESTAMP_SUSPECT`; routine, QC recomputes them),
+at INFO when any other flag is set, so a caller that set flags (in particular
+`MANUAL_EXCLUDE`) by mistake notices that they are not kept (WP-1.7 review).
 
 ### Format change in WP-1.9 (precipitation and battery)
 
@@ -141,7 +150,7 @@ taken from the import (filled or replaced); then it gets the incoming `source`. 
 downloaded again under another file name are identical rows and change nothing.
 
 Conflict policies (extension point `ConflictPolicy`, registry `conflict_policy_registry`,
-configuration key proposed as `storage.conflict_policy`):
+configuration key `storage.conflict_policy`):
 
 - `prefer_newest` (**default**, `PreferNewest`): the value **appended last** wins. "Newest"
   means import order, not the age of the export: the pipeline appends exports in download
@@ -155,7 +164,7 @@ configuration key proposed as `storage.conflict_policy`):
 Every conflict is logged as a warning with both values and sources, and recorded as a
 `ConflictDecision` (sensor, timestamp, column, stored and incoming value and source, kept
 `incoming`/`stored`, policy). `AppendResult.conflicts` holds the first
-`max_recorded_conflicts` decisions of an append (configuration key proposed as
+`max_recorded_conflicts` decisions of an append (configuration key
 `storage.max_recorded_conflicts`, default 100), in time order. The pipeline copies them into
 `RunRecord.conflicts`, so the `data` branch records which stored values were replaced. Beyond
 the cap, conflicts are only counted (`conflicting_values`) and summarised in one log line per
@@ -187,12 +196,15 @@ guarantees.
 ## Run log
 
 `RunLog` appends one `RunRecord` per pipeline run as one JSON line to
-`runs/<YYYY-MM-DD>.jsonl`, the UTC date of the run start. Fields: `started_at`,
-`finished_at` (ISO 8601 UTC with `Z`), `files` (processed export files), `appends` (per sensor:
+`runs/<YYYY-MM-DD>.jsonl`, the UTC date of the run start. `sivin ingest` and `sivin run`
+write one record each (WP-1.7). Fields: `started_at`,
+`finished_at` (ISO 8601 UTC with `Z`), `files` (the **full names** of the processed export
+files; the rows keep only the short identifier, see below), `appends` (per sensor:
 `new_rows`, `identical_skipped`, `filled_values`, `ignored_missing_values`,
 `conflicting_values`, `replaced_values`), `validation_issues`
-(number of input-validation findings per category, filled from the WP-1.2 report),
-`failures` (one message per failure) and `conflicts` (the recorded conflict decisions, see
+(number of input-validation findings per `<severity>:<rule>`, e.g. `error:required-columns`,
+over all files of the run), `failures` (one message per failure: rejected file, device not
+downloaded, sensor or index failed) and `conflicts` (the recorded conflict decisions, see
 above). Keys are sorted. Lines are only ever appended.
 
 A write interrupted mid-line leaves an incomplete last line. The next append notices that the
@@ -221,13 +233,106 @@ would add (concurrent writers, indexes, transactions over many rows) is not need
 
 ## Growth estimate
 
-At the nominal interval of 1825 s a sensor gives 365 × 86 400 / 1825 = 17 280 samples per year.
-A line without a source name (`2026-01-01T00:00:00Z,12.3,81.5,`) has 32 bytes, so about
-0.55 MB per sensor and year; this is the 0.5 MB of MIGRATION_PLAN §2.5. With a full export file
-name in `source` (e.g. `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`, 84-byte line)
-it is about 1.45 MB per sensor and year. Tens of sensors therefore mean tens of MB per year,
-well within what git and the pipeline handle. Each changed year file is a new git blob; git
-stores successive versions as compressed deltas when it packs the repository.
+At the nominal interval of 1830 s (`time.expected_interval_s`) a sensor gives
+365 × 86 400 / 1830 ≈ 17 230 samples per year. A line with all values and a short source
+identifier (`2026-01-01T00:00:00Z,12.3,81.5,0.0,326.4,3.6,20260301T223842`, 61 bytes with
+the line break) gives about 1.05 MB per sensor and year; without precipitation and battery
+values (an export without those columns, 50 bytes) it is about 0.86 MB. Before WP-1.7 the full export file name was stored
+(e.g. `MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`, about 1.45 MB per sensor-year
+even without the auxiliary values). Tens of sensors therefore mean tens of MB per year, well
+within what git and the pipeline handle. Each changed year file is a new git blob; git stores
+successive versions as compressed deltas when it packs the repository.
+
+## Source identifiers (WP-1.7)
+
+Owner decision of 2026-10-05: the `source` column holds a **short identifier of the export**,
+not its file name. The full file name of every processed export is recorded in the run log
+(`RunRecord.files`, `data/runs/<YYYY-MM-DD>.jsonl`). `ExportSourceIds`
+(`sivin/storage/source.py`) derives the identifier:
+
+| File name | Identifier |
+|---|---|
+| ends with the export time `_YYYYMMDD_HHMMSS` (optionally ` (n)`) before the extension, e.g. `MeteoData_8615620_77799986_VUT_20260301_223842.csv` | `20260301T223842` |
+| a bare `YYYYMMDD_HHMMSS` | `YYYYMMDDTHHMMSS` |
+| anything else, e.g. `MeteoData_8615620 77678271.xlsx` | `h` + the first 12 hex digits of SHA-256 of the file name without directories, e.g. `he23fdca307a7` |
+| already an identifier, or empty | unchanged |
+
+- `MeasurementStore.append` shortens the sources of the incoming series before merging, so the
+  conflict records (`ConflictDecision`, run log) name identifiers too.
+- **Backward compatible reading:** files written before WP-1.7 hold full file names. The
+  store shortens them when it reads a partition (`read` and the merge of `append`), so callers
+  always see identifiers. Such a file is not rewritten just for that; it gets identifiers in
+  all rows the next time an append changes its data (the same rule as the WP-1.9 layout change).
+- The export time is the portal's time of the download (local time in the file name), not a
+  measurement time. Two exports of the same sensor in the same second would share an
+  identifier; this does not happen with one download per sensor and run.
+
+## Derived data (WP-1.7)
+
+Written atomically (two-space indented UTF-8 JSON, a final line break). Times are ISO 8601
+UTC with `Z`; `NaN` is written as `null`. **They are updated in place, never lost** (WP-1.7
+review): a restricted run (`--sensor`, `--index`) replaces only what it computed, a failed
+computation keeps the previous result and marks it, and a run without any data writes
+nothing. Every entry carries `status` (`"ok"` / `"failed"`), `computed_at` (time of the last
+**successful** computation; `null` if there never was one) and, when failed, `error`. Because
+`computed_at` is the run time, a successful run rewrites the files it computed.
+
+`error` texts are publishable: paths below the project root are written relative to it
+(`data/raw/77680921/2026.csv: …`) and the portal credentials are replaced by `***` (see
+[cli.md](cli.md#exit-codes), *Logging and secrets*); the same holds for `failures` in the run
+log. **Pruning:** entries of sensors that are neither in the registry nor in the store are
+removed on the next write: their index entries in **every** season file whenever a season
+file is written, their events files (only files named `<8 digits>.json`; other files are left
+alone) after a `sivin qc` / `sivin run` that writes. Entries of indices that are no longer
+registered are removed from every season file the same way. Each pruning is logged (INFO). A
+sensor is retired with `status: "retired"` in the registry, not by deleting it or its data
+([sensors.md](sensors.md#retire-a-sensor)); it keeps its stored data and derived entries.
+
+`derived/events/<sensor_id>.json` — result of the QC pipeline over the stored record
+(`EventsWriter`):
+
+```jsonc
+{ "sensor_id": "77799986", "status": "ok", "computed_at": "2026-10-05T04:00:12Z",
+  "first_t": "2025-07-30T08:22:29Z", "last_t": "2026-03-01T21:27:05Z", "n_samples": 300,
+  "flag_counts": { "PRE_DEPLOYMENT": 300 },      // rows per single QcFlag, zero counts omitted
+  "values_set_aside": 0,                          // precipitation values replaced by NaN
+  "events": [ { "type": "off_site", "t": "2025-07-30T08:00:00Z", "t_end": "2026-03-01T21:30:00Z",
+                "source": "log", "severity": "info", "confidence": null,
+                "detail": "service: …", "origin": "offsite" } ] }
+```
+
+`type` is the `EventKind` (`off_site`, `deployment`, `step`, `gap`, `low_battery`,
+`precip_out_of_range`, …), `t_end` the end of an interval event (`null` for a point event and
+for an off-site period that is still open), `source` `detected` / `registry` / `log`,
+`severity` `info` / `warning`, `origin` the check that reported it. The site export (WP-3.2)
+maps these to the site contract (§2.6); the run summary of warnings is part of WP-4.1. The
+file always describes the sensor's whole stored record (`sivin qc --from/--to` only restrict
+the printed summary). A failed QC keeps the previous content and adds `"status": "failed"`
+and `"error"`.
+
+`derived/indices/<season>.json` — results per sensor and index for the sensors with data in
+the season window, merged into the existing file by `IndicesWriter.update`:
+
+```jsonc
+{ "season": 2026, "data_from": "2025-01-01", "data_to": "2026-12-31",   // local days loaded
+  "sensors": { "77678271": {
+      "huglin": { "value": null, "unit": "°C·d", "coverage": 0.016, "complete": false,
+                  "class": null, "estimated": false, "details": { … },
+                  "status": "ok", "computed_at": "2026-10-05T04:00:12Z" },
+      "gst": { …previous values…, "status": "failed", "error": "…",
+               "computed_at": "2026-10-04T04:00:09Z" } } } }
+```
+
+The values in these examples are illustrative, not measurements. The daily curves
+(`IndexResult.daily`) are not written; WP-3.2 decides how the site shows them.
+
+`quarantine/<file>` and `quarantine/<file>.report.json` — a rejected export (moved by
+default, copied with `ingest.quarantine_mode: copy`) and `{"file", "source_path", "accepted":
+false, "issues": [{"rule", "severity", "message", "row", "table"}]}`. If the name is already
+taken, the new file is stored as `<stem>_<YYYYMMDDTHHMMSSZ><suffix>` (UTC time of
+quarantining, then `_2`, `_3`, …); nothing is overwritten. `source_path` is relative to the
+project root (`data/downloads/…`); a file from outside the project is recorded by its name
+only, so no local directory ends up in published data.
 
 ## Migration path to Parquet
 

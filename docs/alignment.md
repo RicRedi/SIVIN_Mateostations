@@ -6,12 +6,13 @@ different sensors"). Matching an export file to its sensor is the other meaning 
 
 ## Why alignment is needed
 
-The sensors sample about every 1825 s (30 min 25 s, the value in the legacy configurations and
-`sampl_freq_basic.py`). Their clocks are not synchronised and not stable:
+The sensors sample about every 1830 s (30 min 30 s, the median step of the first real export,
+MIGRATION_PLAN §0.6.1; the legacy configurations estimated 1825 s). Their clocks are not
+synchronised and not stable:
 
 - every sensor starts at its own instant, so its samples are offset from the others';
 - the interval is not exactly 30 min, so the samples drift against wall-clock half hours
-  (25 s per sample for a 1825 s interval) and against each other when the intervals differ;
+  (30 s per sample for a 1830 s interval) and against each other when the intervals differ;
 - samples are missing, flagged by quality control, or `NaN`.
 
 Timestamps of two sensors therefore practically never coincide, and a comparison "sensor A vs
@@ -35,8 +36,10 @@ span is chosen by a registered `SpanRule`:
 | `union` (default) | from the earliest first to the latest last usable sample of any sensor | outwards: floor of start, ceiling of end |
 | `overlap` | from the latest first to the earliest last usable sample (sensors with data only) | inwards: ceiling of start, floor of end; no grid if empty |
 
-A sample is *usable* if its `qc` flags do not intersect the exclusion mask and the value is not
-`NaN`. The grid span uses rows where at least one of `temp_c`, `rh_pct` is usable.
+A sample is *usable* if its row is a complete measurement (both `temp_c` and `rh_pct` present,
+the whole-row rule of `MeasurementSeries.complete_mask`, owner decision 2026-10-05) and its `qc`
+flags do not intersect the exclusion mask. The rule is checked on the values, so it also holds
+for store data that carry no `MISSING` flag yet (WP-1.7). The grid span uses the usable rows.
 
 All times are UTC (`datetime64[ns, UTC]`). Daylight-saving transitions of Europe/Prague therefore
 play no role: a sensor sampling every 30 min across a transition is a regular UTC series, and the
@@ -44,9 +47,10 @@ grid has neither a missing nor a repeated hour (tested for both 2026 transitions
 
 ## Strategies
 
-Every variable of every sensor is aligned independently, on its usable samples only: excluded
-and `NaN` samples are never paired, and a sample whose humidity is `NaN` still contributes its
-temperature. Strategies are vectorised (`numpy.searchsorted`), with no Python loop over samples.
+Every variable of every sensor is aligned separately, on the usable rows only: excluded rows and
+rows with a missing variable are never paired. Under the whole-row rule a row whose humidity is
+`NaN` contributes no temperature either (before WP-1.7 it did, unless it carried `MISSING`).
+Strategies are vectorised (`numpy.searchsorted`), with no Python loop over samples.
 
 ### `nearest_within_tolerance` (`NearestWithinTolerance`)
 
@@ -61,14 +65,16 @@ v(g) = \begin{cases} v_{i^*} & |t_{i^*} - g| \le \tau \\ \text{invalid} & \text{
 
   $$\tau = \frac{T}{2} + m$$
 
-  with the expected sampling interval $T$ (`expected_interval_s`, default 1825 s) and a jitter
-  margin $m$ (`margin_s`, default 20 s, [to be tuned]), i.e. 932.5 s. In an uninterrupted record
+  with the expected sampling interval $T$ (`expected_interval_s`, always set from
+  `time.expected_interval_s`, 1830 s) and a jitter margin $m$ (`margin_s`, default 20 s,
+  [to be tuned]), i.e. 935 s. In an uninterrupted record
   no instant is farther than $T/2$ from a sample, so every grid point gets a value.
   `tolerance_s` overrides the derived value explicitly. The bound is inclusive.
 - **One sample can serve two neighbouring grid points.** The sensors sample more slowly
-  (1825 s) than the grid (1800 s), so there are about 240 fewer samples than grid points per
-  year; the samples slip by 25 s per step and once every ~73 grid points one sample is the
-  nearest for two of them. With $\tau = \Delta/2 = 900$ s (`tolerance_s: 900`, "never reuse a
+  (1830 s) than the grid (1800 s), so there are about 290 fewer samples than grid points per
+  year; the samples slip by 30 s per step and once every ~60 grid points one sample is the
+  nearest for two of them. The worked examples below use a synthetic 1825 s record (25 s slip,
+  every ~73 grid points); the mechanism is the same. With $\tau = \Delta/2 = 900$ s (`tolerance_s: 900`, "never reuse a
   sample" except exactly half-way) that grid point stays empty instead, at a different time for
   every sensor: worked examples in `tests/alignment/test_strategies.py`
   (`test_nearest_slip_of_1825_s_sampling_on_1800_s_grid`,
@@ -87,25 +93,25 @@ $$v(g) = v_l + (v_r - v_l)\,\frac{g - t_l}{t_r - t_l}, \qquad \text{valid only i
 
 ## Parameters
 
-Proposed configuration section `alignment` (model `sivin.alignment.AlignmentConfig`; wiring into
-`config/sivin.yaml` is part of WP-1.7). The exclusion mask is `analytics.exclude_mask`.
+Configuration section `alignment` of `config/sivin.yaml` (model
+`sivin.alignment.AlignmentConfig`, wired by WP-1.7; see [configuration.md](configuration.md)). The exclusion mask is `analytics.exclude_mask`.
 `params` is a read-only mapping validated by the chosen strategy's parameter model; the grid
 step must be at least 1 s and a whole number of nanoseconds.
 
 | Key | Default | Unit | Origin |
 |---|---|---|---|
 | `strategy` | `nearest_within_tolerance` | — | project choice |
-| `params.tolerance_s` | unset (derived: `expected_interval_s / 2 + margin_s` = 932.5 s) | s | explicit override |
-| `params.expected_interval_s` | 1825 | s | legacy configs, `sampl_freq_basic.py` (same as `time.expected_interval_s`) |
+| `params.tolerance_s` | unset (derived: `expected_interval_s / 2 + margin_s` = 935 s) | s | explicit override |
+| `params.expected_interval_s` | 1830 | s | always set from `time.expected_interval_s` (WP-1.7); an explicit different value is a configuration error |
 | `params.margin_s` | 20 | s | project choice [to be tuned on real data]: clock jitter |
-| `params.max_gap_s` | 2737.5 (= 1.5 × 1825) | s | project choice [to be verified on real data]: bridges neighbouring samples with room for jitter, not a missing sample |
+| `params.max_gap_s` | 2745 (= 1.5 × 1830) | s | project choice [to be verified on real data]: bridges neighbouring samples with room for jitter, not a missing sample |
 | `grid_step_s` | 1800 | s | MIGRATION_PLAN §2.7 (30 min) |
 | `span` | `union` | — | project choice |
 
 ```yaml
 alignment:
   strategy: linear_interpolation
-  params: {max_gap_s: 2737.5}
+  params: {max_gap_s: 2745.0}
   grid_step_s: 1800
   span: overlap
 ```
@@ -145,7 +151,7 @@ Daily climate indices do not need alignment: they use each sensor's own `DailyWe
 - Linear interpolation in time assumes the variable changes roughly linearly between two samples
   about 30 min apart. Rapid changes (fronts, sunrise on a sensor screen) are smoothed.
 - Nearest-sample values can be up to the tolerance away from the grid instant; at the default
-  that is 932.5 s (about 15.5 min). Differences between sensors then include a temporal component, which is why
+  that is 935 s (about 15.6 min). Differences between sensors then include a temporal component, which is why
   the offsets are reported.
 - The defaults of `margin_s` and `max_gap_s` are project choices, not taken from literature,
   and have not been tuned on real exports (none available to this workpackage).

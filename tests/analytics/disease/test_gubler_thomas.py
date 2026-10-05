@@ -200,6 +200,27 @@ def test_excluded_sample_breaks_the_run(make_context: ContextFactory) -> None:
     assert day.favourable is False
 
 
+@pytest.mark.parametrize("variable", ["temp", "rh"])
+def test_unflagged_half_row_breaks_the_run(make_context: ContextFactory, variable: str) -> None:
+    # Whole-row rule checked on the values: hour 13 misses one variable and has qc = 0 (as
+    # read from the store, before QC). It is not a valid sample, so it breaks the run like an
+    # excluded one, even when the missing variable is the humidity.
+    temps = day_temps(15.0, (range(10, 18), 25.0))
+    rh = [60.0] * 24
+    if variable == "temp":
+        temps[13] = float("nan")
+    else:
+        rh[13] = float("nan")
+    times = [f"2026-06-01 {h:02d}:00" for h in range(24)]
+    ctx = make_context(times, temps, rh, qc=[0] * 24, min_daily_coverage=0.9)
+    (day,) = PowderyMildewDayAssessor(GublerThomasParams(sampling=HOURLY)).assess(
+        ctx, [date(2026, 6, 1)]
+    )
+    # Runs 10-12 (3 h) and 14-17 (4 h); coverage 23/24 = 0.958 -> determined, not favourable.
+    assert day.longest_run_h == 4.0
+    assert day.favourable is False
+
+
 def test_heat_shorter_than_the_minimum_does_not_count(make_context: ContextFactory) -> None:
     temps = day_temps(15.0, (range(12, 13), 36.0))
     times = [f"2026-06-01 {h:02d}:00" for h in range(24)]

@@ -29,6 +29,10 @@ INTERVAL_S = 1800
 """Sampling step of the synthetic series in seconds."""
 
 OTHER = SensorId("11111111")
+EXPORT_A = "MeteoData_8615620 77678271 (VUT)_20260501_060000.csv"
+EXPORT_B = "MeteoData_8615620 77678271 (VUT)_20260502_060000.csv"
+NEW_CSV_SHA256 = "4d4732a2cb66fff9c0c6d137ffa6452fd04bb9ff620556d7615ee7f746331aa2"
+"""SHA-256 of the file name ``new.csv`` (``printf 'new.csv' | sha256sum``)."""
 
 
 def _digests(root: Path) -> dict[str, str]:
@@ -76,7 +80,7 @@ def test_reimport_under_another_file_name_changes_nothing(
 
 def test_stored_values_do_not_depend_on_import_order(tmp_path: Path, sensor_id: SensorId) -> None:
     signal = _regular_series(sensor_id, "2026-01-01T00:00:00Z", 96, "signal")
-    a, b = _rows(signal, 0, 60, "a.csv"), _rows(signal, 40, 96, "b.csv")
+    a, b = _rows(signal, 0, 60, EXPORT_A), _rows(signal, 40, 96, EXPORT_B)
     one, two = MeasurementStore(tmp_path / "one"), MeasurementStore(tmp_path / "two")
     one.append(a)
     one.append(b)
@@ -86,8 +90,8 @@ def test_stored_values_do_not_depend_on_import_order(tmp_path: Path, sensor_id: 
     first, second = one.read(sensor_id).frame, two.read(sensor_id).frame
     assert first[values].equals(second[values])
     # Overlapping identical rows keep the source of whichever export came first.
-    assert first[Column.SOURCE].iloc[50] == "a.csv"
-    assert second[Column.SOURCE].iloc[50] == "b.csv"
+    assert first[Column.SOURCE].iloc[50] == "20260501T060000"
+    assert second[Column.SOURCE].iloc[50] == "20260502T060000"
 
 
 def _rows(series: MeasurementSeries, start: int, stop: int, source: str) -> MeasurementSeries:
@@ -105,14 +109,15 @@ def _rows(series: MeasurementSeries, start: int, stop: int, source: str) -> Meas
 def test_two_overlapping_exports_merge(store: MeasurementStore, sensor_id: SensorId) -> None:
     # Export A holds rows 0..47, export B rows 24..71 of the same synthetic signal.
     signal = _regular_series(sensor_id, "2026-01-01T00:00:00Z", 72, "signal")
-    store.append(_rows(signal, 0, 48, "a.csv"))
-    result = store.append(_rows(signal, 24, 72, "b.csv"))
+    store.append(_rows(signal, 0, 48, EXPORT_A))
+    result = store.append(_rows(signal, 24, 72, EXPORT_B))
     assert result.counts == AppendCounts(new_rows=24, identical_skipped=24)
     merged = store.read(sensor_id).frame
     assert merged[Column.TIMESTAMP].equals(signal.frame[Column.TIMESTAMP])
     np.testing.assert_array_equal(merged[Column.TEMP], signal.frame[Column.TEMP])
     np.testing.assert_array_equal(merged[Column.RH], signal.frame[Column.RH])
-    assert merged[Column.SOURCE].tolist() == ["a.csv"] * 48 + ["b.csv"] * 24
+    # The store keeps the short export identifiers, not the file names.
+    assert merged[Column.SOURCE].tolist() == ["20260501T060000"] * 48 + ["20260502T060000"] * 24
 
 
 def test_conflict_prefer_newest_replaces_and_rewrites(
@@ -157,20 +162,24 @@ def test_read_across_year_boundary_local_new_years_eve(
     # Local Europe/Prague (CET = UTC+1) half-hourly from 31 Dec 2025 23:00 to 1 Jan 2026 01:30.
     local = pd.date_range("2025-12-31 23:00", periods=6, freq="30min", tz="Europe/Prague")
     series = MeasurementSeries.from_records(
-        sensor_id, local, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [90.0] * 6, source="nye.csv"
+        sensor_id,
+        local,
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        [90.0] * 6,
+        source="MeteoData_8615620_77678271_VUT_20260101_090000.csv",
     )
     store.append(series)
     directory = store.root / "raw" / "77678271"
     # Local 23:00, 23:30, 00:00, 00:30 on New Year = 22:00..23:30 UTC on 31 Dec -> 2025.csv.
     assert (directory / "2025.csv").read_text().splitlines()[1:] == [
-        "2025-12-31T22:00:00Z,0.1,90.0,,,,nye.csv",
-        "2025-12-31T22:30:00Z,0.2,90.0,,,,nye.csv",
-        "2025-12-31T23:00:00Z,0.3,90.0,,,,nye.csv",
-        "2025-12-31T23:30:00Z,0.4,90.0,,,,nye.csv",
+        "2025-12-31T22:00:00Z,0.1,90.0,,,,20260101T090000",
+        "2025-12-31T22:30:00Z,0.2,90.0,,,,20260101T090000",
+        "2025-12-31T23:00:00Z,0.3,90.0,,,,20260101T090000",
+        "2025-12-31T23:30:00Z,0.4,90.0,,,,20260101T090000",
     ]
     assert (directory / "2026.csv").read_text().splitlines()[1:] == [
-        "2026-01-01T00:00:00Z,0.5,90.0,,,,nye.csv",
-        "2026-01-01T00:30:00Z,0.6,90.0,,,,nye.csv",
+        "2026-01-01T00:00:00Z,0.5,90.0,,,,20260101T090000",
+        "2026-01-01T00:30:00Z,0.6,90.0,,,,20260101T090000",
     ]
     assert store.read(sensor_id).frame[Column.TEMP].tolist() == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
     window = store.read(sensor_id, "2025-12-31T23:30:00Z", "2026-01-01T00:00:00+00:00")
@@ -371,7 +380,8 @@ def test_missing_values_are_filled_column_by_column(
     result = store.append(make_utc_series(["2026-05-01T01:00:00Z"], [11.0], [math.nan], "new.csv"))
     assert result.counts == AppendCounts(filled_values=1, ignored_missing_values=1)
     lines = (store.root / "raw" / "77678271" / "2026.csv").read_text().splitlines()
-    assert lines[1:] == ["2026-05-01T01:00:00Z,11.0,70.0,,,,new.csv"]
+    # "new.csv" carries no export time: stored as h + 12 digits of SHA-256("new.csv").
+    assert lines[1:] == ["2026-05-01T01:00:00Z,11.0,70.0,,,,h" + NEW_CSV_SHA256[:12]]
     assert store.read(sensor_id).frame[Column.RH].tolist() == [70.0]
 
 
@@ -391,18 +401,32 @@ def test_backfill_of_an_older_export_needs_prefer_existing(
     assert backfill.read(sensor_id).frame[Column.TEMP].tolist() == [4.2]
 
 
-def test_dropped_qc_flags_are_warned_with_counts_per_flag(
+def test_dropped_qc_flags_are_logged_with_counts_per_flag(
     store: MeasurementStore,
     make_utc_series: UtcSeriesFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     times = ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", "2026-01-01T01:00:00Z"]
-    with caplog.at_level(logging.WARNING, logger="sivin.storage.store"):
+    with caplog.at_level(logging.INFO, logger="sivin.storage.store"):
         store.append(make_utc_series(times, [1, 2, 3], [4, 5, 6], qc=[256, 256 | 4, 0]))
-    assert caplog.messages == [
+    (record,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == (
         "Sensor 77678271: QC flags are not stored in raw files and were dropped: "
         "SPIKE on 1 row(s), MANUAL_EXCLUDE on 2 row(s)."
-    ]
+    )
+
+
+def test_dropped_parser_flags_are_debug_only(
+    store: MeasurementStore,
+    make_utc_series: UtcSeriesFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    times = ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z"]
+    with caplog.at_level(logging.DEBUG, logger="sivin.storage.store"):
+        store.append(make_utc_series(times, [1, float("nan")], [4, 5], qc=[128, 1]))
+    (record,) = [r for r in caplog.records if "dropped" in r.getMessage()]
+    assert record.levelno == logging.DEBUG
 
 
 def test_no_qc_warning_without_flags(

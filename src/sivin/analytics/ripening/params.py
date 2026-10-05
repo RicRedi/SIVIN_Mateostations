@@ -14,7 +14,7 @@ from typing import Annotated, Final, Self
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 
 from sivin.analytics.base import IndexParams
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.season import MonthDay, Season
 
 MAX_SAMPLE_DURATION_LIMIT_S: Final = 6 * 3600.0
@@ -24,11 +24,14 @@ Shorter than the shortest local day (23 h), so a sample interval crosses at most
 midnight; a sample that is followed by a longer gap is not meant to stand for it anyway.
 """
 
-DEFAULT_MAX_SAMPLE_DURATION_S: Final = 2.5 * LEGACY_SAMPLING_INTERVAL_S
-"""Default longest step to the next sample that still counts in full, in seconds (4562.5 s).
+MAX_SAMPLE_DURATION_FACTOR: Final = 2.5
+"""Default ``max_sample_duration_s`` in nominal sampling intervals (see below)."""
 
-Project default ``[to be tuned]``: 2.5 times the nominal interval of 1825 s, so one missed
-sample (a step of about 3650 s) plus clock drift is still bridged; a longer step is a data gap.
+DEFAULT_MAX_SAMPLE_DURATION_S: Final = MAX_SAMPLE_DURATION_FACTOR * DEFAULT_SAMPLING_INTERVAL_S
+"""Default longest step to the next sample that still counts in full, in seconds (4575 s).
+
+Project default ``[to be tuned]``: 2.5 times the nominal interval of 1830 s, so one missed
+sample (a step of about 3660 s) plus clock drift is still bridged; a longer step is a data gap.
 Same rule and default as the WP-2.3 copy (``sivin.analytics.disease.sampling``), so that the
 later unification in core preserves behaviour.
 """
@@ -104,15 +107,16 @@ class SampleDurationParams(BaseModel):
         description=(
             "Longest step to the next sample (s) that the sample represents in full; a longer "
             "step is a gap and the sample counts only nominal_interval_s. Project default "
-            "4562.5 s = 2.5 x 1825 s [to be tuned]."
+            "4575 s = 2.5 x 1830 s [to be tuned]."
         ),
     )
     nominal_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0.0,
         description=(
             "Time (s) represented by a sample followed by a gap and by the last sample of a "
-            "series. Default: the nominal sampling interval of 1825 s (legacy configs)."
+            "series. Set from time.expected_interval_s by the configuration (WP-1.7); default "
+            "the nominal sampling interval of 1830 s (median step of the first real export)."
         ),
     )
 

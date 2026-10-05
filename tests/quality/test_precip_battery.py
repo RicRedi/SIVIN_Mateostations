@@ -133,7 +133,7 @@ class TestPrecipRangeCheck:
         assert (second.t_utc, second.end_utc) == (_at(5 * STEP_S), _at(5 * STEP_S))
         assert "1 precipitation value(s)" in second.detail
         assert "lowest 60 mm, highest 60 mm" in second.detail
-        # Neutral wording: no pipeline applies set_aside yet (WP-1.7).
+        # Neutral wording: the event says nothing about the set-aside done by the pipeline.
         assert first.detail.endswith("temperature and humidity are unaffected")
         assert "set aside" not in first.detail
 
@@ -292,6 +292,43 @@ def test_pipeline_flags_do_not_change_when_the_checks_are_enabled() -> None:
     assert qc == [0, 0, 0, int(QcFlag.OUT_OF_RANGE), 0, int(QcFlag.MISSING)]
     kinds = sorted(str(event.kind) for event in extended.events if event.origin)
     assert {"precip_out_of_range", "precip_counter_mismatch", "low_battery"} <= set(kinds)
+
+
+def test_default_pipeline_enables_the_checks_and_sets_precipitation_aside() -> None:
+    assert QualityPipelineSettings().screening_checks == (
+        "missing",
+        "sampling",
+        "range",
+        "precip_range",
+        "precip_counter",
+        "battery",
+    )
+    # Rows: precip 0.0, -1.0 (implausible), 0.2, 80.0 (> 50 mm, implausible); qc stays 0.
+    series = _series(_regular(4), precip_mm=[0.0, -1.0, 0.2, 80.0], battery_v=[3.6] * 4)
+    pipeline = QualityPipeline.from_settings(
+        QualityPipelineSettings(deployed_checks=(), detect_deployment=False)
+    )
+    result = pipeline.run(series)
+    np.testing.assert_array_equal(
+        result.series.frame[Column.PRECIP].to_numpy(), [0.0, NAN, 0.2, NAN]
+    )
+    assert result.values_set_aside == 2
+    assert result.series.frame[Column.QC].tolist() == [0, 0, 0, 0]
+    assert result.series.frame[Column.TEMP].tolist() == [15.0] * 4
+    kinds = [event.kind for event in result.events]
+    assert kinds.count(EventKind.PRECIP_OUT_OF_RANGE) == 2
+
+
+def test_pipeline_without_set_aside_checks_keeps_every_value() -> None:
+    series = _series(_regular(2), precip_mm=[0.0, 80.0])
+    pipeline = QualityPipeline.from_settings(
+        QualityPipelineSettings(
+            screening_checks=("missing",), deployed_checks=(), detect_deployment=False
+        )
+    )
+    result = pipeline.run(series)
+    assert result.values_set_aside == 0
+    assert result.series.frame[Column.PRECIP].tolist() == [0.0, 80.0]
 
 
 @pytest.fixture(scope="module")

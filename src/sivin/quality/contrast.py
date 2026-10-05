@@ -98,7 +98,7 @@ class ContrastSettings(BaseModel):
         ge=3,
         description=(
             "Fewest samples (count) each local window needs; fewer means not confirmable. "
-            "Project default: half a day at 1825 s."
+            "Project default: about half a day at the nominal 1830 s."
         ),
     )
 

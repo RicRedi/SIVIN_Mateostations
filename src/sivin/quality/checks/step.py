@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Mapping
+from typing import Final
 
 import numpy as np
 from pydantic import Field
 
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckSettings, QualityCheck, check_registry
@@ -23,6 +24,9 @@ from sivin.quality.events import EventKind, QualityEvent
 from sivin.quality.samples import S_PER_H, FloatArray, SampleArrays, Variable
 
 logger = logging.getLogger(__name__)
+
+MAX_JUMP_INTERVAL_FACTOR: Final = 3.0
+"""Default ``max_interval_s`` in nominal sampling intervals (project default: three)."""
 
 DEFAULT_WINDOW_S = 3 * S_PER_H
 """Length of the windows compared before and after a jump: 3 h (project default)."""
@@ -77,7 +81,7 @@ class StepSettings(CheckSettings):
         ),
     )
     max_interval_s: float = Field(
-        3 * LEGACY_SAMPLING_INTERVAL_S,
+        MAX_JUMP_INTERVAL_FACTOR * DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         description=(
             "Jumps across a longer interval (s) are not examined (the level may have changed "

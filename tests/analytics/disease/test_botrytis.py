@@ -154,6 +154,18 @@ def test_missing_or_excluded_humidity_inside_a_wet_spell_splits_it(
         assert [p.duration_h for p in periods] == [2.0, 2.0]
 
 
+def test_unflagged_humidity_only_row_ends_a_wet_spell(make_context: ContextFactory) -> None:
+    # Hour 2 has RH 95 % but no temperature and qc = 0 (store data before QC). Under the
+    # whole-row rule it is not a valid sample: it must not count as wet, nor extend the
+    # period, nor be bridged as a dry hour. Before WP-1.7 it extended the period to 5 h.
+    times = [f"2026-06-01 {h:02d}:00" for h in range(6)]
+    params = BotrytisBroomeParams(sampling=HOURLY, max_dry_interruption_h=2.0)
+    ctx = make_context(times, [15.0, 15.0, NAN, 15.0, 15.0, 15.0], [95.0] * 5 + [70.0], qc=[0] * 6)
+    periods = WetnessPeriodDetector(params).detect(ctx.series, ctx.exclude_mask, ctx.timezone)
+    assert [p.duration_h for p in periods] == [2.0, 2.0]
+    assert [p.mean_temp_c for p in periods] == [15.0, 15.0]
+
+
 def test_mean_temperature_is_weighted_by_sample_duration(make_context: ContextFactory) -> None:
     times = ["2026-06-01 00:00", "2026-06-01 00:30", "2026-06-01 02:00"]
     ctx = make_context(times, [10.0, 20.0, 30.0], [95.0] * 3, expected_interval_s=1800.0)

@@ -36,7 +36,8 @@ This is the form in which the index is quoted from Gladstones (1992) by secondar
 WP-L.1 the cap of 9 °C·d (19 °C mean), the DTR band 10–13 °C, the factor 0.25 and the order
 "adjust, then cap" were checked against the BEDD implementation and documentation of xclim 0.62
 (`biologically_effective_degree_days`, citing Gladstones 1992 and Hall & Jones 2010):
-$\min\left(k \cdot \max(0, T_{mean} - 10) + A, 9ight)$. The book itself was not read
+$\min\left(k \cdot \max(0, T_{mean} - 10) + A, 9
+ight)$. The book itself was not read
 (see [literature verification](../literature-verification.md)).
 
 **Order of cap and adjustments** (`cap_order`). The default matches the secondary source; the
@@ -89,7 +90,7 @@ groups, but I cannot quote the numbers with certainty. Use BEDD to compare senso
 
 ## Assumptions and limitations
 
-- Only temperature is used; ~1825 s sampling slightly underestimates DTR (extremes between
+- Only temperature is used; ~1830 s sampling slightly underestimates DTR (extremes between
   samples are missed), which lowers the positive adjustment.
 - In-canopy sensors: DTR in the canopy differs from screen DTR.
 - The day-length adjustment is off by default because its coefficients are not verified.

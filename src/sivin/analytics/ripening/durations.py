@@ -1,6 +1,6 @@
 """Time represented by each raw sample, for duration-weighted hour metrics.
 
-The sensors sample about every 1825 s, but not exactly, and samples go missing. Counting rows
+The sensors sample about every 1830 s, but not exactly, and samples go missing. Counting rows
 (as the legacy ``frost_events_count`` did) therefore does not measure time. Here each sample is
 read as a step function (zero-order hold): its value holds from its own timestamp until the next
 sample of the series; after a step longer than ``max_sample_duration_s`` (a data gap) it holds
@@ -39,7 +39,12 @@ type Condition = Callable[[FloatArray], npt.NDArray[np.bool_]]
 
 
 def masked_values(series: MeasurementSeries, column: Column, exclude_mask: int) -> FloatArray:
-    """Return one column of a series with excluded samples set to ``NaN``.
+    """Return one column of a series with the samples that are not valid set to ``NaN``.
+
+    A sample is valid only if its row is a complete measurement (temperature **and** humidity
+    present, whole-row rule of :meth:`~sivin.core.schema.MeasurementSeries.complete_mask`) and
+    no flag of ``exclude_mask`` is set. The rule is checked on the values, so it holds for
+    unflagged data (e.g. read from the store) too.
 
     Parameters
     ----------
@@ -54,10 +59,10 @@ def masked_values(series: MeasurementSeries, column: Column, exclude_mask: int) 
     -------
     numpy.ndarray of float
         Values in the unit of ``column``, aligned with the rows of ``series``; ``NaN`` where the
-        value is missing or the row is excluded.
+        row is not a complete measurement or is excluded.
     """
     values = series.frame[column].to_numpy(dtype=np.float64, copy=True)
-    values[~series.valid_mask(exclude_mask).to_numpy()] = np.nan
+    values[~series.complete_mask(exclude_mask).to_numpy()] = np.nan
     return values
 
 

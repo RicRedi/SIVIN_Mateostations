@@ -2,10 +2,11 @@
 
 Order (MIGRATION_PLAN §2.7, §2.8):
 
-1. **Screening checks** on the whole series (default ``missing``, ``sampling``, ``range``):
-   they find what is wrong regardless of where the sensor is, and the detector ignores samples
-   they excluded (``MISSING``, ``OUT_OF_RANGE``) so that a gross error cannot fake a
-   transition.
+1. **Screening checks** on the whole series (default ``missing``, ``sampling``, ``range``,
+   ``precip_range``, ``precip_counter``, ``battery``): they find what is wrong regardless of
+   where the sensor is, and the detector ignores samples they excluded (``MISSING``,
+   ``OUT_OF_RANGE``) so that a gross error cannot fake a transition. The precipitation and
+   battery checks only report events (WP-1.9).
 2. **Off-site log** (if the pipeline has one): :class:`~sivin.quality.checks.offsite.OffSiteCheck`
    sets ``PRE_DEPLOYMENT`` on every sample inside a logged period and reports each period as an
    ``off_site`` event. The log is the source of truth for ``PRE_DEPLOYMENT``.
@@ -17,7 +18,10 @@ Order (MIGRATION_PLAN §2.7, §2.8):
    against outdoor expectations, and the jump at a deployment is never reported as a spike or
    step.
 
-All flags are OR-ed into the ``qc`` column (existing flags are kept).
+All flags are OR-ed into the ``qc`` column (existing flags are kept). Finally every enabled
+check that can **set values aside** (:class:`ValueSetAside`, e.g. ``precip_range``) replaces
+the values it rejects by ``NaN`` in the result series: a problem of an auxiliary variable
+removes that value, never the row (owner decision Q9, WP-1.9).
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -35,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 import sivin.quality.checks  # noqa: F401  (registers the built-in checks)
 from sivin.core.flags import QcFlag
-from sivin.core.schema import QC_DTYPE, Column, MeasurementSeries
+from sivin.core.schema import QC_DTYPE, VALUE_COLUMNS, Column, MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckRegistry, QualityCheck, check_registry
 from sivin.quality.checks.offsite import OffSiteCheck
 from sivin.quality.deployment import (
@@ -51,13 +55,16 @@ logger = logging.getLogger(__name__)
 
 
 class QualityPipelineSettings(BaseModel):
-    """Settings of :class:`QualityPipeline` (proposed configuration section ``quality``)."""
+    """Settings of :class:`QualityPipeline` (configuration section ``quality``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     screening_checks: tuple[str, ...] = Field(
-        ("missing", "sampling", "range"),
-        description="Registry names of the checks run on the whole series, in this order.",
+        ("missing", "sampling", "range", "precip_range", "precip_counter", "battery"),
+        description=(
+            "Registry names of the checks run on the whole series, in this order. The "
+            "precipitation and battery checks (WP-1.9) report events and set no flags."
+        ),
     )
     deployed_checks: tuple[str, ...] = Field(
         ("spike", "step", "persistence"),
@@ -105,6 +112,26 @@ class QualityPipelineSettings(BaseModel):
         return self
 
 
+@runtime_checkable
+class ValueSetAside(Protocol):
+    """A check that can remove the values it rejects without flagging their rows."""
+
+    def set_aside(self, series: MeasurementSeries) -> MeasurementSeries:
+        """Return ``series`` with the rejected values replaced by ``NaN``.
+
+        Parameters
+        ----------
+        series : MeasurementSeries
+            The (flagged) measurements.
+
+        Returns
+        -------
+        MeasurementSeries
+            The same rows and flags with the rejected values missing.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class QualityResult:
     """Outcome of :meth:`QualityPipeline.run`.
@@ -119,12 +146,15 @@ class QualityResult:
         Number of rows carrying each single flag in the final ``qc`` column (read-only).
     deployment : DeploymentResult or None
         Details of deployment detection; ``None`` if it was disabled.
+    values_set_aside : int
+        Number of values (count) the set-aside checks replaced by ``NaN`` in :attr:`series`.
     """
 
     series: MeasurementSeries
     events: tuple[QualityEvent, ...]
     flag_counts: Mapping[QcFlag, int] = field(default_factory=dict)
     deployment: DeploymentResult | None = None
+    values_set_aside: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "flag_counts", MappingProxyType(dict(self.flag_counts)))
@@ -240,11 +270,13 @@ class QualityPipeline:
                 outcome = check.check(_rows(series, start, stop))
                 _collect(outcome, flags[start:stop], events)
         flagged = series.with_flags(flags)
+        cleaned = self._set_aside(flagged)
         result = QualityResult(
-            series=flagged,
+            series=cleaned,
             events=tuple(sorted(events, key=lambda event: event.t_utc)),
-            flag_counts=_flag_counts(flagged),
+            flag_counts=_flag_counts(cleaned),
             deployment=deployment,
+            values_set_aside=_present_values(flagged) - _present_values(cleaned),
         )
         logger.info(
             "Sensor %s: quality control done, %d event(s), flags %s.",
@@ -253,6 +285,18 @@ class QualityPipeline:
             {flag.name: count for flag, count in result.flag_counts.items() if count},
         )
         return result
+
+    def _set_aside(self, series: MeasurementSeries) -> MeasurementSeries:
+        """Apply every enabled :class:`ValueSetAside` check, in pipeline order."""
+        for check in (*self._screening, *self._deployed):
+            if isinstance(check, ValueSetAside):
+                series = check.set_aside(series)
+        return series
+
+
+def _present_values(series: MeasurementSeries) -> int:
+    """Count the present (not ``NaN``) values of all measured columns."""
+    return int(series.frame[list(VALUE_COLUMNS)].notna().to_numpy().sum())
 
 
 def _collect(

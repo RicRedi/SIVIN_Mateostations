@@ -32,6 +32,16 @@ def test_defaults() -> None:
     assert config.paths.site_dir == Path("site")
     assert config.paths.sensors_file == Path("sensors/sensors.geojson")
     assert config.paths.output_dir == Path("vystupy")
+    assert config.paths.derived_dir == Path("data/derived")
+    assert config.paths.quarantine_dir == Path("data/quarantine")
+    assert config.offsite_log.file == Path("sensors/offsite_log.yaml")
+    assert config.ingest.portal.download_dir == Path("data/downloads")
+    assert config.ingest.quarantine_mode == "move"
+    assert config.storage.conflict_policy == "prefer_newest"
+    assert config.quality.deployment.mode == "advisory"
+    assert "battery" in config.quality.screening_checks
+    assert config.alignment.strategy == "nearest_within_tolerance"
+    assert config.analytics.auxiliary_exclude_mask == 288
     assert config.time.source_timezone == "Europe/Prague"
     assert config.time.display_timezone == "Europe/Prague"
     assert config.time.expected_interval_s == 1830.0
@@ -96,8 +106,8 @@ def test_models_are_frozen() -> None:
         AnalyticsConfig(unknown=1)  # type: ignore[call-arg]
 
 
-def test_config_and_cli_do_not_import_pandas() -> None:
-    """The configuration layer must not pull in the analytics stack (pandas)."""
+def test_cli_does_not_import_pandas() -> None:
+    """``sivin --version`` must stay fast: the CLI imports the subsystems only when needed."""
     code = "import sys, sivin.cli; print('pandas' in sys.modules)"
     output = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True

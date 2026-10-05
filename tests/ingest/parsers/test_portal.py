@@ -154,12 +154,34 @@ def test_month_first_setting_reads_the_month_first_fixture() -> None:
     assert frame["timestamp_utc"].iloc[-1] == pd.Timestamp("2026-03-03 22:28:52", tz="UTC")
 
 
-def test_footer_row_in_a_short_file_is_a_warning(write_csv: CsvWriter) -> None:
+def test_unreadable_timestamp_share_above_the_limit_rejects_a_short_file(
+    write_csv: CsvWriter,
+) -> None:
+    # 1 of 6 timestamps unreadable = 16.7 % > 5 %: an ERROR even though only one row is
+    # affected (min_error_rows does not apply to timestamps since the WP-1.7 review).
     rows = [[f"2026-03-01 0{hour}:00:07", "1,5", "80"] for hour in range(5)]
     rows.append(["Konec exportu", "", ""])
     result = PortalCsvParser(make_settings()).parse(write_csv(rows))
-    assert len(only_series(result)) == 5
-    assert result.report.rules(Severity.WARNING) == {"timestamps-parseable"}
+    assert not result.is_accepted
+    assert result.report.rules(Severity.ERROR) == {"timestamps-parseable"}
+
+
+def test_truncated_export_is_rejected(tmp_path: Path) -> None:
+    """The reviewer's repro: the last line is cut inside its timestamp (1 of 7 = 14.3 %)."""
+    lines = [
+        "Meteo Data;",
+        "Datum a čas;Teplota (°C);Vlhkost (%)",
+        *(f"2026-03-01 2{h}:00:07;23,79;31,1" for h in range(3, -3, -1) if h >= 0),
+        "2026-03-01 19:54:40;23,87;31,1",
+        "2026-03-01 19:24:11;23,87;31,1",
+        "2026-03-",
+    ]
+    path = tmp_path / "MeteoData_8615620 77799986 (VUT)_20260302_000002.csv"
+    path.write_bytes("\r\n".join(lines).encode("utf-8"))
+    result = PortalCsvParser(make_settings()).parse(path)
+    assert not result.is_accepted
+    (issue,) = [i for i in result.report.errors if i.rule == "timestamps-parseable"]
+    assert "1 of 7 timestamp(s) cannot be read (14.3%, limit 5.0%); file rejected" in issue.message
 
 
 def test_duplicated_rows_keep_last_and_warn() -> None:

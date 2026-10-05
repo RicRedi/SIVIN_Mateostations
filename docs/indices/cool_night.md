@@ -52,7 +52,7 @@ belongs to the cooler class, as implemented.
 
 ## Assumptions and limitations
 
-- The daily minimum is taken from samples about every 30 min (1825 s); the true minimum between
+- The daily minimum is taken from samples about every 30 min (about 1830 s); the true minimum between
   two samples can be lower, so CI is slightly overestimated compared with a station that
   records continuous extremes.
 - The calendar-day minimum (00–24 h local time) is used, not the minimum of a night.

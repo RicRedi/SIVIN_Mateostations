@@ -1,6 +1,6 @@
 """Time represented by irregular samples, and runs of samples that meet a condition.
 
-The sensors sample about every 1825 s, but not exactly, and samples can be missing. Hour-based
+The sensors sample about every 1830 s, but not exactly, and samples can be missing. Hour-based
 quantities (consecutive hours in a temperature band, wetness duration) are therefore computed
 from the **time each sample represents**, never from the number of rows:
 
@@ -26,7 +26,7 @@ import numpy.typing as npt
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 
 logger = logging.getLogger(__name__)
 
@@ -49,20 +49,21 @@ class SamplingParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     nominal_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0.0,
         description=(
             "Nominal sampling interval in seconds (s). Duration of the last sample of a series "
-            "and of a sample followed by a data gap. Default 1825 s from the legacy "
-            "configuration (sivin.core.defaults.LEGACY_SAMPLING_INTERVAL_S)."
+            "and of a sample followed by a data gap. Set from time.expected_interval_s by the "
+            "configuration (WP-1.7); default 1830 s, the median step of the first real export "
+            "(sivin.core.defaults.DEFAULT_SAMPLING_INTERVAL_S)."
         ),
     )
     max_sample_duration_s: float = Field(
-        DEFAULT_MAX_SAMPLE_DURATION_FACTOR * LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_MAX_SAMPLE_DURATION_FACTOR * DEFAULT_SAMPLING_INTERVAL_S,
         gt=0.0,
         description=(
             "Longest step to the next sample in seconds (s) that still counts as continuous "
-            "data; a longer step is a data gap. Default 2.5 x 1825 s = 4562.5 s (project "
+            "data; a longer step is a data gap. Default 2.5 x 1830 s = 4575 s (project "
             "default: bridges one missing sample), to be tuned on real data."
         ),
     )

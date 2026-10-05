@@ -7,6 +7,20 @@ A comprehensive meteorological data analysis and visualization toolkit for analy
 **Affiliation:** International Clinical Research Center, Brno; Brno University of Technology  
 **GitHub:** RicRedi
 
+## Quick start (package `sivin`)
+
+```bash
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev,ingest,viz]"
+cp .env.example .env                 # portal credentials SIVIN_USER, SIVIN_PASSWORD
+.venv/bin/sivin sensors check        # registry and off-site log
+.venv/bin/sivin run                  # fetch -> ingest -> quality control -> indices
+```
+
+Commands, options and exit codes: [docs/cli.md](docs/cli.md); the one configuration file
+`config/sivin.yaml`: [docs/configuration.md](docs/configuration.md); architecture:
+[docs/architecture.md](docs/architecture.md). The rest of this README describes the legacy
+scripts and is rewritten in WP-5.2.
+
 ## Table of Contents
 
 - [Overview](#overview)

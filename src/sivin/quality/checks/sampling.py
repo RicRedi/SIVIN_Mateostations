@@ -1,6 +1,6 @@
 r"""Sampling check: gaps, irregular and non-positive sampling intervals.
 
-The sensors sample about every 1825 s, but their clocks drift (MIGRATION_PLAN §2.7). An
+The sensors sample about every 1830 s, but their clocks drift (MIGRATION_PLAN §2.7). An
 interval :math:`\Delta t_i = t_i - t_{i-1}` is classified as
 
 * **non-positive** if :math:`\Delta t_i \le 0` (cannot occur in a valid
@@ -23,7 +23,7 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import Field
 
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckSettings, QualityCheck, check_registry
@@ -39,11 +39,12 @@ class SamplingSettings(CheckSettings):
     """Settings of :class:`SamplingCheck`."""
 
     expected_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         description=(
-            "Nominal sampling interval Δt0 in seconds; 1825 s from the legacy configurations "
-            "(same as time.expected_interval_s)."
+            "Nominal sampling interval Δt0 in seconds. Set from time.expected_interval_s by "
+            "the configuration (WP-1.7); default 1830 s, the median step of the first real "
+            "export."
         ),
     )
     gap_factor: float = Field(

@@ -140,8 +140,8 @@ class TestParams:
             params.period_start = MonthDay(9, 2)  # type: ignore[misc]
 
     def test_sample_duration_bounds(self) -> None:
-        assert SampleDurationParams().max_sample_duration_s == 4562.5
-        assert SampleDurationParams().nominal_interval_s == 1825.0
+        assert SampleDurationParams().max_sample_duration_s == 4575.0
+        assert SampleDurationParams().nominal_interval_s == 1830.0
         with pytest.raises(ValidationError):
             SampleDurationParams(max_sample_duration_s=7 * 3600.0)
         with pytest.raises(ValidationError):

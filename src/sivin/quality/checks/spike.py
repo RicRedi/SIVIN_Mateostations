@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from typing import Final
 
 import numpy as np
 import numpy.typing as npt
 from pydantic import Field
 
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckSettings, QualityCheck, check_registry
@@ -23,7 +24,10 @@ from sivin.quality.samples import S_PER_H, FloatArray, SampleArrays, Variable
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_NEIGHBOUR_INTERVAL_S = 3 * LEGACY_SAMPLING_INTERVAL_S
+MAX_NEIGHBOUR_INTERVAL_FACTOR: Final = 3.0
+"""``max_interval_s`` in nominal sampling intervals (project default: three intervals)."""
+
+DEFAULT_MAX_NEIGHBOUR_INTERVAL_S = MAX_NEIGHBOUR_INTERVAL_FACTOR * DEFAULT_SAMPLING_INTERVAL_S
 """Neighbours farther apart than three nominal intervals are not used (project default)."""
 
 
@@ -48,11 +52,11 @@ class SpikeSettings(CheckSettings):
         ),
     )
     min_interval_s: float = Field(
-        LEGACY_SAMPLING_INTERVAL_S,
+        DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         description=(
             "Intervals shorter than this (s) are scaled as if they were this long, so that "
-            "closely spaced samples do not get tiny thresholds. Default: nominal interval 1825 s."
+            "closely spaced samples do not get tiny thresholds. Default: nominal interval 1830 s."
         ),
     )
     max_interval_s: float = Field(

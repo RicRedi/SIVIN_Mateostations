@@ -73,7 +73,7 @@ were given in whole °F·d (e.g. region II "2501–3000"); the implementation tr
 
 ## Assumptions and limitations
 
-- Only air temperature is measured (plus relative humidity, unused here); sampling ~1825 s.
+- Only air temperature is measured (plus relative humidity, unused here); sampling ~1830 s.
   $T_{max}$ and $T_{min}$ of ~47 samples per day slightly underestimate the true extremes
   compared with a continuously recording thermometer, so GDD by `minmax` can be a little lower
   than a station value.
