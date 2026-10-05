@@ -149,7 +149,7 @@ taken from the import (filled or replaced); then it gets the incoming `source`. 
 downloaded again under another file name are identical rows and change nothing.
 
 Conflict policies (extension point `ConflictPolicy`, registry `conflict_policy_registry`,
-configuration key proposed as `storage.conflict_policy`):
+configuration key `storage.conflict_policy`):
 
 - `prefer_newest` (**default**, `PreferNewest`): the value **appended last** wins. "Newest"
   means import order, not the age of the export: the pipeline appends exports in download
@@ -163,7 +163,7 @@ configuration key proposed as `storage.conflict_policy`):
 Every conflict is logged as a warning with both values and sources, and recorded as a
 `ConflictDecision` (sensor, timestamp, column, stored and incoming value and source, kept
 `incoming`/`stored`, policy). `AppendResult.conflicts` holds the first
-`max_recorded_conflicts` decisions of an append (configuration key proposed as
+`max_recorded_conflicts` decisions of an append (configuration key
 `storage.max_recorded_conflicts`, default 100), in time order. The pipeline copies them into
 `RunRecord.conflicts`, so the `data` branch records which stored values were replaced. Beyond
 the cap, conflicts are only counted (`conflicting_values`) and summarised in one log line per

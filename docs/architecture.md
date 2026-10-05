@@ -145,7 +145,7 @@ humidity, or a low battery reading in a sample whose temperature dropped out, st
 Consequently the precipitation sum need not cover the same part of the day as `coverage`;
 `precip_n_samples` shows how many interval values it contains (a full day has about
 86 400 s / 1830 s ≈ 47). The mask is a parameter of `DailyWeather.from_series`; its
-configuration key (proposed `analytics.auxiliary_exclude_mask`) is wired by WP-1.7.
+configuration key is `analytics.auxiliary_exclude_mask` (since WP-1.7).
 
 Internally all timestamps are UTC. Local time (`Europe/Prague`) is used only when parsing
 exports and for daily aggregation and display. Units: °C, %, kPa, m, seconds.
