@@ -472,3 +472,88 @@ Assessment of the round-2 deviations:
 - **Default `move`:** fine for unattended runs.
 - **Interval-derived defaults:** consistent; the defaults at 1830 s are unchanged.
 - **WP-1.2 `min_error_rows` reversal for `timestamps-parseable`:** not harmful for real portal files (see above).
+
+### Round 3
+
+Verdict: APPROVE (round 3). The minor findings below stay open and are handed to the owner;
+two of them are recommended before WP-4.1 goes live (see the table).
+
+Reviewer: independent reviewer agent; head `28bffb8` (fixes `3e41153`, `28bffb8`).
+
+Gates (run by the reviewer): `make lint` → `All checks passed!`; `make type` → `Success: no
+issues found in 161 source files`; `make test` → `1730 passed`; `make cov` → total 99 %
+(`sivin/app/*` 98–100 %, `redaction.py` 100 %, `logging_setup.py` 98 %; `sivin/__main__.py` 0 %,
+three lines).
+
+Adversarial secret probes. Harness: `/tmp/claude-0/review-1.7/r3/case.py` and `probe.sh`. They go
+through the real `entry_point` with the real `setup_logging`, the WP-1.3 fake portal and SYNTHETIC
+data. `SIVIN_USER=rr-user-7731`, `SIVIN_PASSWORD=Pa"ss\wörd!42`. Every run searches stdout,
+stderr and every file below `data/` for each credential in raw, `repr`-escaped,
+JSON-escaped and character-list form:
+
+| Exit path | Exit | Leak |
+|---|---|---|
+| `fetch`/`run`: the login field raises `WebDriverException` with the plain typed text (user name and password) | 4 | none (console, run record, derived files) |
+| the same at `--log-level DEBUG` | 4 | none |
+| `fetch`/`run`: the field raises `RuntimeError` (unexpected) with the typed text | 5 | none; the traceback is redacted |
+| unexpected `RuntimeError`/`TypeError` with both credentials deep in `QualityService.run` / `IndexContextFactory.build` (`run`, `qc`) | 5 | none |
+| `KeyboardInterrupt` carrying the password, at login and deep in QC | 130 (Click "Aborted!") | none |
+| `config show`, `sensors check --log-level DEBUG` | 0 | none |
+| a rejected export whose cells hold both credentials; quarantine report | 1 | none; `source_path` relative (bare name outside the project) |
+| **the field raises with `{text!r}`** (password with `\` and `"`) | 4 | **yes**: the `repr`-escaped password on stderr **and in `data/runs/*.jsonl`** |
+| the field raises with the character list (Selenium's `{'value': [...]}` body form) | 4 | **yes**: console and run record |
+| `warnings.warn(f"... {password} {user}")` during a command | 0 | **yes**: stderr (warnings bypass logging) |
+| a log call with a bad format argument (`logger.error("%d", text)`) | **5** | none, but the whole run aborts (see below) |
+
+A credential shorter than 4 characters is not redacted, and one warning names the variable, as
+designed. With `SIVIN_USER=abc` the user name is printed in clear in such an error. This is
+acceptable as an owner decision, because a 3-character portal account is unlikely.
+
+Pruning probes (`/tmp/claude-0/review-1.7/r3prune`):
+- A sensor removed from the registry but still in the store keeps its events file and its
+  indices entries.
+- After its raw data are deleted, the next `qc` deletes its events file, and the next
+  `indices --season 2026 --index huglin` drops it from `2026.json`. The other 16 indices of the
+  remaining sensor are kept.
+- Other seasons' files (`2024.json` with the retired sensor and a removed index) are not
+  touched, because only the written season file is pruned.
+- A non-sensor file `events/notes.json` is deleted by `qc`.
+- `ingest --quarantine-mode copy` leaves the source file in place.
+
+Operator regression (`proj2`): `sensors check`, `ingest`, `qc`, `indices --season 2025`,
+`run --skip-fetch` and `config show` behave as in round 2. The dry-run tree hash over `qc`,
+`indices`, `run` and `ingest --dry-run` is unchanged. `python -m sivin` works, and the installed
+console script calls `entry_point`.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | src/sivin/redaction.py:105-118 (`redact`) | Only the literal value is replaced. A password containing `\`, both quote kinds or non-printable characters appears differently in `repr`/JSON-escaped text, and Selenium's `send_keys` body carries it as a character list. Both forms passed unredacted to stderr and into the run record (public `data` branch) in the probe above. It still needs an exception that quotes the typed text, which no known chromedriver error does. **Recommended before WP-4.1:** also redact `repr(s)[1:-1]`, `json.dumps(s)[1:-1]`, `s.encode("unicode_escape")` and the list form, with a test that uses a password containing `\` and `"`. | open |
+| minor | src/sivin/logging_setup.py (`setup_logging`) | `warnings.warn` messages go straight to stderr and skip the redacting handler (probe: both credentials printed). **Recommended before WP-4.1:** `logging.captureWarnings(True)` in `setup_logging`, so warnings pass through `RedactingFilter`. | open |
+| minor | src/sivin/logging_setup.py (`RedactingFilter.filter`) | The filter calls `record.getMessage()` outside logging's error handling. A log call with mismatched arguments anywhere (a latent bug in a rarely hit branch) now raises from `logger.x()` and aborts the whole unattended run with exit 5. Standard logging would print "--- Logging error ---" and continue. Fix: catch exceptions from `getMessage()` in the filter and fall back to the redacted `str(record.msg)` plus redacted `args` reprs. | open |
+| nit | src/sivin/app/indices.py:399 (`_prune`) | Pruning touches only the season file being written. The daily run writes only the current season, so earlier `indices/<year>.json` keep retired sensors and removed indices until that season is recomputed. Document it, or prune every season file. | open |
+| nit | src/sivin/app/quality.py:152-175 (`EventsWriter.prune`) | Every `*.json` in `derived/events/` whose stem is not a known sensor is deleted, including files that sivin did not write. Restrict pruning to names that parse as a `SensorId`. | open |
+| nit | docs/cli.md (Exit codes) | Ctrl-C ends with Click's exit code 130 ("Aborted!"), which is not in the table. `src/sivin/__main__.py` is not covered by a test. | open |
+
+Round-2 findings:
+- **Major (credentials in exception messages):** fixed for the plain value at every boundary I
+  tried (console, logs, run record, derived JSON, quarantine report, internal-error traceback).
+  Escaped forms remain (minor above).
+- **Minor (redaction mangling short values):** fixed. Values under 4 characters are skipped and
+  one warning names the variable.
+- **Nits:** fixed. Error texts and quarantine `source_path` are relative; unknown sensors and
+  indices are pruned; `ingest --quarantine-mode` was added and the move default is documented.
+
+**Owner decision raised by the worker (retiring a sensor means deleting its data).** With
+`KnownSensors`, derived entries are dropped only when a sensor is in **neither** the registry
+**nor** the store. That is a safe default: an accidental registry edit, e.g. in the WP-3.3
+admin mode, never removes published results.
+
+My recommendation is **not** to retire a sensor by deleting its measurements. Deleting raw data
+is irreversible apart from git history, and it throws away historical seasons. Instead:
+- keep the data and mark the sensor `status: retired` in the registry;
+- let WP-3.2 decide from the registry status whether a sensor is shown, and how (e.g. as
+  historical).
+
+In that model pruning matters only for typos and test sensors, and deleting their data is
+appropriate. Note also: removing a sensor from the registry while the off-site log still names
+it makes the off-site log invalid, and every command then stops with exit 3.
