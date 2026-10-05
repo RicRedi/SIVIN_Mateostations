@@ -30,6 +30,48 @@ def test_parse_accepts_every_known_spelling(text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT_20260301_223842.xlsx",
+        "MeteoData_8615620_77799986_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT.csv",
+        "MeteoData_8615620_77799986.xlsx",
+        "MeteoData_77799986_VUT_20260301_223842.csv",
+        "MeteoData_8615620_77799986_VUT_20260301_223842 (1).csv",
+        "/home/user/data/MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        r"C:\Users\someone\Downloads\MeteoData_8615620_77799986_VUT_20260301_223842.csv",
+        "  MeteoData_8615620_77799986_VUT_20260301_223842.csv  ",
+    ],
+)
+def test_parse_accepts_file_names_with_underscores(text: str) -> None:
+    # Spelling of the first real export (owner question Q8).
+    assert SensorId.parse(text) == SensorId("77799986")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The export time must never be read as a serial.
+        "MeteoData_8615620_20260301_223842.csv",
+        "MeteoData_20260301_223842.csv",
+        "MeteoData_77799986_20260301.csv",
+        # The device number is shorter than a serial; two 8-digit runs are ambiguous.
+        "MeteoData_12345678_77799986_VUT.csv",
+        # A label starts with a letter.
+        "MeteoData_8615620_77799986_1VUT.csv",
+        # Underscores without the export prefix are not a known spelling.
+        "8615620_77799986",
+        "77799986_VUT",
+        "MeteoData_8615620_77799986_VUT_20260301.csv",
+    ],
+)
+def test_parse_rejects_ambiguous_underscore_names(text: str) -> None:
+    with pytest.raises(ValueError, match="Cannot recognise"):
+        SensorId.parse(text)
+
+
+@pytest.mark.parametrize(
     ("text", "message"),
     [
         ("8271", "legacy 4-digit"),

@@ -22,19 +22,26 @@ _SERIAL_PATTERN: Final = re.compile(rf"[0-9]{{{SERIAL_DIGITS}}}")
 
 _LEGACY_SUFFIX_PATTERN: Final = re.compile(rf"[0-9]{{{LEGACY_SUFFIX_DIGITS}}}")
 
+_EXPORT_TIMESTAMP: Final = r"[0-9]{8}_[0-9]{6}"
+"""Export time stamp appended by the portal, e.g. ``20260301_223857`` (date and time of day)."""
+
+_COPY_AND_EXTENSION: Final = r"""
+    (?:\s*\((?P<copy>[0-9]+)\))?            # browser copy suffix, e.g. " (1)"
+    (?:\.[A-Za-z0-9]+)?                     # file extension, e.g. ".csv" or ".xlsx"
+"""
+
 SENSOR_NAME_PATTERN: Final = re.compile(
     rf"""
     (?:MeteoData_)?                     # export file prefix
     (?:(?P<device>[0-9]+)\s+)?               # portal device number, e.g. "8615620 "
     (?P<serial>[0-9]{{{SERIAL_DIGITS}}})     # canonical serial number, e.g. "77678271"
     (?:\s*\((?P<label>[^)]*)\))?            # GPX / export label, e.g. " (VUT)" or "  (VUT)"
-    (?:_(?P<exported>[0-9]{{8}}_[0-9]{{6}}))? # export timestamp, e.g. "_20260301_223857"
-    (?:\s*\((?P<copy>[0-9]+)\))?            # browser copy suffix, e.g. " (1)"
-    (?:\.[A-Za-z0-9]+)?                     # file extension, e.g. ".csv" or ".xlsx"
+    (?:_(?P<exported>{_EXPORT_TIMESTAMP}))?  # export timestamp, e.g. "_20260301_223857"
+    {_COPY_AND_EXTENSION}
     """,
     re.VERBOSE,
 )
-"""Every known spelling of a sensor name, matched against the whole (stripped) base name.
+"""Every known spelling of a sensor name with spaces, matched against the whole base name.
 
 Accepted spellings (MIGRATION_PLAN §2.4):
 
@@ -45,6 +52,38 @@ Accepted spellings (MIGRATION_PLAN §2.4):
   puts two spaces before the label, and a browser appends `` (1)`` to a repeated download).
 
 Only ASCII digits are accepted.
+"""
+
+UNDERSCORE_FILE_NAME_PATTERN: Final = re.compile(
+    rf"""
+    MeteoData_                                     # export file prefix (required)
+    (?:(?P<device>[0-9]{{1,{SERIAL_DIGITS - 1}}})_)?  # portal device number, e.g. "8615620_"
+    (?P<serial>[0-9]{{{SERIAL_DIGITS}}})              # canonical serial number
+    (?:_(?P<label>[A-Za-z][A-Za-z0-9-]*))?          # label without parentheses, e.g. "_VUT"
+    (?:_(?P<exported>{_EXPORT_TIMESTAMP}))?           # export timestamp
+    {_COPY_AND_EXTENSION}
+    """,
+    re.VERBOSE,
+)
+"""Export file name with underscores instead of spaces and parentheses.
+
+The first real export arrived as ``MeteoData_8615620_77799986_VUT_20260301_223842.csv``
+(owner question Q8: it is not known whether the portal or the upload replaced the spaces).
+The spelling is accepted only with the ``MeteoData_`` prefix, and it stays unambiguous because
+
+* the device number is shorter than a serial (the portal's is 7 digits), so a run of
+  eight digits after the prefix or after the device number is always the serial,
+* a label must start with a letter, so it never swallows the digits of the export time, and
+* the export time is two digit groups of fixed length (8 and 6) at the end.
+
+So ``MeteoData_77799986_20260301.csv`` is rejected rather than read as sensor ``20260301``.
+"""
+
+_NAME_PATTERNS: Final = (SENSOR_NAME_PATTERN, UNDERSCORE_FILE_NAME_PATTERN)
+"""All accepted spellings, tried in order.
+
+A name without spaces and without a device number, e.g. ``MeteoData_77799986.csv``, matches
+both patterns; both then read the same serial, so the order does not change the result.
 """
 
 
@@ -84,8 +123,9 @@ class SensorId:
         Parameters
         ----------
         text : str
-            Canonical serial, portal device name, GPX waypoint name, export file name, or a
-            path (POSIX or Windows) to an export file. Surrounding whitespace is ignored.
+            Canonical serial, portal device name, GPX waypoint name, export file name (with
+            spaces or with underscores, see :data:`UNDERSCORE_FILE_NAME_PATTERN`), or a path
+            (POSIX or Windows) to an export file. Surrounding whitespace is ignored.
 
         Returns
         -------
@@ -100,9 +140,10 @@ class SensorId:
             through the sensor registry.
         """
         name = PureWindowsPath(text.strip()).name.strip()
-        match = SENSOR_NAME_PATTERN.fullmatch(name)
-        if match is not None:
-            return cls(match.group("serial"))
+        for pattern in _NAME_PATTERNS:
+            match = pattern.fullmatch(name)
+            if match is not None:
+                return cls(match.group("serial"))
         if _LEGACY_SUFFIX_PATTERN.fullmatch(name) is not None:
             raise ValueError(
                 f"{text!r} looks like a legacy {LEGACY_SUFFIX_DIGITS}-digit short sensor name. "
@@ -111,7 +152,8 @@ class SensorId:
         raise ValueError(
             f"Cannot recognise a sensor id in {text!r}. Expected the {SERIAL_DIGITS}-digit "
             "serial, e.g. '77678271', '8615620 77678271', '77678271 (VUT)' or "
-            "'MeteoData_8615620 77678271 (VUT)_20260301_223857.csv'."
+            "'MeteoData_8615620 77678271 (VUT)_20260301_223857.csv' or "
+            "'MeteoData_8615620_77678271_VUT_20260301_223857.csv'."
         )
 
     @property
