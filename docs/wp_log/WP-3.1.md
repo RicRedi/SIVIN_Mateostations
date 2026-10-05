@@ -171,7 +171,187 @@ reach the OpenStreetMap tile servers:
 
 ## Review
 
-Verdict: (pending)
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, 2026-10-05. Base `claude/funny-sagan-jge9is`, head `65d8531`.
+
+### Gates observed
+
+`cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build` → exit 0.
+`npm ci`: only `EBADENGINE` warnings (jsdom deps want Node ≥ 22.22.2, sandbox has 22.22.0; dev only).
+Lint and typecheck: clean. Vitest: 12 files, 96 tests passed; lines 99.56 %, branches 88.53 %
+(with `main.ts`, `App.ts`, `MapView.ts` and `SeriesChart.ts` excluded). Build: JS 242.7 kB (gzip 80.8 kB),
+`dist/index.html` uses `/SIVIN_Mateostations/assets/...`.
+
+### What I verified myself
+
+- Scope: only `web/**`, `.github/workflows/web.yml`, `docs/web.md`, `docs/wp_log/WP-3.1.md` and
+  `docs/wp_log/img/*` changed. The root `.gitignore` is untouched (`git add -f` is accepted).
+- Contract: every type and validator in `web/src/contract/**`, compared field by field with §2.6 and §2.4.
+  Every file of `web/public/data/**` matches. The manifest/latest/raw/daily/events/indices/registry
+  shapes, columnar layout, Unix seconds and `null` for missing values are all correct. The fixture is
+  marked synthetic (README, placement `note`, `detail` texts, demo badge).
+- QC mask: `DEFAULT_EXCLUDE_MASK` = 311 = 1|2|4|16|32|256. It matches the §2.7 column "Vylučuje z indexů".
+- Time (throwaway vitest probe outside the repo): `toUtc` maps skipped 29 Mar 02:30 to 01:30Z and
+  ambiguous 25 Oct 02:30 to 00:30Z (earlier instant). Local midnights on both DST days are correct.
+  `utcMonthKeys` is correct at the UTC month and year boundaries and for a half-open end. The 7 d
+  window over 25 Oct is 169 h. The season is 1 Apr 00:00 to 1 Nov 00:00 local.
+- Browser (vite preview + playwright-core + /opt/pw-browsers Chromium, tiles blocked):
+  - No horizontal scroll at 360 px. The chart follows a viewport resize (336 → 447 px).
+  - After 30 preset switches there is still exactly one `.uplot` root and one event-marker layer,
+    so there is no chart leak.
+  - Switching to German relabels the legend.
+  - Checkboxes have a 3 px focus outline.
+- XSS: I injected `<img onerror>` / `<svg onload>` into the registry `label`, `site` and placement
+  `note`, and into an event's `detail`/`source`. No dialog fired and no element was injected. All
+  text goes through `textContent`/`setAttribute`. Leaflet tooltips get an `HTMLElement`, and uPlot
+  legend labels are set with `textContent` (checked in uplot 1.6.32 source). `innerHTML` is not used in `src/`.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | web/src/state/HashStateCodec.ts:79, web/src/domain/TimeZone.ts:111, web/src/domain/TimeWindowFactory.ts:68 | A malformed custom date in a shared URL breaks the whole app | open |
+| minor | web/src/ui/HashSync.ts:18 (with web/src/ui/App.ts:85-88) | After a `hashchange`, unknown sensor ids stay in the URL | open |
+| minor | web/src/app/ChartDataLoader.ts:53 | One missing or unexpected events file (or one failing raw month) fails the chart for every selected sensor | open |
+| minor | web/src/domain/RawSeries.ts:73 | The row-level `qc` with MISSING hides a valid temperature when only RH is missing (seen in the fixture) | open (owner question) |
+| minor | web/src/data/DataClient.ts:102 | `raw/<YYYY-MM>` is read as a UTC month, which §2.6 does not say | open (owner question) |
+| minor | web/src/ui/MapView.ts:62 | Map markers are unnamed, inoperable tab stops; the hand-off says they are not focusable | open |
+| minor | web/src/ui/SeriesChart.ts:65 | `role="img"` wraps the uPlot legend and the focusable event-marker buttons | open |
+| minor | web/src/ui/palette.ts:19 | Colour by registry index wraps at 8, so two compared sensors can share a colour | open |
+| minor | web/src/ui/palette.ts:7-16 | Several sensor line colours are below 3:1 against white | open |
+| minor | web/src/ui/TimeWindowControl.ts (render) | Relative presets end at the data end, but the concrete window is never shown | open |
+| nit | web/src/domain/Resampler.ts:56 | Hourly means stamped at the start of the hour draw 30 min early compared with raw | open |
+| nit | web/src/contract/validateSensors.ts:39-45, validateMeta.ts:394 | Lenient readings go beyond the hand-off list | open |
+| nit | web/src/domain/Resampler.ts:44-45 | No bound on the hourly bin count | open |
+| nit | web/scripts/generate-fixture.mjs | The fixture step is exactly 1825 s with no clock drift or jitter | open |
+| nit | web/vite.config.ts:310-315 | `App.ts` is excluded from coverage, but it is coordination logic | open |
+
+#### Details
+
+1. **major: a malformed custom date in the URL breaks the app.**
+   - `ISO_DATE_PATTERN` checks only the shape `\d{4}-\d{2}-\d{2}`. `#w=custom&from=2026-06-01&to=2026-13-45`
+     reaches `TimeZone.nextIsoDate`, where `Date.parse` gives NaN and `toISOString()` throws
+     `RangeError: Invalid time value`.
+   - `…&to=9999-12-31` produces `+010000-01-01`, and `startOfDate` throws.
+   - `App.start()` → `renderAll()` → `presenter.windowFor()` is not guarded. The page shows only the
+     raw text "Invalid time value" in `#status` and the chart never loads (reproduced in Chromium).
+     The same input through `hashchange` gives an uncaught page error.
+   - This breaks the documented promise "invalid fields are left out" in `decode`, and shareable
+     URLs are a feature of the app.
+   - Fix: in `decodeWindow`, accept a date only if it round-trips. That means
+     `new Date(Date.UTC(y, m-1, d)).toISOString().slice(0, 10) === text`, with a sane year range
+     (for example 2000–2100, and also for `y=`).
+   - As a safety net, catch a `RangeError` from `windowFor` and fall back to `DEFAULT_WINDOW`.
+   - Add tests for these inputs.
+2. **minor: unknown ids stay in the URL after a `hashchange`.**
+   - `Store.update` notifies the listeners in order: App, then HashSync. App's listener drops the
+     unknown ids with a nested `update`, and HashSync writes the filtered hash. Then the outer loop
+     calls HashSync with the old state and writes the unfiltered hash again.
+   - Verified: after `location.hash='#s=77678271,12345678…'` the hash keeps `12345678`, while the
+     state has dropped it.
+   - Fix: `HashSync` should always write `this.store.state`, or the hashchange handler should filter
+     the ids through the catalog before calling `update`.
+3. **minor: one events file can fail the whole chart.**
+   - `Promise.all` combines the series with `getEvents`. A 404, or a future event type outside
+     `deployment|retrieval|step`, rejects the comparison chart for every sensor, although events
+     are only decoration.
+   - Likewise, one sensor with a failing listed month hides all the other sensors.
+   - Fix: load events with a fallback to `[]` (and show a notice). Consider settling per sensor.
+     Otherwise, have the owner confirm that WP-3.2 always writes `events/<id>.json` for every
+     manifest sensor.
+4. **minor (owner question): row-level `qc` hides valid values.**
+   - `qc` is one flag set per row (§2.5, §2.6). The fixture sets MISSING whenever *either*
+     variable is null. For example, `77678271/raw/2026-06.json` has 8 MISSING rows with a valid
+     temperature and a null RH.
+   - Because MISSING is in the mask, the web nulls the valid temperature too. Raw and hourly views
+     therefore lose real values, and a temperature SPIKE also hides the RH value.
+   - For display, `null` already encodes "missing", so the MISSING bit adds nothing and only does
+     harm.
+   - Proposal: leave MISSING out of the display mask, or ask the owner to decide whether
+     `qc` / MISSING are per variable. This is a contract question; WP-3.2 has to follow the same
+     rule.
+5. **minor (owner question): the raw month is assumed to be a UTC month.**
+   - §2.6 does not say whether `raw/<YYYY-MM>` is a UTC month or a Europe/Prague month.
+   - If WP-3.2 used local months, up to 2 h of data around each month boundary would be silently
+     missing from the chart.
+   - The UTC reading is the natural one (§1.5 "internally always UTC"), but it should be stated.
+   - Fix: add it to the open questions and `docs/web.md` so WP-3.2 follows it. Alternatively, widen
+     the month selection by one day on each side, which is cheap and makes the reader robust either way.
+6. **minor: map markers are inoperable tab stops.**
+   - In Chromium, Tab stops on the four Leaflet `path` markers. They have no accessible name and no
+     role, and Enter does nothing.
+   - The hand-off says the markers are "not keyboard-focusable", which is not what I observed.
+   - Fix: either take them out of the tab order, or make them real controls (role=button,
+     aria-label with the sensor label, Enter/Space selects).
+7. **minor: `role="img"` on the chart host hides content from assistive tech.**
+   - The uPlot root is inside `plotHost`, which has `role="img"`. Its legend table and the event
+     `<button>`s become presentational for screen readers, while the buttons stay focusable.
+   - Fix: put `role="img"` / `aria-label` on the canvas wrapper only, or use `role="figure"`.
+8. **minor: compared sensors can share a colour.**
+   - `sensorColor(colorIndex % 8)` uses the registry position. With more than 8 registry sensors
+     (the plan expects growth), sensors 0 and 8 get the same colour even though at most 8 are
+     compared.
+   - Fix: assign colours over the current selection while keeping existing assignments stable, or
+     document the limitation.
+9. **minor: low contrast of some line colours.**
+   - Contrast against the white chart background:
+     - `#eda100` 2.17:1
+     - `#e87ba4` 2.69:1
+     - `#1baf7a` 2.82:1
+     - `#9a9890` (stale fill) 2.89:1
+   - WCAG 1.4.11 asks for 3:1 for graphics needed to understand the chart. Humidity is also drawn
+     dashed in the same colour.
+   - Fix: use darker steps for the light hues, or accept this explicitly for the MVP.
+10. **minor: relative presets with an invisible anchor.**
+    - Anchoring presets to the end of the data is a reasonable deviation, but the UI never shows
+      the window actually used.
+    - With "24 h", a stale sensor (77800065) shows "There are no data in this time window" even
+      though it has data 3 days earlier.
+    - Fix: show the concrete from–to (local time) under the presets.
+11. **nit: hourly mean stamps.** A mean over `[h, h+1h)` drawn at `h` shifts the curve 30 min
+    earlier than raw, so peaks move when the resolution changes. Fix: stamp at `h + 1800`, or say in
+    the legend that the time is the start of the hour.
+12. **nit: lenient readings.**
+    - Besides open question 1, the validators also accept missing `site`, `variety` and `notes`,
+      and `null` for an index `value`.
+    - These are reasonable, but the owner list should be complete.
+    - Your listed lenient readings are reasonable for the UI. Asking WP-3.2 to always write the
+      keys, with `null` where needed, is the cleaner contract.
+13. **nit: no bound on hourly bins.** With an explicit hourly resolution, a custom range of many
+    years allocates one bin per hour (about 1.1 M for 1900–2026). It is fixed together with
+    finding 1 (year bounds), or by capping hourly windows.
+14. **nit: fixture sampling.** Every step in the fixture is exactly 1825 s; only per-sensor phase
+    offsets differ. Real clocks drift. Union alignment handles that, but the demo does not exercise
+    it. Adding ±few-second jitter would.
+15. **nit: coverage scope.**
+    - §1.4 exempts CLI and chart rendering, but `App.ts` holds the coordination logic where
+      finding 2 lives.
+    - A jsdom test with stub views would cover it.
+    - `SeriesChart.ts` (256 lines) is also over the ~200-line signal of §1.2/5.
+
+### Deviations assessment
+
+- `contract/` as a directory: fine.
+- TypeScript 6.0.3: fine.
+- `playwright-core` as a devDependency: fine.
+- The single `eslint-disable` for `Axis.Side`: justified.
+- **Presets anchored to the end of the data:** accepted. It is the right choice for a portal fed
+  by cron, but show the actual window (finding 10).
+- **7 d / 30 d as local calendar days:** correct and tested across DST.
+- **QC-excluded samples hidden in raw view too:** consistent with the plan's mask, but see
+  finding 4 for MISSING. A "show excluded" toggle later is a good idea.
+- **Hourly stamp at the start of the hour:** acceptable, see nit 11.
+- **Cap of 8 compared sensors:** fine, but colour uniqueness is not guaranteed (finding 8).
+- **Synthetic placement dates:** fine and clearly marked.
+- **Owner questions:**
+  - Q1, lenient fields: reasonable.
+  - Q2, dual axis: acceptable for an MVP. Stacked charts would read better on phones (the mobile
+    screenshot with two sensors is dense).
+  - Q3: the `#f7f7f7` neutral class has a 1.07:1 contrast on light tiles. Markers are then
+    distinguished only by their outline, and the desktop screenshot shows all-white markers. I
+    recommend a scale whose middle class is not near-white, or a value label.
+  - Q4: keep the data-end anchor.
+- **Screenshots** (`docs/wp_log/img/`): consistent with the description. Tiles are blank, there
+  is a deployment marker on 3 Jun, the demo badge is visible, and the map legend covers about half
+  of the phone map.
