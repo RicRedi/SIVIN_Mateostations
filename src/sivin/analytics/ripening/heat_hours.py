@@ -42,23 +42,25 @@ class HeatHoursParams(PeriodParams):
     )
     optimum_min_c: float = Field(
         20.0,
-        description="Lower bound of the optimum band in °C (inclusive). Plan §3.2 default "
-        "[to be verified].",
+        description="Lower bound of the optimum band in °C (inclusive). Project default "
+        "(plan §3.2), not a literature value.",
     )
     optimum_max_c: float = Field(
         30.0,
-        description="Upper bound of the optimum band in °C (inclusive). Plan §3.2 default "
-        "[to be verified].",
+        description="Upper bound of the optimum band in °C (inclusive). Project default "
+        "(plan §3.2), not a literature value.",
     )
     heat_stress_c: float = Field(
         30.0,
-        description="Heat-stress threshold in °C (T above it). Plan §3.2 default; background "
-        "Greer & Weedon (2012) [to be verified].",
+        description="Heat-stress threshold in °C (T above it). Project default (plan §3.2); "
+        "light-saturated leaf photosynthesis of Semillon was optimal at 30 °C (Greer & Weedon "
+        "2012, abstract).",
     )
     extreme_heat_c: float = Field(
         35.0,
-        description="Extreme-heat threshold in °C (T above it). Plan §3.2 default; background "
-        "Mori et al. (2007) [to be verified].",
+        description="Extreme-heat threshold in °C (T above it). Project default (plan §3.2); "
+        "a 35 °C daily maximum halved berry anthocyanins vs 25 °C (Mori et al. 2007, "
+        "abstract).",
     )
     sampling: SampleDurationParams = Field(
         default_factory=SampleDurationParams,

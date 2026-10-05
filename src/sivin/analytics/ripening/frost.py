@@ -43,8 +43,8 @@ class FrostParams(PeriodParams):
     )
     hard_frost_c: float = Field(
         -2.0,
-        description="Hard-frost threshold in °C (T at or below it). Plan §3.2 default "
-        "[to be verified]; stage-dependent critical temperatures: Poling (2008).",
+        description="Hard-frost threshold in °C (T at or below it). Project default (plan "
+        "§3.2), not a literature value; stage-dependent critical temperatures: Poling (2008).",
     )
     after_date: date | None = Field(
         None,

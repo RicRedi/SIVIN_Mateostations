@@ -44,13 +44,13 @@ class WinterFreezeParams(IndexParams):
     )
     damage_threshold_c: float = Field(
         -15.0,
-        description="Winter-injury threshold in °C (daily T_min below it). Plan §3.2 default "
-        "[to be verified]; background Zabadal et al. (2007).",
+        description="Winter-injury threshold in °C (daily T_min below it). Project default "
+        "(plan §3.2), not a literature value; background Zabadal et al. (2007).",
     )
     severe_threshold_c: float = Field(
         -20.0,
-        description="Severe winter-injury threshold in °C (daily T_min below it). Plan §3.2 "
-        "default [to be verified]; background Zabadal et al. (2007).",
+        description="Severe winter-injury threshold in °C (daily T_min below it). Project "
+        "default (plan §3.2), not a literature value; background Zabadal et al. (2007).",
     )
 
     @model_validator(mode="after")

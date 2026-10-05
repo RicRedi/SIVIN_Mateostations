@@ -17,6 +17,7 @@ from sivin.analytics.thermal.gdd import GddWinklerIndex, GddWinklerParams
 from sivin.analytics.thermal.gst import GstIndex, GstParams
 from sivin.analytics.thermal.huglin import HuglinIndex, HuglinParams, LatitudeBand
 from sivin.analytics.thermal.phenology import (
+    GSR_CULTIVAR_PRESETS,
     BudburstIndex,
     BudburstParams,
     GfvIndex,
@@ -29,6 +30,7 @@ from sivin.analytics.thermal.phenology import (
 from sivin.analytics.thermal.thermal_time import ThermalTimeCurve, ThermalTimeModel
 
 __all__ = [
+    "GSR_CULTIVAR_PRESETS",
     "BeddIndex",
     "BeddParams",
     "BudburstIndex",

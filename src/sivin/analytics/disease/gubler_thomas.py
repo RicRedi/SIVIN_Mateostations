@@ -9,13 +9,14 @@ choices of this project marked as such (see ``docs/indices/powdery_mildew_gt.md`
 
 * **Waiting for onset.** The index starts after ``onset_days`` (3) consecutive favourable days,
   a favourable day having at least 6 consecutive hours with temperatures of 70-85 °F
-  (21.1-29.4 °C). On the onset day the index is set to ``onset_index_points`` (60 = 3 x 20,
-  interpretation: the three onset days earn their points). A non-favourable day resets the
-  streak; heat is not evaluated before onset.
+  (21.1-29.4 °C). On the onset day the index is set to ``onset_index_points`` (60 = 3 x 20: the
+  UC IPM model description assigns 20 points to each of the three onset days). A non-favourable
+  day resets the streak; heat is not evaluated before onset (project interpretation).
 * **Active.** Each favourable day adds 20 points, each non-favourable day subtracts 10 points,
   and a day with temperatures of at least 95 °F (35 °C) for at least 15 minutes subtracts
   another 10 points (interpretation: the heat penalty is independent of the hours rule, so a
-  favourable heat day nets +10). The index stays within 0-100.
+  favourable heat day nets +10, a non-favourable heat day -20; a secondary source caps the daily
+  decrease at 10 points, see docs/literature-verification.md). The index stays within 0-100.
 * **Undetermined day** (not enough data to decide whether it was favourable): the streak or the
   index is carried unchanged (project rule); a heat period that *was* observed still subtracts
   its points. While waiting, at most ``max_undetermined_carry_days`` consecutive undetermined
@@ -99,8 +100,8 @@ class GublerThomasParams(IndexParams):
         60,
         ge=0,
         description=(
-            "Index value (points) on the onset day: 3 onset days x 20 points. Interpretation of "
-            "this project [to be verified]."
+            "Index value (points) on the onset day: 3 onset days x 20 points (UC IPM model "
+            "description: each of the three onset days earns 20 points)."
         ),
     )
     max_undetermined_carry_days: int = Field(

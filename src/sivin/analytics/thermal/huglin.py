@@ -71,10 +71,13 @@ TONIETTO_CARBONNEAU_K_BANDS: Final = (
     LatitudeBand(min_lat_deg=46.0, max_lat_deg=48.0, k=1.05),
     LatitudeBand(min_lat_deg=48.0, max_lat_deg=50.0, k=1.06),
 )
-"""K by 2° latitude band, 40-50° N, after Tonietto and Carbonneau (2004) [to be verified]:
-the range K = 1.02-1.06 for 40-50° is the published one; the bands are upper-inclusive as
-commonly tabulated (40°01'-42° -> 1.02, ..., 48°01'-50° -> 1.06), exact edges not verified.
-Linear interpolation of K, used by some authors, is not implemented."""
+"""K by 2° latitude band, 40-50° N (Huglin, 1978; Tonietto and Carbonneau, 2004).
+
+The range K = 1.02 (40°) - 1.06 (50°) is the published one; the stepwise, upper-inclusive bands
+(40° < lat <= 42° -> 1.02, ..., 48° < lat <= 50° -> 1.06) are those of the "huglin" method of
+xclim 0.62 (``huglin_day_length_latitude_coefficient``), which cites Huglin (1978); verified
+against that secondary source only (docs/literature-verification.md). Linear interpolation of
+K, used by some authors, is not implemented."""
 
 HUGLIN_CLASS_BOUNDS: Final = (
     ("very_cool", 1500.0),
@@ -118,7 +121,7 @@ class HuglinParams(ClassifiedSumParams):
         TONIETTO_CARBONNEAU_K_BANDS,
         description=(
             "Day-length coefficient K (dimensionless) by latitude band in degrees north, "
-            "after Tonietto and Carbonneau (2004) [to be verified]."
+            "after Huglin (1978) and Tonietto and Carbonneau (2004)."
         ),
     )
     k_override: float | None = Field(
