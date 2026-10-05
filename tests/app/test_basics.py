@@ -24,7 +24,7 @@ class TestOutcome:
             Outcome.SETUP_ERROR
         )
         assert Outcome.worst([]) is Outcome.OK
-        assert [int(o) for o in Outcome] == [0, 1, 2, 3, 4]
+        assert [int(o) for o in Outcome] == [0, 1, 2, 3, 4, 5]
 
 
 class TestWorkspace:

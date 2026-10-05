@@ -200,7 +200,13 @@ class ServiceFactory:
             parser_base.parser_registry, ingest.parsers, InputValidator(ingest.validation)
         )
         mode = quarantine_mode if quarantine_mode is not None else ingest.quarantine_mode
-        quarantine = Quarantine(self._workspace.quarantine_dir, mode, self._clock, self._json)
+        quarantine = Quarantine(
+            self._workspace.quarantine_dir,
+            mode,
+            self._clock,
+            self._json,
+            self._workspace.paths.root,
+        )
         return IngestService(reader, self.store(), self.catalog().registry, quarantine, dry_run)
 
     def export_paths(self, files: Sequence[Path], from_dir: Path | None = None) -> list[Path]:

@@ -114,9 +114,13 @@ class Quarantine:
         Current time (aware), for the collision suffix.
     writer : JsonFileWriter, optional
         Writes the report.
+    root : pathlib.Path, optional
+        Project root. The report's ``source_path`` is relative to it; a file outside the
+        project is recorded by its name only, so no local directory is published. Without a
+        root the absolute path is written.
     """
 
-    __slots__ = ("_clock", "_directory", "_mode", "_writer")
+    __slots__ = ("_clock", "_directory", "_mode", "_root", "_writer")
 
     def __init__(
         self,
@@ -124,8 +128,10 @@ class Quarantine:
         mode: QuarantineMode,
         clock: Callable[[], datetime],
         writer: JsonFileWriter | None = None,
+        root: Path | None = None,
     ) -> None:
         self._directory = directory
+        self._root = root.resolve() if root is not None else None
         self._mode = mode
         self._clock = clock
         self._writer = writer if writer is not None else JsonFileWriter()
@@ -151,6 +157,7 @@ class Quarantine:
             If the file cannot be copied or moved, or the report cannot be written.
         """
         self._directory.mkdir(parents=True, exist_ok=True)
+        source_path = self._source_path(path)
         target = self._target(path)
         if target != path:
             if self._mode is QuarantineMode.MOVE:
@@ -161,13 +168,22 @@ class Quarantine:
             target.with_name(target.name + REPORT_SUFFIX),
             {
                 "file": path.name,
-                "source_path": str(path),
+                "source_path": source_path,
                 "accepted": False,
                 "issues": [_issue_dict(issue) for issue in report.issues],
             },
         )
         logger.warning("Quarantined %s (%s) as %s.", path.name, self._mode, target)
         return target
+
+    def _source_path(self, path: Path) -> str:
+        """Return the published origin of a file: project-relative, else its name."""
+        absolute = path.resolve()
+        if self._root is None:
+            return str(absolute)
+        if absolute.is_relative_to(self._root):
+            return absolute.relative_to(self._root).as_posix()
+        return path.name
 
     def _target(self, path: Path) -> Path:
         """Return a free name in the quarantine (the file itself if it is already there)."""

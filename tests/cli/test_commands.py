@@ -121,6 +121,9 @@ class TestIngest:
         result = invoke("ingest")
         assert result.exit_code == 1
         assert "REJECTED broken.csv ->" in result.output
+        report = project.root / "data" / "quarantine" / "broken.csv.report.json"
+        source = json.loads(report.read_text(encoding="utf-8"))["source_path"]
+        assert source == (project.downloads / "broken.csv").relative_to(project.root).as_posix()
         assert "IMPORTED MeteoData_8615620 77678271 (VUT)_20260605_060000.csv" in result.output
 
     @pytest.mark.parametrize(
@@ -136,6 +139,8 @@ class TestIngest:
         assert result.exit_code == 1
         assert own.exists() is kept
         assert list((project.root / "data" / "quarantine").rglob("broken*.csv"))
+        report = project.root / "data" / "quarantine" / "broken.csv.report.json"
+        assert json.loads(report.read_text(encoding="utf-8"))["source_path"] == "broken.csv"
 
     def test_from_dir_dry_run(self, project: Project, tmp_path: Path) -> None:
         directory = tmp_path / "exports"

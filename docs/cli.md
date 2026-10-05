@@ -40,8 +40,9 @@ are `SIVIN_USER` and `SIVIN_PASSWORD`; they are never printed or logged.
 | 2 | `USAGE_ERROR` | Invalid usage: unknown option, invalid `--sensor` name, unknown `--index`, invalid `--from`/`--to` (also a local time in a daylight-saving gap or fold), invalid `--log-level`. |
 | 3 | `SETUP_ERROR` | Nothing could be done: not inside a project, invalid configuration, invalid sensor registry or off-site log (MIGRATION_PLAN §2.8: an invalid log stops the run). |
 | 4 | `DATA_SOURCE_UNAVAILABLE` | The portal could not be used: missing credentials, failed login, portal or browser unreachable, device list unreadable. `sivin fetch` stops; `sivin run` goes on with the stored data (QC, indices, run record) and still ends with 4. |
+| 5 | `INTERNAL_ERROR` | An unexpected exception (a bug). The full traceback is printed to standard error with the credentials replaced by `***` (Typer's pretty tracebacks are off), so it is safe in a public Actions log. Please report it. |
 
-`sivin run` exits with the most severe code of its steps (4 > 3 > 1 > 0); the scheduled
+`sivin run` exits with the most severe code of its steps (4 > 3 > 1 > 0; 5 ends any command at once); the scheduled
 workflow (WP-4.1) can therefore tell a broken portal or missing secrets (4) from a routine
 partial failure (1).
 

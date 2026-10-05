@@ -329,7 +329,9 @@ The values in these examples are illustrative, not measurements. The daily curve
 default, copied with `ingest.quarantine_mode: copy`) and `{"file", "source_path", "accepted":
 false, "issues": [{"rule", "severity", "message", "row", "table"}]}`. If the name is already
 taken, the new file is stored as `<stem>_<YYYYMMDDTHHMMSSZ><suffix>` (UTC time of
-quarantining, then `_2`, `_3`, …); nothing is overwritten.
+quarantining, then `_2`, `_3`, …); nothing is overwritten. `source_path` is relative to the
+project root (`data/downloads/…`); a file from outside the project is recorded by its name
+only, so no local directory ends up in published data.
 
 ## Migration path to Parquet
 

@@ -16,10 +16,12 @@ from tests.app.project import (
 )
 
 from sivin.app.factory import ServiceFactory
-from sivin.app.ingest import DirectoryExports, IngestReport, export_files
+from sivin.app.ingest import DirectoryExports, IngestReport, Quarantine, export_files
 from sivin.app.outcome import Outcome
+from sivin.config.sections import QuarantineMode
 from sivin.core.ids import SensorId
 from sivin.core.schema import Column
+from sivin.ingest.validation import ValidationReport
 from sivin.storage.runlog import RunLog
 
 BROKEN_CSV = "Meteo Data;\r\nDatum a čas;Teplota (°C)\r\n2026-03-01 00:00:07;3,7\r\n;\r\n"
@@ -248,3 +250,14 @@ def test_rejecting_a_file_inside_the_quarantine_keeps_it(
     assert report.files[0].quarantined == path
     assert path.exists()
     assert (quarantine / "broken.csv.report.json").exists()
+
+
+def test_quarantine_without_a_root_records_the_absolute_path(tmp_path: Path) -> None:
+    source = tmp_path / "in" / "broken.csv"
+    source.parent.mkdir()
+    source.write_text(BROKEN_CSV, encoding="utf-8")
+    target = Quarantine(tmp_path / "q", QuarantineMode.COPY, lambda: RUN_TIME).put(
+        source, ValidationReport()
+    )
+    report = json.loads(target.with_name("broken.csv.report.json").read_text(encoding="utf-8"))
+    assert report["source_path"] == str(source.resolve())

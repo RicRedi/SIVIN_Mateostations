@@ -24,6 +24,9 @@ class Outcome(IntEnum):
     """The data provider's portal could not be used: missing credentials, failed login, portal
     or browser unreachable. ``sivin run`` still processes the stored data and ends with this
     code, so a scheduled job can tell a broken portal from a routine partial failure."""
+    INTERNAL_ERROR = 5
+    """An unexpected exception (a bug): the traceback is printed to standard error with the
+    credentials redacted (:func:`sivin.cli.main.entry_point`)."""
 
     @classmethod
     def of(cls, failures: Sequence[str]) -> Self:

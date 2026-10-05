@@ -41,7 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-sivin = "sivin.cli:app"
+sivin = "sivin.cli.main:entry_point"
 
 [tool.hatch.version]
 path = "src/sivin/__init__.py"

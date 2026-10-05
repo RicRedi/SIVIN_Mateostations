@@ -7,6 +7,8 @@ driver error message might. Everything here is SYNTHETIC; no portal is contacted
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,7 +19,10 @@ from tests.app.project import EMPTY_OFFSITE_LOG, Project, make_project, write_sy
 from tests.ingest.portal import conftest as fake
 from typer.testing import CliRunner, Result
 
+from sivin.app.factory import ServiceFactory
+from sivin.app.outcome import Outcome
 from sivin.cli import main as cli
+from sivin.cli.main import entry_point
 from sivin.cli.state import CliOverrides
 from sivin.redaction import MIN_SECRET_LENGTH, REDACTED
 
@@ -126,3 +131,44 @@ def test_console_redacts_every_command(project: Project, monkeypatch: pytest.Mon
     assert result.exit_code == 0, result.output
     assert "MeteoData" not in result.output
     assert REDACTED in result.output
+
+
+def test_unexpected_error_prints_a_redacted_traceback_and_exits_5(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SIVIN_USER", fake.USERNAME)
+    monkeypatch.setenv("SIVIN_PASSWORD", fake.PASSWORD)
+
+    def broken(self: ServiceFactory) -> None:
+        raise RuntimeError(f"bug while logging in as {fake.USERNAME} with {fake.PASSWORD}")
+
+    monkeypatch.setattr(ServiceFactory, "sensors_check", broken)
+    with pytest.raises(SystemExit) as raised:
+        entry_point(["sensors", "check"])
+    assert raised.value.code == int(Outcome.INTERNAL_ERROR) == 5
+    captured = capsys.readouterr()
+    assert "Traceback (most recent call last)" in captured.err
+    assert f"RuntimeError: bug while logging in as {REDACTED} with {REDACTED}" in captured.err
+    for secret in (fake.USERNAME, fake.PASSWORD):
+        assert secret not in captured.err
+        assert secret not in captured.out
+
+
+def test_entry_point_passes_normal_exit_codes(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        entry_point(["sensors", "check"])
+    assert raised.value.code == 0
+    assert "Sensor registry:" in capsys.readouterr().out
+
+
+def test_python_dash_m_runs_the_entry_point() -> None:
+    done = subprocess.run(
+        [sys.executable, "-m", "sivin", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith("sivin ")

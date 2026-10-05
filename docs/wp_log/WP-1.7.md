@@ -272,13 +272,18 @@ Open questions 2 (quarantine mode) and 3 (derived defaults) are answered by the 
   data stays in the store, because QC and indices still process every stored sensor; pruning
   it would make it reappear on every run. Retiring a sensor = removing its data (or a later
   change to process registry sensors only).
-- **Not covered:** a traceback of an *unexpected* exception printed by Typer itself (outside
-  `handled()`) is not redacted; log records are. The quarantine report's `source_path` is
-  still absolute (not a credential; not part of the finding).
+- **Follow-up (orchestrator, before review):** the console script and `python -m sivin`
+  (new `src/sivin/__main__.py`) run `sivin.cli.main.entry_point`: an unexpected exception
+  prints its full traceback, redacted, to stderr and exits with the new code 5
+  `INTERNAL_ERROR` (`docs/cli.md` table); Typer's pretty tracebacks are disabled
+  (`pretty_exceptions_enable=False`). `pyproject.toml` script now points at `entry_point`.
+  Quarantine reports write `source_path` relative to the project root (a file outside the
+  project: its name only). Tests: raising command with user name and password in the
+  message → exit 5, no secret in stdout/stderr; `source_path` inside/outside the project.
 
 Gates after round 3 (in `/home/user/wt/wp-1.7`): `make lint` → all checks passed;
-`make type` → `Success: no issues found in 160 source files`; `make test` → **1726 passed**;
-`make cov` → total 99.83 %; `redaction.py`, `app/fetch.py`, `app/json_files.py`,
+`make type` → `Success: no issues found in 161 source files`; `make test` → **1730 passed**;
+`make cov` → total 99.79 % (`cli/main.py`, `app/ingest.py` 100 %); `redaction.py`, `app/fetch.py`, `app/json_files.py`,
 `app/quality.py`, `cli/console.py` 100 %, `app/indices.py` 98 %, `app/factory.py` 99 %.
 The leak tests were mutation-checked (redaction disabled → 9 of 10 fail).
 
