@@ -11,7 +11,7 @@ a statický mapový portál na GitHub Pages.
   vlastníkovi (§0.6, v hand-off note sekce *Open questions for the owner*) a pracuje se na něčem jiném.
 
 Vlastník projektu: **Richard Redina** (GitHub `RicRedi`).
-Verze plánu: 1 (2026-10-05).
+Verze plánu: 2 (2026-10-05, po merge vlny 1).
 
 ---
 
@@ -76,7 +76,9 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
   - WP vlny 1 (§5) vychází z `wp/0.1-foundation`,
   - výjimka: WP-3.1 (web) nezávisí na Python kódu, vychází přímo z plánovací větve a běží
     souběžně s WP-0.1,
-  - pozdější vlny vychází z `main` ve chvíli, kdy jsou jejich závislosti mergnuté.
+  - pozdější vlny vychází z `main` ve chvíli, kdy jsou jejich závislosti mergnuté;
+  - vlna 2 vychází z commitu plánu verze 2 (větev `claude/funny-sagan-jge9is` nad `main`),
+    plánovací větev se proto opět merguje jako první.
 - Doporučené pořadí merge: plánovací větev → `wp/0.1-foundation` → libovolně WP vlny 1.
   Větve vlny 1 obsahují commity WP-0.1; po jeho merge se v diffu ukáže jen vlastní změna WP.
 - Když se `main` posune: nepushnutá větev → `git rebase main`; pushnutá větev →
@@ -97,18 +99,43 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | 2026-10-05 | Každý index má v `docs/` matematický popis a zdrojovou literaturu. Složka `docs/` je trvalá součást repozitáře. |
 | 2026-10-05 | Mikroklima a prostorové srovnání čidel je cíl projektu; plně se rozvine s růstem počtu čidel. |
 | 2026-10-05 | Každý WP má vlastní větev. **Merguje výhradně owner.** |
+| 2026-10-05 | Vlna 0 a 1 mergnuté do `main`. |
+| 2026-10-05 | Q2: portál exportuje **místní čas** (Europe/Prague). |
+| 2026-10-05 | Q3: automatická detekce přechodů se **odkládá stranou**. Výchozí předpoklad: čidla měří ve vinici. Pravdou je **log mimo-vinici** (`sensors/offsite_log.yaml`, §2.8), který vede owner ručně (čidlo + od–do). Detektor běží jen v poradním režimu (varování, žádné příznaky). |
+| 2026-10-05 | Huglinův koeficient K podle tabulky šířkových pásem, pro naše čidla **K = 1,06**. |
+| 2026-10-05 | QC: **chybí-li v daném čase jedna veličina, je celé měření neplatné** (`MISSING` při chybějící teplotě *nebo* vlhkosti; denní agregace bere jen řádky s oběma veličinami). Ruší per-variable výjimky z WP-0.1/1.2/3.1. |
+| 2026-10-05 | Literaturu a parametry indexů **ověřit** (agent s přístupem na web), výsledek v `docs/literature-verification.md`. |
+| 2026-10-05 | Web: dvě osy v jednom grafu, nová barevná škála mapy, předvolby oken končí koncem dat, tolerantní čtení volitelných polí kontraktu — **schváleno**. Měsíční soubory `raw/<YYYY-MM>` jsou **měsíce v UTC** (upřesnění §2.6). |
+| 2026-10-05 | Sloupec `source` v úložišti: **krátký identifikátor exportu** (časová značka exportu), plný název souboru jen v `RunRecord`. |
+| 2026-10-05 | Q5: aktualizace **1× denně v 6:00 místního času**. |
+| 2026-10-05 | Q7: owner přidá Secrets `SIVIN_USER`, `SIVIN_PASSWORD`; lokálně `.env` podle `.env.example`. |
 
 ### 0.6 Otevřené otázky na ownera
 
 | # | Otázka | Proč | Blokuje |
 |---|---|---|---|
-| Q1 | Ukázkový export z portálu (1× XLSX přímo ze stahování, 1× CSV, pokud CSV vzniká jinak). | Parsery se zatím staví na popisu formátu z legacy kódu, ne na reálném souboru. | Ověření WP-1.2 |
-| Q2 | V jakém čase portál exportuje časové značky (místní čas s letním časem, nebo UTC)? | Převod do UTC a ošetření přechodu letního času. | Ověření WP-1.2 |
-| Q3 | Známá data a časy rozmístění čidel ve vinici (a případných přesunů či odvozů na servis). | Pravdivé hodnoty pro detektor přechodů a historie poloh v registru. | Kalibrace WP-1.5 |
+| Q1 | ✅ Dodán reálný CSV export čidla 77799986 (§0.6.1). | — | — |
+| Q2 | ✅ Místní čas. | — | — |
+| Q3 | ✅ Nahrazeno logem mimo-vinici (§2.8). | — | — |
 | Q4 | Odrůda a název vinice pro každé čidlo. | Odrůdové parametry fenologických modelů (WP-2.1), popisky v mapě. | Nic (volitelné pole) |
-| Q5 | Jak často aktualizovat data (návrh: každou hodinu)? | Plán cronu v WP-4.1. | WP-4.1 |
-| Q6 | Je repozitář veřejný, a jsou zapnuté GitHub Pages se zdrojem „GitHub Actions"? | Pages z privátního repozitáře vyžadují placený plán. | WP-4.1 |
-| Q7 | Přidat do Secrets `SIVIN_USER` a `SIVIN_PASSWORD` (dělá jen owner). | Automatické stahování. | WP-4.1 |
+| Q5 | ✅ 1× denně v 6:00 místního času. | — | — |
+| Q6 | Zveřejnit repozitář a zapnout GitHub Pages se zdrojem „GitHub Actions" (owner, před dokončením WP-4.1). | Nasazení webu. | Deploy ve WP-4.1 |
+| Q7 | Přidat Secrets `SIVIN_USER`, `SIVIN_PASSWORD` (owner). | Automatické stahování. | První ostrý běh WP-4.1 |
+| Q8 | Jmenuje portál soubory s podtržítky (`MeteoData_8615620_77799986_VUT_…csv`), nebo je přejmenovalo nahrání? | Rozpoznání čidla z názvu; WP-0.2 přijme obě varianty. | Nic |
+| Q9 | Export obsahuje navíc **srážky, kumulativní srážky a napětí baterie**. Převzít je do kanonického schématu? | Umožní modely plísně révové (srážky) a QC baterie; je to změna kontraktu §2.5/§2.6. | Návrh WP-1.9 |
+| Q10 | Čidlo 77799986 má 17. 12. 2025 – 1. 3. 2026 typicky pokojový průběh (18–24 °C, denní rozsah < 2 °C, RH ~30 %). Bylo v budově? Pokud ano, zapsat do logu mimo-vinici. | Jinak se pokojová data započtou do indexů. | Správnost indexů |
+| Q11 | Exporty zbývajících tří čidel (stačí jednou), případně XLSX variantu. | Ověření parserů na všech čidlech. | Nic |
+
+### 0.6.1 Zjištění z reálného exportu (Q1, 2026-10-05)
+
+Soubor `MeteoData_8615620_77799986_VUT_20260301_223842.csv` (čidlo 77799986):
+- CSV, UTF-8, CRLF, `;`, desetinná čárka, první řádek `Meteo Data;`, na konci řádek `;`.
+- Sloupce: `Datum a čas;Teplota (°C);Vlhkost (%);Srážky (mm);Celkové srážky (mm);Nabití baterie (V)`.
+- Řazení **od nejnovějšího**; čas místní ve formátu `YYYY-MM-DD HH:MM:SS`.
+- Parser z vlny 1 obsah načetl správně (3520 řádků, otočení pořadí, převod do UTC), **neprošel
+  název souboru s podtržítky** (`SensorId`) → oprava ve WP-0.2.
+- Medián kroku **1830 s** (legacy uváděl 1825 s); mezera 139 dní (31. 7. – 17. 12. 2025).
+- 17. 12. 2025 – 1. 3. 2026 pokojový režim (viz Q10).
 
 ### 0.7 Šablona hand-off note (`docs/wp_log/WP-<id>.md`)
 
@@ -444,12 +471,12 @@ z obsahu/názvu souboru odpovídá registru; fyzikálně možné hodnoty (hrubá
 
 | Příznak | Bit | Význam | Vylučuje z indexů |
 |---|---|---|---|
-| `MISSING` | 1 | hodnota chybí | ano |
+| `MISSING` | 1 | chybí teplota **nebo** vlhkost — celé měření je neplatné (rozhodnutí 2026-10-05) | ano |
 | `OUT_OF_RANGE` | 2 | mimo fyzikální / klimatologický rozsah | ano |
 | `SPIKE` | 4 | izolovaný výkyv (návrat k předchozí úrovni) | ano |
 | `STEP` | 8 | náhlý trvalý skok úrovně | ne (informativní) |
 | `STUCK` | 16 | zaseknutá hodnota (persistence) | ano |
-| `PRE_DEPLOYMENT` | 32 | záznam před nasazením ve vinici (kancelář, doprava) | ano |
+| `PRE_DEPLOYMENT` | 32 | čidlo neměřilo ve vinici (kancelář, servis, doprava) — podle logu mimo-vinici §2.8 | ano |
 | `NEIGHBOR_OUTLIER` | 64 | nesouhlasí se sousedními čidly | ne (informativní) |
 | `TIMESTAMP_SUSPECT` | 128 | nejednoznačný čas (přechod letního času), nepravidelný krok | ne |
 | `MANUAL_EXCLUDE` | 256 | ručně vyřazeno ownerem | ano |
@@ -470,6 +497,10 @@ a výrazně větší denní amplituda). Detektor:
    práh = varování v souhrnu běhu.
 Události se zobrazují v grafu na webu jako značky.
 
+**Od 2026-10-05 (rozhodnutí ownera):** zdrojem pravdy pro `PRE_DEPLOYMENT` je log mimo-vinici
+(§2.8). `DeploymentDetector` běží ve výchozím stavu **jen v poradním režimu**: hlásí podezřelé
+úseky jako varování („možné nezapsané období mimo vinici") a nic neoznačuje.
+
 **Párování dat z různých čidel (WP-1.6, `SensorAligner`)**: dva významy, oba řešené.
 1. *Soubor → čidlo*: přes `SensorId` a registr (WP-0.1, WP-1.1).
 2. *Časové zarovnání*: čidla měří s periodou ~1825 s a jejich hodiny nejsou synchronní (časové
@@ -478,6 +509,32 @@ Události se zobrazují v grafu na webu jako značky.
    délkou mezery; výstupem je široká tabulka `čas × čidlo` pro každou veličinu plus maska
    platnosti. Používá ji QC (`NEIGHBOR_OUTLIER`), prostorová analytika (WP-2.4) a srovnávací
    grafy.
+
+### 2.8 Log mimo-vinici (`sensors/offsite_log.yaml`)
+
+Ručně vedený soubor ownera: kdy čidlo **neměřilo ve vinici** (kancelář, servis, doprava,
+zapůjčení). Měření v těchto úsecích dostanou `PRE_DEPLOYMENT`, nepočítají se do indexů a web je
+v grafu zobrazí jako šedý pás (data se nekreslí jako venkovní).
+
+```yaml
+# Periods when a sensor was NOT measuring in the vineyard.
+# Times are local (Europe/Prague) unless an explicit offset or Z is given.
+# 'to: null' means the sensor is still off site.
+entries:
+  - sensor: "77799986"          # 8-digit serial (any name variant accepted)
+    from: "2025-12-17 12:00"
+    to:   "2026-03-15 09:00"
+    reason: office              # office | service | transport | storage | other
+    note: "winter storage in the office"
+```
+
+Validace (`sivin` při každém běhu i v testech): známé čidlo, `from < to`, úseky jednoho čidla se
+nepřekrývají, `reason` z výčtu. Chybný log zastaví běh pipeline s jasnou chybou (raději žádná
+aktualizace než špatně označená data). Úprava: přímo v GitHubu, později i v režimu správce na webu
+(WP-3.3).
+
+Kontrakt webu (§2.6) se rozšiřuje o intervalovou událost v `events/<id>.json`:
+`{ "type": "off_site", "t": <start>, "t_end": <end | null>, "source": "log", "detail": "<reason: note>" }`.
 
 ---
 
@@ -683,18 +740,68 @@ zapojení do CLI a konfigurace dělá integrační WP-1.7 (vlna 2).
   (výběr měsíčních souborů pro okno, sloučení řad) a `TimeWindowControl`; build funguje
   s base path GitHub Pages (`/SIVIN_Mateostations/`); screenshot v hand-off note.
 
-### Vlna 2 (po merge vlny 1)
+### Vlna 2 (po merge vlny 1; upraveno podle rozhodnutí 2026-10-05)
 
-- **WP-1.7 — Integrace ingest pipeline:** `sivin fetch`, `sivin ingest`, `sivin qc` v CLI,
-  zapojení konfigurace všech subsystémů, end-to-end test nad fixtures.
-- **WP-3.2 — SiteBuilder:** `sivin build-site` generuje `site/data` podle §2.6 z úložiště,
-  registru, QC a indexů; test kontraktu proti fixture webu.
-- **WP-3.3 — Správa čidel na webu:** režim správce: přidat / přesunout (drag) / vyřadit čidlo;
-  změna se commitne do `sensors/sensors.geojson` přes GitHub API s fine-grained tokenem ownera
-  uloženým jen v prohlížeči; validace proti `sensors.schema.json` před odesláním.
-- **WP-4.1 — Automatizace:** `pipeline.yml` (cron + `workflow_dispatch`): fetch → ingest → QC →
-  indexy → build-site → build webu → deploy Pages; commit dat do větve `data`; souhrn běhu jako
-  job summary; selhání portálu nesmí smazat existující data.
+**Vlna 2a (paralelně, z `main` + plán v2):**
+
+#### WP-0.2 — Rozhodnutí ownera v jádru a reálný export (`wp/0.2-owner-decisions`)
+- **Files:** `src/sivin/core/**`, `src/sivin/config.py` (jen výchozí `expected_interval_s`),
+  `config/sivin.yaml`, `src/sivin/ingest/**` (mimo `portal/`), `src/sivin/quality/checks/missing.py`,
+  `web/src/domain/**` (maska), odpovídající testy, `tests/fixtures/exports/real/**`,
+  `docs/architecture.md`, `docs/data-format.md`, `docs/web.md`, `docs/wp_log/WP-0.2.md`.
+- **Úkoly:** (1) řádek je platný jen s oběma veličinami: `DailyWeather` a sdílené pomocníky,
+  parsery nastaví `MISSING` při chybějící kterékoli veličině, `MissingCheck` výchozí pravidlo
+  `any`, web zobrazovací maska = plná `DEFAULT_EXCLUDE` (311); (2) `SensorId` přijme název
+  s podtržítky (`MeteoData_8615620_77799986_VUT_20260301_223842.csv`); (3) výchozí
+  `expected_interval_s` = 1830 s podle reálných dat; (4) zkrácený reálný export jako fixture
+  (s označením „real data, public by owner decision") + regresní test parseru (počet řádků,
+  rozsah, otočení pořadí, převod času, extra sloupce ignorovány); (5) dokumentace.
+- **Akceptace:** reálný export projde parserem beze změny názvu; testy pro platnost řádku ve
+  všech dotčených vrstvách; web gates zelené.
+
+#### WP-1.8 — Log mimo-vinici (`wp/1.8-offsite-log`)
+- **Files:** `sensors/offsite_log.yaml`, `sensors/offsite_log.schema.json`,
+  `src/sivin/registry/offsite.py` (+ testy), `src/sivin/quality/checks/offsite.py`,
+  `src/sivin/quality/pipeline.py`, `src/sivin/quality/deployment.py` (poradní režim),
+  `web/src/contract/**`, `web/src/ui/EventMarkers.ts`, `web/src/ui/SeriesChart.ts`,
+  `web/scripts/generate-fixture.mjs` + regenerovaná fixture, `docs/sensors.md`,
+  `docs/quality-control.md`, `docs/web.md`, `docs/wp_log/WP-1.8.md`.
+- **Úkoly:** formát a validace podle §2.8 (`OffSiteLog`, `OffSitePeriod`, loader s místním
+  časem); `OffSiteCheck` nastaví `PRE_DEPLOYMENT`; `QualityPipeline` přijme log; detektor
+  ve výchozím poradním režimu (jen varování); web vykreslí `off_site` jako šedý pás a v tom úseku
+  nekreslí čáru; prázdný log v repozitáři s komentářem a příkladem.
+- **Akceptace:** testy validace (překryv, neznámé čidlo, from ≥ to, otevřený konec), místní čas
+  přes DST, flagování přesně v intervalu, web test kontraktu a vykreslení pásu.
+
+#### WP-L.1 — Ověření literatury a parametrů (`wp/L.1-literature-verification`)
+- **Files:** `docs/literature-verification.md`, `docs/indices/**`, `docs/quality-control.md`
+  (reference), parametrické konstanty a docstringy v `src/sivin/analytics/**`, odpovídající testy,
+  `docs/wp_log/WP-L.1.md`.
+- **Úkoly:** každou citaci a každou hodnotu označenou `[to be verified]` ověřit z dohledatelného
+  zdroje (DOI, stránka vydavatele, plný text); tabulka *tvrzení → zdroj → ověřená hodnota → stav*;
+  ověřené hodnoty odznačit, chybné opravit (změna výsledků = test + poznámka), neověřitelné
+  ponechat označené s vysvětlením. GFV $F^*$ jen z ověřeného zdroje.
+- **Akceptace:** žádná hodnota prezentovaná jako literární bez dohledaného zdroje; DOI ověřené.
+
+**Vlna 2b (po merge 2a):**
+- **WP-1.7 — Integrace:** CLI `sivin fetch | ingest | qc | indices | sensors check`, jedna
+  konfigurace (všechny sekce), `python-dotenv` + `.env.example`, krátký `source` v úložišti,
+  log mimo-vinici v běhu QC, `time.expected_interval_s` předávané všem subsystémům,
+  end-to-end test nad fixtures včetně reálného exportu.
+- **WP-3.2 — SiteBuilder:** `sivin build-site` generuje `site/data` podle §2.6 (včetně
+  `off_site`), test kontraktu proti validátorům webu.
+
+**Vlna 2c (po merge 2b):**
+- **WP-4.1 — Automatizace:** `pipeline.yml`: cron **6:00 Europe/Prague** (GitHub cron je v UTC →
+  dva záznamy 4:00 a 5:00 UTC a krok, který pokračuje jen při místní hodině 6) +
+  `workflow_dispatch`; fetch → ingest → QC → indexy → build-site → build webu → deploy Pages;
+  data ve větvi `data`; job summary; selhání portálu nesmaže existující data.
+- **WP-3.3 — Režim správce na webu:** úpravy `sensors/sensors.geojson` **a**
+  `sensors/offsite_log.yaml` přes GitHub API (fine-grained token ownera jen v prohlížeči),
+  validace proti schématům před odesláním.
+
+**Návrh (čeká na Q9):** WP-1.9 — srážky a napětí baterie v kanonickém schématu, QC baterie,
+model plísně révové.
 
 ### Vlna 3
 
@@ -725,8 +832,8 @@ WP-0.1 ─┬─ WP-1.1 ─┐
                        WP-1.4 ── WP-5.1 ── WP-5.2 (poslední)
 ```
 
-V tomto běhu se zpracuje **vlna 0 a vlna 1**. Vlna 2 začne, až owner mergne vlnu 1 a zodpoví
-Q1–Q3.
+Vlna 0 a 1 jsou mergnuté. Vlna 2 je rozdělená na 2a (WP-0.2, WP-1.8, WP-L.1 paralelně),
+2b (WP-1.7, WP-3.2) a 2c (WP-4.1, WP-3.3); každá podvlna začíná po merge předchozí.
 
 ---
 
