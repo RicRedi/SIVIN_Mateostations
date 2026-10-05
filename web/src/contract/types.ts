@@ -246,12 +246,18 @@ export interface Placement {
   readonly note: string | null;
 }
 
-/** Registry properties of one sensor (§2.4). */
+/**
+ * Registry properties of one sensor (§2.4), as published: the public projection of the registry
+ * has `notes` and every placement's `note` set to `null` (owner decision 2026-10-05).
+ */
 export interface SensorProperties {
   readonly id: string;
   readonly portal_name: string;
   readonly label: string;
-  readonly site: string | null;
+  /** Municipality (obec); `null` if not filled in. */
+  readonly municipality: string | null;
+  /** Vineyard track (viniční trať); `null` if not filled in. */
+  readonly track: string | null;
   readonly variety: string | null;
   readonly status: string;
   readonly placements: readonly Placement[];

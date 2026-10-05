@@ -44,7 +44,8 @@ SYNTHETIC_FILE = """\
         "id": "11112222",
         "portal_name": "8615620 11112222",
         "label": "11112222 (synthetic)",
-        "site": "Synthetic site",
+        "municipality": "Synthetic municipality A",
+        "track": "Synthetic track 1",
         "variety": "Ryzlink rýnský",
         "status": "active",
         "placements": [
@@ -194,7 +195,13 @@ class TestInvalidFiles:
 
     @pytest.mark.parametrize(
         ("key", "value"),
-        [("portal_name", None), ("portal_name", ...), ("site", ...), ("notes", ...)],
+        [
+            ("portal_name", None),
+            ("portal_name", ...),
+            ("municipality", ...),
+            ("track", ...),
+            ("notes", ...),
+        ],
     )
     def test_sensor_keys_required_and_portal_name_not_null(
         self, store: GeoJsonRegistryStore, tmp_path: Path, key: str, value: object

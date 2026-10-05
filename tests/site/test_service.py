@@ -84,9 +84,13 @@ def test_site_of_the_real_and_a_synthetic_sensor(project: Project) -> None:
     ]
     raw = json.loads((root / "series" / REAL_SENSOR / "raw" / "2026-03.json").read_text("utf-8"))
     assert set(raw["qc"]) == {32}  # PRE_DEPLOYMENT on every sample
-    assert (root / "sensors.geojson").read_bytes() == (
-        project.root / "sensors" / "sensors.geojson"
-    ).read_bytes()
+    published = json.loads((root / "sensors.geojson").read_text(encoding="utf-8"))
+    registry = json.loads((project.root / "sensors" / "sensors.geojson").read_text("utf-8"))
+    for feature in registry["features"]:  # the public projection: internal notes are null
+        feature["properties"]["notes"] = None
+        for placement in feature["properties"]["placements"]:
+            placement["note"] = None
+    assert published == registry
     indices = json.loads((root / "indices" / "2026.json").read_text(encoding="utf-8"))
     assert indices["computed_at"] == "2026-10-05T04:00:00Z"
     huglin = indices["sensors"][OUTDOOR_SENSOR]["huglin"]
@@ -202,3 +206,42 @@ def test_no_index_value_or_class_without_data(project: Project) -> None:
             "no data",
         ), index_id
     assert all(entry["value"] is None for entry in entries.values() if entry["coverage"] == 0)
+
+
+def test_no_registry_or_offsite_note_reaches_the_site(project: Project) -> None:
+    """Owner decision 2026-10-05: internal notes are not published (synthetic note texts).
+
+    Registry notes are nulled; off-site events carry only the reason category.
+    """
+    registry_path = project.root / "sensors" / "sensors.geojson"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    notes = []
+    for number, feature in enumerate(registry["features"]):
+        feature["properties"]["notes"] = f"INTERNAL-SENSOR-NOTE-{number}"
+        notes.append(feature["properties"]["notes"])
+        for placement in feature["properties"]["placements"]:
+            placement["note"] = f"INTERNAL-PLACEMENT-NOTE-{number}"
+            notes.append(placement["note"])
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    offsite_note = "INTERNAL-OFFSITE-NOTE (synthetic)"
+    log_path = project.root / "sensors" / "offsite_log.yaml"
+    log = log_path.read_text(encoding="utf-8")
+    log_path.write_text(log.replace("Derived from the real export", offsite_note), "utf-8")
+
+    make_factory(project).site_service().build()
+    for path, content in tree(project.root / "site" / "data").items():
+        text = content.decode("utf-8")
+        assert not [note for note in notes if note in text], path
+        assert "sensor_location.gpx" not in text, path
+        assert offsite_note not in text, path
+        assert "indoor regime" not in text, path
+    events = json.loads(
+        (project.root / "site" / "data" / "events" / f"{REAL_SENSOR}.json").read_text("utf-8")
+    )
+    assert [e["detail"] for e in events["events"] if e["type"] == "off_site"] == ["service"]
+    make_factory(project).quality_service().run()
+    internal = (project.root / "data" / "derived" / "events" / f"{REAL_SENSOR}.json").read_text(
+        encoding="utf-8"
+    )
+    assert offsite_note in internal  # internal tools keep the full text

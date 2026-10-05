@@ -105,10 +105,31 @@ def test_interval_events_have_an_end() -> None:
         "t_end": None,
         "source": "log",
         "confidence": None,
-        "detail": "service: synthetic",
+        "detail": "service",  # the reason only, never the note of the off-site log
     }
     assert (low["t_end"], low["detail"]) == (T0_S + 1830, None)
     assert (warning["t_end"], warning["confidence"]) == (T0_S + 86_400, 0.88)
+
+
+@pytest.mark.parametrize(
+    ("detail", "published"),
+    [
+        ("service: INTERNAL synthetic note", "service"),
+        ("other", "other"),
+        ("", None),
+        ("not a reason: INTERNAL synthetic note", None),
+    ],
+)
+def test_off_site_detail_publishes_only_the_reason(detail: str, published: str | None) -> None:
+    event = QualityEvent(EventKind.OFF_SITE, T0, detail, source=EventSource.LOG, end_utc=None)
+    assert SiteEventMapping([EventKind.OFF_SITE]).entry(event)["detail"] == published
+
+
+def test_other_kinds_keep_their_detail_and_filters_are_injectable() -> None:
+    step = QualityEvent(EventKind.STEP, T0, "temp_c level step +5.0 °C")
+    assert SiteEventMapping([EventKind.STEP]).entry(step)["detail"] == "temp_c level step +5.0 °C"
+    custom = SiteEventMapping([EventKind.STEP], {EventKind.STEP: lambda _: "hidden"})
+    assert custom.entry(step)["detail"] == "hidden"
 
 
 def test_unpublished_kinds_are_dropped() -> None:

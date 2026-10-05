@@ -29,6 +29,8 @@ describe('HashStateCodec', () => {
     expect(codec.decode('#w=season&y=26')).toEqual({});
     expect(codec.decode('#w=custom&from=2026-06-01')).toEqual({});
     expect(codec.decode('')).toEqual({});
+    // Repeated ids are kept once, at their first position (WP-3.5 review).
+    expect(codec.decode('#s=90000201,77680921,90000201,77680921')).toEqual({ selectedSensorIds: ['90000201', '77680921'] });
     expect(codec.decode('#s=77678271%2C77680921')).toEqual({ selectedSensorIds: ['77678271', '77680921'] });
   });
 

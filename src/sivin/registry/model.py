@@ -31,6 +31,7 @@ from pydantic import (
 )
 
 from sivin.core.ids import SERIAL_DIGITS, SensorId
+from sivin.registry.sensor_input import migrate_site, normalise_names
 from sivin.registry.settings import (
     MAX_LATITUDE_DEG,
     MAX_LONGITUDE_DEG,
@@ -252,8 +253,12 @@ class Sensor(BaseModel):
         Device name in the provider's portal, e.g. ``"8615620 77678271"``; must contain the id.
     label : str
         Human-readable name, e.g. the GPX waypoint name ``"77678271 (VUT)"``.
-    site : str or None
-        Vineyard or site name.
+    municipality : str or None
+        Municipality (obec) the sensor stands in, e.g. ``"Mikulov"``; the first grouping level
+        of the web's sensor picker.
+    track : str or None
+        Vineyard track (viniční trať) within the municipality, as registered for the wine
+        region; the second grouping level.
     variety : str or None
         Grape variety at the sensor.
     status : {"active", "inactive", "retired"}
@@ -265,11 +270,18 @@ class Sensor(BaseModel):
 
     Every parameter is required, also the nullable ones (pass ``None``), as in the file.
 
+    The key ``site`` of registry files written before 2026-10-05 is accepted as a deprecated
+    alias: its value becomes ``track``, ``municipality`` becomes ``None`` and a warning is
+    logged. ``label``, ``municipality``, ``track`` and ``variety`` are stripped and internal
+    runs of whitespace collapsed, with a warning when a value changes
+    (:mod:`sivin.registry.sensor_input`). Saving the registry writes the cleaned values.
+
     Raises
     ------
     pydantic.ValidationError
         If the placements are unsorted or overlap, an open placement is not the last one,
-        ``portal_name`` names another serial, or ``status`` contradicts the placements.
+        ``portal_name`` names another serial, ``status`` contradicts the placements, or the
+        deprecated ``site`` is given together with ``municipality`` or ``track``.
     """
 
     model_config = ConfigDict(
@@ -282,7 +294,17 @@ class Sensor(BaseModel):
         description="Device name in the provider's portal, e.g. '8615620 77678271'.",
     )
     label: str = Field(min_length=1, description="Human-readable name, e.g. '77678271 (VUT)'.")
-    site: str | None = Field(min_length=1, description="Vineyard or site name; null if unknown.")
+    municipality: str | None = Field(
+        min_length=1,
+        description="Municipality (obec) the sensor stands in, e.g. 'Mikulov'; null if unknown.",
+    )
+    track: str | None = Field(
+        min_length=1,
+        description=(
+            "Vineyard track (viniční trať) within the municipality, as registered for the "
+            "wine region; null if unknown."
+        ),
+    )
     variety: str | None = Field(
         min_length=1, description="Grape variety at the sensor; null if unknown."
     )
@@ -291,6 +313,13 @@ class Sensor(BaseModel):
         min_length=1, description="Placement history in time order; only the last may be open."
     )
     notes: str | None = Field(min_length=1, description="Free text; null if none.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _prepare(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        return normalise_names(migrate_site(data))
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

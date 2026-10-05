@@ -14,7 +14,8 @@
         "id": "77678271",
         "portal_name": "8615620 77678271",
         "label": "77678271 (VUT)",
-        "site": null,
+        "municipality": null,
+        "track": null,
         "variety": null,
         "status": "active",
         "placements": [
@@ -43,7 +44,8 @@
         "id": "77680921",
         "portal_name": "8615620 77680921",
         "label": "77680921 (VUT)",
-        "site": null,
+        "municipality": null,
+        "track": null,
         "variety": null,
         "status": "active",
         "placements": [
@@ -72,7 +74,8 @@
         "id": "77800065",
         "portal_name": "8615620 77800065",
         "label": "77800065 (VUT)",
-        "site": null,
+        "municipality": null,
+        "track": null,
         "variety": null,
         "status": "active",
         "placements": [
@@ -101,7 +104,8 @@
         "id": "77799986",
         "portal_name": "8615620 77799986",
         "label": "77799986 (VUT)",
-        "site": null,
+        "municipality": null,
+        "track": null,
         "variety": null,
         "status": "active",
         "placements": [

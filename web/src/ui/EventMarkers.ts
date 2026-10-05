@@ -33,6 +33,19 @@ const EVENT_LABELS: Readonly<Record<MarkerEvent['type'], MessageKey>> = {
   unlogged_off_site: 'eventUnloggedOffSite',
 };
 
+/**
+ * Reasons of the off-site log (MIGRATION_PLAN §2.8). The site publishes only the reason as the
+ * `detail` of an `off_site` event, never the internal note; the web translates it. Any other
+ * text (data from before this rule) is shown as it is.
+ */
+const OFF_SITE_REASON_LABELS: Readonly<Record<string, MessageKey>> = {
+  office: 'reasonOffice',
+  service: 'reasonService',
+  transport: 'reasonTransport',
+  storage: 'reasonStorage',
+  other: 'reasonOther',
+};
+
 /** An event together with the sensor it belongs to. */
 export interface ChartEvent {
   readonly sensorId: string;
@@ -221,9 +234,15 @@ export class EventMarkers {
     return parts.join(' · ');
   }
 
+  /** Translated off-site reason; any other text as it is. */
+  private offSiteReason(detail: string): string {
+    const key = Object.hasOwn(OFF_SITE_REASON_LABELS, detail) ? OFF_SITE_REASON_LABELS[detail] : undefined;
+    return key === undefined ? detail : this.i18n.t(key);
+  }
+
   private describeBand({ event, sensorId }: OffSiteBand): string {
     const title = this.i18n.t('eventOffSite');
-    const heading = event.detail === null ? title : `${title}: ${event.detail}`;
+    const heading = event.detail === null ? title : `${title}: ${this.offSiteReason(event.detail)}`;
     const end =
       event.t_end === null ? this.i18n.t('eventOngoing') : this.i18n.formatDateTime(event.t_end, this.zone.name);
     return [

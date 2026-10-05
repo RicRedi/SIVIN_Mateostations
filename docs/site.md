@@ -85,7 +85,17 @@ contract), then:
 
 ### `sensors.geojson`
 
-The registry file `paths.sensors_file`, copied byte for byte.
+The **public projection** of the registry file `paths.sensors_file` (owner decision
+2026-10-05: internal notes are not published): the same sensors, keys and order as the
+registry, with every sensor's `notes` and every placement's `note` set to `null`. Everything
+else is published as is, including `portal_name` (required by the contract), `municipality`,
+`track`, `variety`, `status` and the placement history. The text has the canonical form of the
+registry file (2-space indentation). The registry file in the repository keeps its notes.
+
+`PublicRegistryWriter` (`sivin.site.site_files`) writes it with
+`PublicRegistryProjection` (`sivin.site.public_registry`); `tests/site/test_service.py` builds a
+site from a registry whose notes carry marker texts and checks that none of them reaches any
+output file.
 
 ### `latest.json`
 
@@ -134,7 +144,17 @@ Each optional group is written only when some day has a value.
 `{"sensor_id": ..., "events": [...]}`, written for every published sensor (possibly with an
 empty list). QC reports many event kinds; `site.events` selects the published ones. Each keeps
 its kind as `type`; `source` is `log`, `detected` or `registry`; `confidence` is 0-1 or `null`;
-`detail` is the QC text.
+`detail` is the QC text, except for `off_site`.
+
+**Off-site notes are not published.** By analogy with the owner decision of 2026-10-05 on
+registry notes, the `detail` of an `off_site` event is only the **reason category** of the
+off-site log entry (`office`, `service`, `transport`, `storage`, `other`), never its free-text
+`note` (`SiteEventMapping` with the filter `public_reason` of `sivin.registry.offsite`; a text
+that does not start with a known reason gives `detail: null`). The web translates the reason.
+Internal outputs keep the full `"<reason>: <note>"`: `data/derived/events/`, the run record
+and job summary, and the CLI. `tests/site/test_service.py` writes a marker note into the
+off-site log and checks that it reaches no site file but stays in the derived events. (To be
+confirmed by the owner.)
 
 | QC event kind | Published by default | Shape | Web |
 |---|---|---|---|
@@ -195,7 +215,7 @@ A build
    reading or checking its data;
 3. quality-checks and writes the other sensors, computes their indices, and rebuilds every
    sensor when the seasons differ from the last build;
-4. writes manifest, registry copy, `latest.json` and the indices files on every build
+4. writes manifest, public registry, `latest.json` and the indices files on every build
    (`generated_at` changes), but any file only when its bytes change;
 5. deletes files under `series/`, `events/` and `indices/` that are no longer produced (removed
    sensors, months or seasons); other files in the directory are never touched.

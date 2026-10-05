@@ -50,6 +50,7 @@ from sivin.registry.offsite.model import (
     OffSiteLogFile,
     OffSitePeriod,
     OffSiteReason,
+    public_reason,
 )
 from sivin.registry.offsite.schema import (
     JSON_SCHEMA_DIALECT,
@@ -91,6 +92,7 @@ __all__ = [
     "build_json_schema",
     "format_local",
     "format_local_iso",
+    "public_reason",
     "render_json_schema",
     "unknown_sensor_message",
 ]

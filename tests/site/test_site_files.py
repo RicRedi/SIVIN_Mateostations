@@ -15,7 +15,7 @@ from sivin.site.model import LatestSample, PublishedSensor, SensorSummary, SiteS
 from sivin.site.site_files import (
     LatestWriter,
     ManifestWriter,
-    RegistryCopyWriter,
+    PublicRegistryWriter,
     SeasonIndicesWriter,
     default_site_writers,
 )
@@ -106,9 +106,10 @@ def test_indices_per_season() -> None:
     assert json.loads(files[1].content)["sensors"] == {"77678271": {"huglin": HUGLIN}}
 
 
-def test_registry_is_copied_byte_for_byte() -> None:
-    (file,) = RegistryCopyWriter().files(snapshot(None, None))
-    assert file == SiteFile("sensors.geojson", b'{"type": "FeatureCollection", "features": []}\n')
+def test_empty_registry_is_published_in_canonical_form() -> None:
+    (file,) = PublicRegistryWriter().files(snapshot(None, None))
+    expected = b'{\n  "type": "FeatureCollection",\n  "features": []\n}\n'
+    assert file == SiteFile("sensors.geojson", expected)
 
 
 def test_default_site_writers() -> None:

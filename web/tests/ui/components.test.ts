@@ -12,7 +12,6 @@ import { Store } from '../../src/state/Store';
 import { el } from '../../src/ui/dom';
 import { HashSync } from '../../src/ui/HashSync';
 import { HeaderView } from '../../src/ui/HeaderView';
-import { SensorList } from '../../src/ui/SensorList';
 import { SensorColors } from '../../src/ui/SensorColors';
 import { SensorPanel } from '../../src/ui/SensorPanel';
 import { fixtureJson } from '../helpers';
@@ -67,31 +66,11 @@ describe('HeaderView', () => {
   });
 });
 
-describe('SensorList', () => {
-  it('lists all sensors with checkboxes reflecting the selection', () => {
-    const root = document.createElement('div');
-    const onToggle = vi.fn();
-    const colors = new SensorColors();
-    colors.update(['77680921']);
-    const list = new SensorList(root, catalog, i18n(), colors, onToggle);
-    list.render(['77680921']);
-    const swatches = [...root.querySelectorAll<HTMLElement>('.swatch')];
-    expect(swatches[1]?.style.background).toBe('rgb(42, 120, 214)');
-    expect(swatches[0]?.classList.contains('swatch--empty')).toBe(true);
-    const boxes = [...root.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
-    expect(boxes.map((box) => box.value)).toEqual(['77678271', '77680921', '77800065', '77799986']);
-    expect(boxes.map((box) => box.checked)).toEqual([false, true, false, false]);
-    boxes[0]?.dispatchEvent(new Event('change'));
-    expect(onToggle).toHaveBeenCalledWith('77678271');
-    expect(root.querySelector('label')?.textContent).toBe('77678271 (VUT)');
-  });
-});
-
 describe('SensorPanel', () => {
   it('shows the hint without a selection and hides controls', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    panel.render([], false);
+    panel.render([]);
     expect(root.querySelector('.panel__hint')?.textContent).toContain('Vyberte čidlo');
     expect(panel.chartSlot.hidden).toBe(true);
     expect(panel.windowSlot.hidden).toBe(true);
@@ -100,7 +79,7 @@ describe('SensorPanel', () => {
   it('shows metadata and latest values of selected sensors, marking stale ones', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    panel.render([sensor('77799986'), sensor('77800065')], false);
+    panel.render([sensor('77799986'), sensor('77800065')]);
     const cards = root.querySelectorAll('.sensor-card');
     expect(cards).toHaveLength(2);
     const text = cards[0]?.textContent ?? '';
@@ -108,19 +87,21 @@ describe('SensorPanel', () => {
     expect(text).toContain('219 m');
     expect(text).toContain('1. 6. 2026');
     expect(text).toContain('11,2 °C');
-    expect(text).not.toContain('Vinice');
+    expect(text).not.toContain('Obec');
+    expect(text).not.toContain('Viniční trať');
     expect(cards[1]?.querySelector('.is-stale')).not.toBeNull();
     expect(cards[1]?.textContent).toContain('neaktuální');
     expect(panel.chartSlot.hidden).toBe(false);
     expect(root.querySelector<HTMLElement>('.panel__hint')?.hidden).toBe(true);
   });
 
-  it('shows the comparison limit and toggles the bottom sheet', () => {
+  it('never repeats the comparison limit (the picker shows it) and toggles the bottom sheet', () => {
     const root = document.createElement('aside');
     const onToggle = vi.fn();
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), onToggle);
-    panel.render([sensor('77678271')], true);
-    expect(root.querySelector('.panel__hint')?.textContent).toBe('Srovnat lze nejvýše 1 čidel.');
+    panel.render([sensor('77678271')]);
+    expect(root.querySelector<HTMLElement>('.panel__hint')?.hidden).toBe(true);
+    expect(root.textContent).not.toContain('Srovnat lze');
     const toggle = root.querySelector<HTMLButtonElement>('.panel__toggle');
     toggle?.click();
     expect(root.classList.contains('panel--collapsed')).toBe(true);
@@ -132,12 +113,13 @@ describe('SensorPanel', () => {
   it('renders a sensor without latest values or placement', () => {
     const root = document.createElement('aside');
     const panel = new SensorPanel(root, i18n(), 'Europe/Prague', new SensorColors(), vi.fn());
-    const bare: SensorInfo = { ...sensor('77678271'), latest: null, elevation_m: null, placedSince: 'unknown', site: 'Test', variety: null };
-    panel.render([bare], false);
+    const bare: SensorInfo = { ...sensor('77678271'), latest: null, elevation_m: null, placedSince: 'unknown', municipality: 'Obec X', track: null, variety: null };
+    panel.render([bare]);
     const text = root.querySelector('.sensor-card')?.textContent ?? '';
     expect(text).toContain('bez hodnoty');
     expect(text).toContain('unknown');
-    expect(text).toContain('Vinice');
+    expect(text).toContain('ObecObec X');
+    expect(text).not.toContain('Viniční trať');
   });
 });
 

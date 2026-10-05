@@ -9,7 +9,7 @@ One build:
 3. decides the seasons (given, or every calendar year with data); if they differ from the last
    build, every sensor is rebuilt;
 4. computes the indices of the rebuilt sensors for every season;
-5. writes the site-wide files (manifest, registry copy, latest values, one indices file per
+5. writes the site-wide files (manifest, public registry, latest values, one indices file per
    season), removes files no longer produced and saves the new state (outside the output).
 
 A sensor that fails keeps the files of its last successful build (from any earlier build, also
@@ -74,7 +74,7 @@ class SiteInputs:
     sensors : Mapping of SensorId to str
         The sensors to publish (registry sensors with stored data) → registry status.
     registry : bytes
-        The registry file, copied to ``sensors.geojson``.
+        The registry file; its public projection is written to ``sensors.geojson``.
     settings : str
         Fingerprint of the shared inputs (configuration, registry, off-site log, version).
     display_timezone : str

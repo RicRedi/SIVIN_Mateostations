@@ -54,14 +54,15 @@ export class HashStateCodec {
 
   /**
    * Read state fields from a hash. Missing or invalid fields are left out, so the caller can
-   * merge the result over defaults.
+   * merge the result over defaults. Repeated sensor ids are kept once, at their first position.
    */
   decode(hash: string): Partial<AppState> {
     const params = new URLSearchParams(hash.replace(/^#/, ''));
     const result: { -readonly [K in keyof AppState]?: AppState[K] } = {};
     const sensors = params.get('s');
     if (sensors !== null) {
-      result.selectedSensorIds = sensors.split(',').filter((id) => SENSOR_ID_PATTERN.test(id));
+      const ids = sensors.split(',').filter((id) => SENSOR_ID_PATTERN.test(id));
+      result.selectedSensorIds = [...new Set(ids)];
     }
     const window = this.decodeWindow(params);
     if (window !== null) {

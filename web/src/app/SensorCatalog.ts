@@ -23,8 +23,13 @@ export interface SensorInfo {
   readonly elevation_m: number | null;
   /** `from` of the current placement (ISO 8601), i.e. when the sensor was deployed there. */
   readonly placedSince: string | null;
-  readonly site: string | null;
+  /** Municipality (obec); the first grouping level of the sensor picker. */
+  readonly municipality: string | null;
+  /** Vineyard track (viniční trať) within the municipality; the second grouping level. */
+  readonly track: string | null;
   readonly variety: string | null;
+  /** Registry life-cycle state: `active`, `inactive` or `retired`. */
+  readonly status: string;
   readonly latest: LatestSample | null;
   /** True when the manifest lists data for the sensor. */
   readonly hasData: boolean;
@@ -64,13 +69,20 @@ export class SensorCatalog {
         lon,
         elevation_m: current?.elevation_m ?? null,
         placedSince: current?.from ?? null,
-        site: p.site,
+        municipality: p.municipality,
+        track: p.track,
         variety: p.variety,
+        status: p.status,
         latest: withStaleness(latest.sensors[p.id] ?? null, manifest.stale_after_s, nowS),
         hasData: p.id in manifest.sensors,
       };
     });
     return new SensorCatalog(sensors);
+  }
+
+  /** Number of sensors. */
+  get size(): number {
+    return this.sensors.length;
   }
 
   get(sensorId: string): SensorInfo | undefined {

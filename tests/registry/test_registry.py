@@ -128,11 +128,11 @@ class TestChanges:
     def test_with_sensor_replaces_in_place(
         self, registry: SensorRegistry, make_sensor: SensorFactory
     ) -> None:
-        updated = registry.get("77680921").replaced(site="Synthetic site")
+        updated = registry.get("77680921").replaced(track="Synthetic track")
         changed = registry.with_sensor(updated)
         assert changed.ids() == registry.ids()
-        assert changed.get("77680921").site == "Synthetic site"
-        assert registry.get("77680921").site is None
+        assert changed.get("77680921").track == "Synthetic track"
+        assert registry.get("77680921").track is None
 
     def test_without(self, registry: SensorRegistry) -> None:
         smaller = registry.without(SensorId("77680921"))

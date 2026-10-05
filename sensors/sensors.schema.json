@@ -132,7 +132,7 @@
           "title": "Label",
           "type": "string"
         },
-        "site": {
+        "municipality": {
           "anyOf": [
             {
               "minLength": 1,
@@ -142,8 +142,21 @@
               "type": "null"
             }
           ],
-          "description": "Vineyard or site name; null if unknown.",
-          "title": "Site"
+          "description": "Municipality (obec) the sensor stands in, e.g. 'Mikulov'; null if unknown.",
+          "title": "Municipality"
+        },
+        "track": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Vineyard track (viniční trať) within the municipality, as registered for the wine region; null if unknown.",
+          "title": "Track"
         },
         "variety": {
           "anyOf": [
@@ -195,7 +208,8 @@
         "id",
         "portal_name",
         "label",
-        "site",
+        "municipality",
+        "track",
         "variety",
         "status",
         "placements",

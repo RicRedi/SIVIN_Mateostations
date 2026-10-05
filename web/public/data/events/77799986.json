@@ -1,1 +1,1 @@
-{"sensor_id":"77799986","events":[{"type":"off_site","t":1780552800,"t_end":1780668000,"source":"log","detail":"service: synthetic example, battery replacement in the office"}]}
+{"sensor_id":"77799986","events":[{"type":"off_site","t":1780552800,"t_end":1780668000,"source":"log","detail":"service"}]}

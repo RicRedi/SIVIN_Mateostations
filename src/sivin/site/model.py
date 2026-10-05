@@ -180,7 +180,8 @@ class SiteSnapshot:
     indices : tuple of IndexSpec
         The indices listed in the manifest, sorted by id.
     registry : bytes
-        The sensor registry file, published unchanged as ``sensors.geojson``.
+        The sensor registry file; its public projection (no internal notes) is published as
+        ``sensors.geojson``.
     """
 
     generated_at: datetime

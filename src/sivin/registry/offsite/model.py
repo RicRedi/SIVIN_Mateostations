@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from itertools import pairwise
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self, get_args
 
 import numpy as np
 import numpy.typing as npt
@@ -53,6 +53,36 @@ from sivin.registry.registry import SensorRegistry
 
 OffSiteReason = Literal["office", "service", "transport", "storage", "other"]
 """Why a sensor was not in the vineyard (the ``reason`` of an entry)."""
+
+OFF_SITE_REASONS: Final[frozenset[str]] = frozenset(get_args(OffSiteReason))
+"""The allowed reasons as strings."""
+
+DETAIL_SEPARATOR: Final = ": "
+"""Separator of reason and note in :attr:`OffSitePeriod.detail` (``"service: <note>"``)."""
+
+
+def public_reason(detail: str | None) -> str | None:
+    """Return only the reason category of an off-site ``detail``, never the note.
+
+    Owner decision on internal notes (2026-10-05), applied to the off-site log: the public site
+    shows why a sensor was away (``"service"``), not the free text. Internal outputs (derived
+    events, run summary, CLI) keep the full :attr:`OffSitePeriod.detail`.
+
+    Parameters
+    ----------
+    detail : str or None
+        ``"<reason>"`` or ``"<reason>: <note>"`` as written by :attr:`OffSitePeriod.detail`.
+
+    Returns
+    -------
+    str or None
+        The reason if the text starts with a known reason; ``None`` otherwise (nothing of an
+        unexpected text is published).
+    """
+    if detail is None:
+        return None
+    reason = detail.split(DETAIL_SEPARATOR, 1)[0]
+    return reason if reason in OFF_SITE_REASONS else None
 
 
 def _to_sensor_id(value: object) -> SensorId:
@@ -199,8 +229,12 @@ class OffSitePeriod(BaseModel):
 
     @property
     def detail(self) -> str:
-        """``"<reason>: <note>"`` (or just the reason), the ``detail`` of the site event."""
-        return self.reason if self.note is None else f"{self.reason}: {self.note}"
+        """``"<reason>: <note>"`` (or just the reason): the internal ``detail`` of the event.
+
+        Derived events, the run summary and the CLI show it; the public site publishes only
+        :func:`public_reason` of it.
+        """
+        return self.reason if self.note is None else f"{self.reason}{DETAIL_SEPARATOR}{self.note}"
 
     def contains(self, instant: datetime | pd.Timestamp) -> bool:
         """Tell whether an instant lies in the period (``from <= t < to``).
