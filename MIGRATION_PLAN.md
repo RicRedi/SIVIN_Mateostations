@@ -74,6 +74,8 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 - Každý WP má větev `wp/<id>-<slug>`. Báze:
   - WP-0.1 vychází z plánovací větve,
   - WP vlny 1 (§5) vychází z `wp/0.1-foundation`,
+  - výjimka: WP-3.1 (web) nezávisí na Python kódu, vychází přímo z plánovací větve a běží
+    souběžně s WP-0.1,
   - pozdější vlny vychází z `main` ve chvíli, kdy jsou jejich závislosti mergnuté.
 - Doporučené pořadí merge: plánovací větev → `wp/0.1-foundation` → libovolně WP vlny 1.
   Větve vlny 1 obsahují commity WP-0.1; po jeho merge se v diffu ukáže jen vlastní změna WP.
@@ -669,7 +671,8 @@ zapojení do CLI a konfigurace dělá integrační WP-3.2.
   pokles, přerušení vedrem, meze 0–100); výstupy Broome nesou příznak `estimated`.
 
 #### WP-3.1 — Webový portál MVP (`wp/3.1-web-mvp`)
-- **Files:** `web/**`, `docs/web.md`.
+- **Závisí na:** jen na kontraktu §2.6 (ne na WP-0.1).
+- **Files:** `web/**`, `.github/workflows/web.yml`, `docs/web.md`.
 - **Úkoly:** Vite + TypeScript strict; třídy `DataClient` (čte kontrakt §2.6, cache),
   `MapView` (Leaflet, OSM, markery obarvené podle poslední teploty, popisek, stav `stale`),
   `SensorPanel` (detail čidla), `TimeWindowControl` (24 h / 7 d / 30 d / sezóna / vlastní
