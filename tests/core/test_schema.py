@@ -211,6 +211,23 @@ def test_valid_mask(sensor_id: SensorId) -> None:
     assert series.valid_mask(QcFlag.STEP).tolist() == [True, False, True]
 
 
+def test_complete_mask_needs_both_values_and_no_excluded_flag(sensor_id: SensorId) -> None:
+    # Synthetic rows: both values, humidity missing, temperature missing, both values + SPIKE.
+    nan = float("nan")
+    stamps = pd.date_range("2026-01-10", periods=4, freq="1830s", tz="UTC")
+    series = MeasurementSeries.from_records(
+        sensor_id,
+        stamps,
+        [1.0, 2.0, nan, 4.0],
+        [50.0, nan, 60.0, 70.0],
+        qc=[0, 0, 0, int(QcFlag.SPIKE)],
+    )
+    complete = series.complete_mask(QcFlag.DEFAULT_EXCLUDE)
+    assert complete.tolist() == [True, False, False, False]
+    assert complete.name == "complete"
+    assert series.complete_mask(0).tolist() == [True, False, False, True]
+
+
 def test_to_frame_adds_sensor_id(sensor_id: SensorId) -> None:
     long = MeasurementSeries(sensor_id, canonical_frame()).to_frame()
     assert list(long.columns) == [c.value for c in (Column.SENSOR_ID, *list(Column)[1:5])]

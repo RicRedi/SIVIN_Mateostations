@@ -125,7 +125,8 @@ def test_missing_humidity_lowers_coverage_and_ends_events(make_context: ContextF
     temps += [18.0] * 24
     rh += [NAN] * 24
     ctx = make_context(times, temps, rh)
-    assert ctx.daily.frame.loc[date(2026, 6, 3), "temp_coverage"] == 1.0  # temperature-only OK
+    # Whole-row validity (owner decision 2026-10-05): no humidity means no valid sample.
+    assert ctx.daily.frame.loc[date(2026, 6, 3), "temp_coverage"] == 0.0
     params = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 3))
     result = BotrytisBroome(params).compute(ctx)
     # Jun 3 counts as not covered (rh_coverage 0): coverage 2/3, incomplete, daily NaN.
