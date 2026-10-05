@@ -215,16 +215,16 @@ The browser was Chromium 1194 driven by `playwright-core` against `vite preview`
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| minor | `web/src/ui/picker/SensorPicker.ts:152` | The full-screen sheet on phones is not modal. Tab (and screen-reader swipe) leaves the sheet into content it covers: chips, time-window buttons, step select. | open |
-| minor | `web/src/state/GroupSelection.ts:44` | At the limit, a partially selected group cannot be cleared through its checkbox, and the notice reads "přidáno jen 0". | open |
-| minor | `web/src/app/SensorQuery.ts:35` | Plain substring AND matching makes 1-character and digit tokens match broadly. | open |
-| minor | `web/src/ui/MapView.ts:32` | The 28 px cluster radius barely declutters a dense network, and grey badges hide the temperature colours at low zoom. | open |
-| minor | `src/sivin/registry/model.py:304` | `municipality`/`track` with leading or trailing whitespace are accepted and form separate groups. The docs warn about this but the loader does not check it. | open |
-| minor | `web/scripts/generate-fixture.mjs:47` | Fictional municipality, track and variety are given to the four **real** sensor ids. Before this WP they were null. | open |
-| minor | `web/src/ui/picker/PickerTree.ts:129` | During a search the group checkbox acts on the matches only, but its name and its full check suggest the whole group. | open |
-| nit | `src/sivin/registry/model.py:326` | Errors caused by a bad `site` value are reported against `track`. The "remove `site`" error is followed by a second error on the next load. | open |
-| nit | `web/src/ui/SensorPanel.ts:59` | The limit is reported twice: the picker notice, and the panel hint "Srovnat lze nejvýše 8 čidel" (the worker noted this). | open |
-| nit | `web/src/styles.css:400` | Retired sensors are struck through, which reads as "unavailable/deleted", but their data are kept (§0.5). | open |
+| minor | `web/src/ui/picker/SensorPicker.ts:152` | The full-screen sheet on phones is not modal. Tab (and screen-reader swipe) leaves the sheet into content it covers: chips, time-window buttons, step select. | fixed in `ba5205b` (`ModalSheet`: `role=dialog`, `aria-modal`, rest of page `inert`, Tab trapped) |
+| minor | `web/src/state/GroupSelection.ts:44` | At the limit, a partially selected group cannot be cleared through its checkbox, and the notice reads "přidáno jen 0". | fixed in `ba5205b` (any selected member → checkbox clears the group; no "jen 0" notice) |
+| minor | `web/src/app/SensorQuery.ts:35` | Plain substring AND matching makes 1-character and digit tokens match broadly. | fixed in `ba5205b` (word-start matching for every field; tests incl. "obec b trat 4") |
+| minor | `web/src/ui/MapView.ts:32` | The 28 px cluster radius barely declutters a dense network, and grey badges hide the temperature colours at low zoom. | fixed in `ba5205b` (badges coloured by mean temperature; radius 42 px after a 200-sensor check) |
+| minor | `src/sivin/registry/model.py:304` | `municipality`/`track` with leading or trailing whitespace are accepted and form separate groups. The docs warn about this but the loader does not check it. | fixed in `86ebe7b` (strip + collapse whitespace on load, with a warning) |
+| minor | `web/scripts/generate-fixture.mjs:47` | Fictional municipality, track and variety are given to the four **real** sensor ids. Before this WP they were null. | fixed in `ba5205b` (real ids keep null municipality/track/variety) |
+| minor | `web/src/ui/picker/PickerTree.ts:129` | During a search the group checkbox acts on the matches only, but its name and its full check suggest the whole group. | fixed in `ba5205b` ("Vybrat nalezená v …" + "nalezeno m z n" during a search) |
+| nit | `src/sivin/registry/model.py:326` | Errors caused by a bad `site` value are reported against `track`. The "remove `site`" error is followed by a second error on the next load. | fixed in `86ebe7b` (errors name `site` and the key still to add) |
+| nit | `web/src/ui/SensorPanel.ts:59` | The limit is reported twice: the picker notice, and the panel hint "Srovnat lze nejvýše 8 čidel" (the worker noted this). | fixed in `ba5205b` (notice only in the picker) |
+| nit | `web/src/styles.css:400` | Retired sensors are struck through, which reads as "unavailable/deleted", but their data are kept (§0.5). | fixed in `ba5205b` (greyed, not struck through) |
 
 Details (input → behaviour → suggested fix):
 
@@ -266,3 +266,35 @@ Details (input → behaviour → suggested fix):
 - **Off-site log notes are published.** `src/sivin/registry/offsite/model.py:201-203` writes `"<reason>: <note>"` into the `detail` of the site's `off_site` events. The 2026-10-05 decision names only the registry's `notes`/`note`. Please decide whether off-site notes are internal too. Not part of this WP (`offsite/` is excluded from its scope).
 - **Duplicate ids in the hash are kept.** `#s=90000201,90000201` gives two identical chips and "Čidla (2/20)". This comes from `HashStateCodec`, which predates this WP. It should de-duplicate.
 - **Stale docstring:** `src/sivin/app/site.py:103` still says the registry is "copied to `sensors.geojson`" (the worker already listed `docs/cli.md:249`).
+
+### Follow-up after review round 1 (worker)
+
+Requested by the orchestrator before push; the scope was extended to `src/sivin/registry/offsite/**`,
+`src/sivin/app/site.py` (docstring), `web/src/state/HashStateCodec.ts` and its test.
+
+| Item | Change | Commit |
+|---|---|---|
+| Phone sheet modal | `web/src/ui/picker/ModalSheet.ts` (new): open sheet = `role="dialog"`, `aria-modal="true"`, every sibling of the panel and of its ancestors up to `<body>` `inert` (pre-existing `inert` left alone), Tab/Shift+Tab wrap; undone on close. `SensorPicker` gets `isSheet()` (`main.ts`: `(max-width: 760px)`, checked on each opening). | `ba5205b` |
+| Group checkbox at the limit | `toggleGroupInSelection`: a group with any selected sensor is cleared; otherwise added up to 8. `groupNotice` gives `{kind: 'full'}` (plain limit text) instead of "přidáno jen 0". | `ba5205b` |
+| Search | `SensorQuery`: every query word must be the start of a word (split at non-letters/digits) of id, label, municipality, track or variety; tests for "obec b trat 4", "8271", "link". | `ba5205b` |
+| Group checkbox during a search | name "Vybrat nalezená v <group>" (de/en too), state over the matches, hint "nalezeno m z n". | `ba5205b` |
+| Registry whitespace, `site` errors | `src/sivin/registry/sensor_input.py` (new): `migrate_site` then `normalise_names` (label, municipality, track, variety: strip, collapse runs, warning when changed). `site` errors name `site` and the key still to add; a blank/non-string `site` is reported on `site`. | `86ebe7b` |
+| Demo fixture | the four real ids have municipality/track/variety `null`; groups only on the 9xxxxxxx sensors. | `ba5205b` |
+| Clustering | badge colour = mean current temperature of the members on the marker scale, grey + dashed only without any value, ink by WCAG contrast (`ClusterIcon`). `CLUSTER_RADIUS_PX` = max(marker 20, badge 34) + 8 = **42 px**: with a synthetic 200-sensor site at 1440 × 900, 28 px gave 26 badges, many overlapping (a badge is larger than a marker), 44 px 16, 60 px 8. Documented in `docs/web.md` (*Clustering*); screenshot `WP-3.5-200-sensors-map.png`. | `ba5205b` |
+| Nits | limit message once (in the picker, under the button or inside the open panel; `SensorPanel.render(selected)`); retired greyed, not struck through; `HashStateCodec` de-duplicates ids; `app/site.py:103` docstring. | `ba5205b`, `86ebe7b` |
+| Off-site notes | `public_reason` (`sivin.registry.offsite`) and a per-kind detail filter in `SiteEventMapping` (`PUBLIC_DETAILS`): the site's `off_site` `detail` is only the reason (unknown text → `null`). Derived events, run summary and CLI keep `"<reason>: <note>"`. The web translates the reason (cs/de/en), older free text is shown as is. Test: a marker note in the off-site log reaches no site file but stays in `data/derived/events/`. python-site and web fixtures regenerated. | `86ebe7b`, `ba5205b` |
+
+Gates after the follow-up (worktree): `make lint` clean (293 files), `make type` no issues in 178
+files, `make cov` **1887 passed**, total 99 % (`registry/sensor_input.py` 100 %,
+`registry/model.py` 100 %, `site/events.py` 100 %, `registry/offsite/model.py` 100 %);
+web lint/typecheck clean, **217 tests passed**, lines 99.6 %, build OK (300.6 kB JS / 97.1 kB
+gzip). Browser check (Chromium, 390 px): after 40 Tabs in the open sheet focus is still inside,
+10 elements `inert`, `aria-modal="true"`; Enter on a cluster zooms in; Ctrl+click on a marker
+adds it. Screenshots refreshed and looked at.
+
+Not verified: real screen readers and phones; `inert` behaviour in Safari < 15.5 (no
+polyfill). The sheet mode is decided when the panel opens; rotating a phone while it is open
+does not switch modes until it is reopened.
+
+Open for the owner: the off-site rule changes the example of MIGRATION_PLAN §2.8
+(`"detail": "<reason: note>"`) — the plan text should say "reason only" if the owner confirms.
