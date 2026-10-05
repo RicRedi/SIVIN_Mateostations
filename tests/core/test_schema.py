@@ -238,3 +238,12 @@ def test_column_labels_are_plain_strings(sensor_id: SensorId) -> None:
     series = MeasurementSeries.from_records(sensor_id, UTC_TIMES, [1, 2, 3], [4, 5, 6])
     assert all(type(label) is str for label in series.frame.columns)
     assert all(type(label) is str for label in series.to_frame().columns)
+
+
+def test_from_records_rejects_nat_before_duplicate_handling(
+    sensor_id: SensorId, caplog: pytest.LogCaptureFixture
+) -> None:
+    times = pd.Series(pd.to_datetime([None, None, "2026-01-01T00:00Z"], utc=True))
+    with caplog.at_level(logging.WARNING), pytest.raises(SchemaError, match="must not be missing"):
+        MeasurementSeries.from_records(sensor_id, times, [1, 2, 3], [4, 5, 6])
+    assert "duplicate" not in caplog.text

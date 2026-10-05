@@ -34,13 +34,16 @@ class ConversionResult:
     timestamps_utc : pandas.Series
         Converted timestamps, ``datetime64[ns, UTC]``. ``NaT`` where the input was ``NaT`` and
         where the conversion would have collided with another row (see ``unresolved``).
+        Callers must drop (and report) the ``NaT`` rows, and decide what to do with
+        ``unresolved`` rows, before building a
+        :class:`~sivin.core.schema.MeasurementSeries`, which rejects ``NaT``.
     suspect : pandas.Series of bool
         ``True`` where the local time was ambiguous (repeated hour when clocks fall back) or
         nonexistent (skipped hour when clocks spring forward). Callers typically set
         :attr:`~sivin.core.flags.QcFlag.TIMESTAMP_SUSPECT` on these rows.
     unresolved : pandas.Series of bool
-        Subset of ``suspect``: rows whose UTC instant is a guess (ambiguous time without a
-        usable clock jump) or could not be determined at all (``NaT`` because of a collision).
+        Subset of ``suspect``: every ambiguous row not resolved by the clock-jump rule (its UTC
+        instant is a guess) and every row returned as ``NaT`` because of a collision.
     """
 
     timestamps_utc: pd.Series
@@ -51,15 +54,27 @@ class ConversionResult:
 class LocalTimeConverter:
     """Convert between UTC and the wall-clock time of one IANA time zone.
 
-    Daylight-saving transitions are resolved deterministically, row by row in recorded order:
+    **Input order contract:** rows must be in source/export order, **oldest first**, exactly
+    as recorded. Do not sort by local time before converting (that destroys the information
+    in the repeated hour); reverse a newest-first export instead. :meth:`to_utc` raises
+    ``ValueError`` when the unambiguous rows (not ``NaT``, not in a daylight-saving hour)
+    decrease in time.
+
+    Daylight-saving transitions are resolved deterministically:
 
     * **Ambiguous** times (the repeated hour when clocks fall back) are grouped per local
-      calendar date, so every transition is resolved on its own. Within a group, the
-      **backward jump of the wall clock** (a sample not later than its predecessor, ``NaT``
-      rows skipped) is the switch point: samples before it are summer time, samples from it
-      on standard time. This needs no complete hour and tolerates missing samples. A group
-      without exactly one such jump (e.g. a single sample in the repeated hour) is read as
-      **standard time** and marked ``unresolved``.
+      calendar date, so every transition is resolved on its own. Within a group (``NaT``
+      rows skipped), a **backward jump of the wall clock** (a sample strictly earlier than its
+      predecessor) is the switch point: samples before it are summer time, samples from it on
+      standard time. Only a group with **exactly one** jump is resolved; this needs no
+      complete hour and tolerates missing samples. Every other group is marked
+      ``unresolved``, with a warning, and gets a best guess: without a jump, the split that
+      keeps consecutive samples (including the nearest unambiguous neighbours) farthest
+      apart, if that split is strictly increasing and unique; otherwise (several jumps,
+      ties) standard time.
+    * **Equal consecutive wall-clock values** in the repeated hour are duplicates, not a
+      jump. Both copies get the same offset, hence the same UTC instant, and are then
+      handled by the collision rule below (``NaT`` + ``unresolved``).
     * **Nonexistent** times (the skipped hour when clocks spring forward) are read with the UTC
       offset in effect *before* the transition (PEP 495, ``fold=0``), i.e. shifted forward by
       the length of the gap. Samples inside the gap usually mean that the device clock does
@@ -101,18 +116,22 @@ class LocalTimeConverter:
         Parameters
         ----------
         local_naive : pandas.Series
-            Naive ``datetime64`` timestamps in this zone's wall-clock time, in recorded order
-            (resolution of ambiguous times relies on that order). ``NaT`` stays ``NaT``.
+            Naive ``datetime64`` timestamps in this zone's wall-clock time, in source order,
+            oldest first (see the class docstring). ``NaT`` stays ``NaT``.
 
         Returns
         -------
         ConversionResult
             UTC timestamps (``datetime64[ns, UTC]``), the suspect and the unresolved masks.
+            Drop (and report) the ``NaT`` rows and handle the ``unresolved`` ones before
+            passing the timestamps to :meth:`MeasurementSeries.from_records`.
 
         Raises
         ------
         TypeError
             If the series is not of a naive ``datetime64`` dtype.
+        ValueError
+            If the unambiguous rows are not in increasing time order (e.g. newest first).
         """
         naive = self._checked_naive(local_naive).reset_index(drop=True)
         present = naive.notna().to_numpy()
@@ -131,6 +150,7 @@ class LocalTimeConverter:
             .isna()
             .to_numpy()
         )
+        self._check_order(naive, ambiguous | nonexistent | ~present)
         summer_time, unresolved = self._resolve_ambiguous(naive, ambiguous)
         localized = naive.dt.tz_localize(self._zone, ambiguous=summer_time, nonexistent="NaT")
         utc = localized.dt.tz_convert("UTC").dt.as_unit("ns")
@@ -156,6 +176,19 @@ class LocalTimeConverter:
             unresolved=pd.Series(unresolved | collided, index=index, name="unresolved"),
         )
 
+    @staticmethod
+    def _check_order(naive: pd.Series, skipped: npt.NDArray[np.bool_]) -> None:
+        """Raise if the rows outside daylight-saving hours decrease in time."""
+        wall_clock = naive.to_numpy()[~skipped]
+        decreasing = np.flatnonzero(wall_clock[1:] < wall_clock[:-1])
+        if len(decreasing):
+            first = decreasing[0]
+            raise ValueError(
+                "Local timestamps must be in source order, oldest first (do not sort by "
+                f"local time, reverse a newest-first export): {wall_clock[first + 1]} follows "
+                f"{wall_clock[first]}."
+            )
+
     def _resolve_ambiguous(
         self, naive: pd.Series, ambiguous: npt.NDArray[np.bool_]
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
@@ -176,18 +209,18 @@ class LocalTimeConverter:
         days = naive.to_numpy()[positions].astype("datetime64[D]")
         for day in np.unique(days):
             group = positions[days == day]
-            n_summer = candidates.switch_point(group, ambiguous)
-            if n_summer is None:
+            n_summer, resolved = candidates.switch_point(group, ambiguous)
+            summer_time[group[:n_summer]] = True
+            if not resolved:
                 unresolved[group] = True
                 logger.warning(
-                    "%d ambiguous local time(s) on %s in %s cannot be resolved from the "
-                    "sample order; reading them as standard time.",
+                    "%d ambiguous local time(s) on %s in %s have no single clock jump; "
+                    "their offsets are a guess (%d read as summer time).",
                     len(group),
                     day,
                     self.timezone,
+                    n_summer,
                 )
-                continue
-            summer_time[group[:n_summer]] = True
         return summer_time, unresolved
 
     def local_dates(self, utc: pd.Series) -> pd.Series:
@@ -295,22 +328,27 @@ class _TransitionCandidates:
 
     def switch_point(
         self, group: npt.NDArray[np.intp], ambiguous: npt.NDArray[np.bool_]
-    ) -> int | None:
+    ) -> tuple[int, bool]:
         """Return how many leading rows of an ambiguous group are summer time.
 
-        1. Exactly one backward jump of the wall clock (a sample not later than its
-           predecessor) is the switch point.
-        2. Without any jump, the split that keeps consecutive samples (including the nearest
-           unambiguous neighbours) farthest apart is chosen, because the sensors sample at an
-           almost constant interval; it must be strictly increasing and unique.
-        3. Otherwise (several jumps, ties) ``None``: the group is unresolved.
+        Returns
+        -------
+        tuple of (int, bool)
+            ``(n_summer, resolved)``. ``resolved`` is ``True`` only for rule 1.
+
+        1. Exactly one backward jump of the wall clock (a sample strictly earlier than its
+           predecessor) is the switch point: resolved.
+        2. Without any jump, a guess: the split that keeps consecutive samples (including the
+           nearest unambiguous neighbours) farthest apart, if it is strictly increasing and
+           unique.
+        3. Otherwise (several jumps, ties): standard time for the whole group.
         """
         wall_clock = self.wall_clock_ns[group]
-        jumps = np.flatnonzero(wall_clock[1:] <= wall_clock[:-1]) + 1
+        jumps = np.flatnonzero(wall_clock[1:] < wall_clock[:-1]) + 1
         if len(jumps) == 1:
-            return int(jumps[0])
+            return int(jumps[0]), True
         if len(jumps) > 1:
-            return None
+            return 0, False
         before = self._neighbour(group[0], -1, ambiguous)
         after = self._neighbour(group[-1], 1, ambiguous)
         scores: list[float] = []
@@ -332,8 +370,8 @@ class _TransitionCandidates:
                 scores.append(float(steps.min()))
         best = max(scores)
         if best == -np.inf or scores.count(best) != 1:
-            return None
-        return scores.index(best)
+            return 0, False
+        return scores.index(best), False
 
     def _neighbour(
         self, position: np.intp, direction: int, ambiguous: npt.NDArray[np.bool_]
