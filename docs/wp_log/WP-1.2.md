@@ -448,3 +448,88 @@ compare the median step between consecutive timestamps with the expected samplin
 7. **The sheet mapping in the constructor or the settings: agree.**
 8. **Timestamp unit qualifiers rejected by default: agree.** This is a good guard against
    reading UTC exports as local time.
+
+### Round 2
+
+Verdict: CHANGES_REQUESTED (round 2)
+
+Reviewed commits dfa01a9 and c00e439. Scripts are in `/tmp/claude-0/review-1.2/`: `t1.py`–`t8.py`
+and the new `r2.py` and `r3.py`. `h.py` pins `latest_timestamp` to 2030-01-01.
+
+**Gates observed:**
+- `make lint` → `All checks passed!`, `56 files already formatted`.
+- `make type` → `Success: no issues found in 30 source files`.
+- `make test` → `352 passed`.
+- `make cov` → `TOTAL 1963 0 392 0 100%`.
+- Scope is unchanged: only WP-1.2 files.
+
+**Round 1 findings, re-checked:**
+- **Blocker (fixed).** The exhaustive `t4.py` (5152 overlap files across the fall-back) gives
+  `bad 0`. Rows lost: 2002, all reported. In `t5.py` and `t6.py` the overlapped repeated hour
+  is now either placed correctly or dropped and counted. No row is fabricated.
+- **Majors (fixed):**
+  - The formula workbook and the all-empty file now give ERROR `values-present`.
+  - The 400-digit cell gives a WARNING instead of a crash.
+  - Rows dated 2000 and 2099 are dropped by `timestamps-plausible` (WARNING).
+- **Minors and nits (fixed):**
+  - The US-date file gives ERROR `date-order`.
+  - The worksheet message is now generic.
+  - The date-only docstring now matches the behaviour.
+  - The `.pyc` stays in history, accepted by the orchestrator.
+
+**Regression hunt on normal single exports (`r2.py`, `r3.py`).** No change or loss except
+where noted:
+- One year at 1825 s (`t3.py`): all 17,280 instants are exact, and the newest-first copy is
+  identical.
+- Spring forward: no change.
+- New Year, ISO and day-first text: 332/332 rows, no findings.
+- A 3-day outage in a day-first file whose days are all ≤ 12: no `date-order` false positive.
+- A clock drifting +3 s per sample for a month (+72 min): 1440/1440 rows, no findings.
+- An export ending at the run time with default settings: no findings. The same export with
+  the clock 2 h fast: no findings.
+- Clock corrections back by 300 s and 4200 s: no row lost.
+- A clock correction back by 3 h: 1 row dropped (`large-backward-steps`, WARNING). This is
+  acceptable.
+- A normal export that ends or starts inside the repeated hour on 2026-10-25 loses 1–4
+  repeated-hour rows, reported in `daylight-saving`. This includes rows the WP-0.1 converter
+  could have resolved: an export ending at 02:11 CET after the jump loses 3 rows. This is the
+  accepted price of departure 1 below.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| blocker | `src/sivin/ingest/parsers/order.py:304-314`, `src/sivin/ingest/validation.py:952-975` | One forward-glitched timestamp discards the rest of the file, and the glitched row is imported. `_stale` compares every row with the running maximum. A single row that jumps forward by more than `max_backward_step_s` makes every later genuine row "stale". | open |
+| minor | `src/sivin/ingest/parsers/order.py:271-302` | `incomplete_transitions` also drops repeated-hour rows that a single export *could* resolve, for example an export ending after the clock jump (02:10S, 02:40S, 02:11W). The loss is reported, and an overlapping next export restores the rows. Optional refinement: keep a group when its rows after the jump differ in value from the rows before it, because overlap copies repeat their values. Otherwise document that WP-1.4 must merge overlapping exports. | open |
+
+**Details of the blocker.**
+- **Repro 1:** a normal 2000-row export from 2026-03-01 at 1825 s, with row 2's timestamp
+  60 days late (still before the run time).
+  - Result: the file is accepted with **2 rows**. The wrong row at 2026-04-29 23:30:25Z is
+    kept, and 1998 genuine rows are dropped.
+  - The only finding is "WARNING large-backward-steps … 1998 row(s) … dropped".
+- **Repro 2:** the same glitch of +3 days at row 51 of 100 → 49 genuine rows are dropped and
+  the wrong row is kept.
+
+This gives a valid series with a wrong timestamp and almost no data, with only a WARNING. It is
+worse than doing nothing. Fix:
+- Do not let a single row move the reference. Options:
+  - compare with the previous accepted row and decide which side is the outlier by how many
+    rows support it (an isolated forward jump followed by a return is the outlier, so drop it);
+  - or use a robust running reference, such as the median of the last k accepted rows.
+- Give `large-backward-steps` (and any other drop) a share limit like the other rules, so that
+  dropping more than `max_implausible_timestamp_share` of the rows is an ERROR, never a
+  WARNING.
+- Add both repros as tests.
+
+**Assessment of the worker's departures:**
+1. **Incomplete-transition check in every table: agree.** An overlap that repeats the summer
+   half at the end of a file (`… 01:33; 02:03; 02:33; 02:03; 02:33`) has the same timestamps
+   as a genuine export that stops after the jump. Dropping both is the only choice that never
+   places a row wrongly. The cost is bounded: at most about 1 h, once a year, at file
+   boundaries; it is reported, and the next overlapping export recovers it. See the minor
+   finding.
+2. **Counting long steps instead of the median: agree.** At 30-minute sampling only about 1 in
+   48 steps changes under a day/month swap, so the median cannot see it. The New Year and
+   outage cases above produced no false positive.
+3. **One empty variable is a WARNING: agree.** It is consistent with the per-variable NaN
+   policy (round 1, deviation 1) and keeps temperature when the humidity channel fails. An
+   ERROR when both are empty covers the "no measurement" case.
