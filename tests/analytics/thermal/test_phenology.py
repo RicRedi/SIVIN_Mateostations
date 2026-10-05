@@ -1,7 +1,7 @@
 """``budburst``, ``gfv`` and ``gsr``: hand-computed stage dates (synthetic data).
 
-The critical sums used here (except the GFV defaults) are synthetic test values, not
-literature values.
+The critical sums used here are test inputs, not verified literature values. The GFV test
+sums 1282 / 2528 °C·d are the unverified candidate values listed in docs/indices/gfv.md.
 """
 
 from __future__ import annotations
@@ -31,17 +31,30 @@ ContextFactory = Callable[..., IndexContext]
 ConstantDays = Callable[[date, int, tuple[float, float, float]], dict[date, tuple[float, ...]]]
 
 MARCH_TO_OCTOBER_DAYS = 245  # March 1 - October 31
+GFV_TEST_PARAMS = GfvParams(flowering_f_star_c_d=1282.0, veraison_f_star_c_d=2528.0)
+
+
+def test_gfv_not_configured_by_default(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    days = constant_days(date(2026, 3, 1), MARCH_TO_OCTOBER_DAYS, (6.0, 11.0, 18.0))
+    result = GfvIndex().compute(make_context(make_daily(days)))
+    assert result.value is None
+    assert result.details["status"] == NOT_CONFIGURED
 
 
 def test_gfv_both_stages_reached(
     make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
 ) -> None:
     days = constant_days(date(2026, 3, 1), MARCH_TO_OCTOBER_DAYS, (6.0, 11.0, 18.0))
-    result = GfvIndex().compute(make_context(make_daily(days)))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(make_context(make_daily(days)))
     # minmax mean 12 °C, base 0 -> 12 °C·d per day from March 1.
     # flowering F* 1282: 1282 / 12 = 106.8 -> day 107 (sum 1284) = June 15 = DOY 166
     # véraison F* 2528: 2528 / 12 = 210.7 -> day 211 (sum 2532) = September 27 = DOY 270
     assert result.value == 270.0
+    assert result.details["date"] == "2026-09-27"
+    assert result.details["n_missing_days"] == 0
+    assert result.details["n_missing_days_at_start"] == 0
     assert result.unit == "DOY"
     assert result.details["flowering_date"] == "2026-06-15"
     assert result.details["flowering_doy"] == 166
@@ -61,7 +74,7 @@ def test_gfv_veraison_not_reached(
     make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
 ) -> None:
     days = constant_days(date(2026, 3, 1), MARCH_TO_OCTOBER_DAYS, (5.0, 10.0, 15.0))
-    result = GfvIndex().compute(make_context(make_daily(days)))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(make_context(make_daily(days)))
     # 10 °C·d per day: flowering on day 129 (sum 1290) = July 7 = DOY 188;
     # véraison would need 253 days > 245 days of the period.
     assert result.value is None
@@ -77,7 +90,7 @@ def test_gfv_running_season_is_incomplete(
     make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
 ) -> None:
     days = constant_days(date(2026, 3, 1), 122, (6.0, 11.0, 18.0))  # March 1 - June 30
-    result = GfvIndex().compute(make_context(make_daily(days)))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(make_context(make_daily(days)))
     assert result.details["flowering_date"] == "2026-06-15"
     assert result.value is None
     assert result.coverage == pytest.approx(122 / 245)
@@ -85,16 +98,64 @@ def test_gfv_running_season_is_incomplete(
 
 
 def test_gfv_empty_season(make_daily: DailyFactory, make_context: ContextFactory) -> None:
-    result = GfvIndex().compute(make_context(make_daily({date(2026, 2, 1): (1, 2, 3)})))
+    ctx = make_context(make_daily({date(2026, 2, 1): (1, 2, 3)}))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(ctx)
     assert result.value is None
     assert result.details["status"] == NO_COMPLETE_DAYS
 
 
 def test_gfv_params_validation() -> None:
     with pytest.raises(ValidationError, match="must increase"):
-        GfvParams(flowering_f_star_c_d=2600.0)
+        GfvParams(flowering_f_star_c_d=2600.0, veraison_f_star_c_d=2528.0)
+    with pytest.raises(ValidationError, match="or neither"):
+        GfvParams(flowering_f_star_c_d=1282.0)
     with pytest.raises(ValidationError):
-        GfvParams(veraison_f_star_c_d=-1.0)
+        GfvParams(flowering_f_star_c_d=1.0, veraison_f_star_c_d=-1.0)
+    assert GfvIndex.stages_of(GfvParams()) == ()
+
+
+def test_gfv_leap_year_shifts_doy_not_date(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    days = constant_days(date(2024, 3, 1), MARCH_TO_OCTOBER_DAYS, (6.0, 11.0, 18.0))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(make_context(make_daily(days), year=2024))
+    # same accumulation from March 1 -> same date September 27, but DOY 271 in a leap year
+    assert result.details["date"] == "2024-09-27"
+    assert result.value == 271.0
+
+
+def test_late_deployment_start_not_covered(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    """Round-1 review probe: data starting June 1 predicted a late véraison."""
+    days = constant_days(date(2026, 6, 1), 153, (6.0, 11.0, 18.0))  # June 1 - October 31
+    ctx = make_context(make_daily(days))
+    result = GfvIndex(GFV_TEST_PARAMS).compute(ctx)
+    # March 1 -> June 1 = 31 + 30 + 31 = 92 days missing at the start
+    assert result.value is None
+    assert result.details["status"] == "accumulation start not covered"
+    assert result.details["n_missing_days_at_start"] == 92
+    assert result.daily is not None
+
+    tolerant = GfvParams(
+        flowering_f_star_c_d=1282.0, veraison_f_star_c_d=2528.0, max_missing_days_at_start=92
+    )
+    # with the start tolerated: 1282 / 12 -> day 107 from June 1 = June 1 + 106 d = September 15
+    # (July 1 = +30, August 1 = +61, September 1 = +92, +106 = September 15)
+    assert GfvIndex(tolerant).compute(ctx).details["flowering_date"] == "2026-09-15"
+
+
+def test_one_missing_first_day(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    days = constant_days(date(2026, 1, 1), 10, (4.0, 8.0, 14.0))
+    ctx = make_context(make_daily(days, {date(2026, 1, 1): 0.5}))
+    assert BudburstIndex(BudburstParams(f_star_c_d=20.0)).compute(ctx).value is None
+    tolerant = BudburstParams(f_star_c_d=20.0, max_missing_days_at_start=1)
+    result = BudburstIndex(tolerant).compute(ctx)
+    # January 2-6: 5 * 4 = 20 -> January 6 (DOY 6)
+    assert result.value == 6.0
+    assert result.details["n_missing_days_at_start"] == 1
 
 
 def test_budburst_not_configured_by_default(

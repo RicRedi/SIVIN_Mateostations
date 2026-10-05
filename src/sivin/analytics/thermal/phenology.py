@@ -17,7 +17,7 @@ from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sivin.analytics.base import IndexContext, IndexResult, index_registry
+from sivin.analytics.base import IndexContext, IndexResult, SeasonDays, index_registry
 from sivin.analytics.thermal.base import STATUS_KEY, ThermalIndex, ThermalParams
 from sivin.analytics.thermal.thermal_time import ThermalTimeCurve, ThermalTimeModel
 from sivin.core.season import MonthDay, Season
@@ -33,20 +33,21 @@ NOT_REACHED: Final = "not reached"
 NOT_CONFIGURED: Final = "not configured"
 """Status detail of a model without any stage parameters."""
 
+START_NOT_COVERED: Final = "accumulation start not covered"
+"""Status detail when the first days of the accumulation period are missing."""
+
+MISSING_AT_START_KEY: Final = "n_missing_days_at_start"
+"""Detail key: days from the period start to the first complete day."""
+
+DEFAULT_MAX_MISSING_DAYS_AT_START: Final = 0
+"""Project default of ``max_missing_days_at_start`` (not from literature; to be tuned)."""
+
 GFV_BASE_TEMP_C: Final = 0.0
 """Base temperature of the Grapevine Flowering Véraison model in °C (Parker et al., 2011)."""
 
 GFV_START: Final = MonthDay(3, 1)
 """Start of the GFV accumulation, day of year 60 = March 1 in common years (Parker et al., 2011);
 defined here as March 1 in every year."""
-
-GFV_FLOWERING_F_STAR_C_D: Final = 1282.0
-"""Critical sum for flowering of the general GFV model in °C·d (Parker et al., 2011)
-[to be verified]."""
-
-GFV_VERAISON_F_STAR_C_D: Final = 2528.0
-"""Critical sum for véraison of the general GFV model in °C·d (Parker et al., 2011)
-[to be verified]."""
 
 GSR_BASE_TEMP_C: Final = 0.0
 """Base temperature of the Grapevine Sugar Ripeness model in °C (Parker et al., 2020)."""
@@ -94,15 +95,26 @@ class PhenologyParams(ThermalParams):
         description="Prediction period: accumulation starts on its first day; stages not "
         "reached by its last day are 'not reached'."
     )
+    max_missing_days_at_start: int = Field(
+        DEFAULT_MAX_MISSING_DAYS_AT_START,
+        ge=0,
+        description="Maximum number of incomplete days (d) at the start of the period before "
+        "the first complete day; more means the accumulation start is not covered (e.g. late "
+        "deployment) and no date is predicted. Project default 0, to be tuned.",
+    )
 
 
 class ThermalTimePhenologyIndex[P: PhenologyParams](ThermalIndex[P]):
     """Predicts the dates of stages from a thermal-time sum (see the module docstring).
 
-    The value is the day of the year of the **last** stage of :meth:`stages` (``None`` if it
-    is not reached or no stage is configured). Coverage and completeness refer to the days
+    The value is the day of the year of the **last** stage of :meth:`stages`, its local date
+    is ``details["date"]``. In leap years every date after February has a DOY one higher
+    than in common years; compare dates, not DOY, across years. The value is ``None`` if the
+    stage is not reached, no stage is configured or more than ``max_missing_days_at_start``
+    days are missing at the start of the period. Coverage and completeness refer to the days
     from the period start until that stage, or until the period end if it is not reached.
-    ``daily`` is the cumulative sum in °C·d.
+    Incomplete days contribute nothing, which delays the predicted date
+    (``details["n_missing_days"]``). ``daily`` is the cumulative sum in °C·d.
     """
 
     unit = DAY_OF_YEAR_UNIT
@@ -139,13 +151,46 @@ class ThermalTimePhenologyIndex[P: PhenologyParams](ThermalIndex[P]):
         if mean_temp_c.empty:
             return self._empty_result(ctx, selection)
         curve = ThermalTimeModel(self.params.base_temp_c).accumulate(mean_temp_c)
+        missed_at_start = (mean_temp_c.index[0] - period.start.in_year(ctx.year)).days
+        if missed_at_start > self.params.max_missing_days_at_start:
+            return self._start_not_covered(ctx, selection, curve, missed_at_start)
+        return self._prediction(ctx, stages, curve, missed_at_start)
+
+    def _start_not_covered(
+        self, ctx: IndexContext, selection: SeasonDays, curve: ThermalTimeCurve, missed: int
+    ) -> IndexResult:
+        logger.info(
+            "%s for sensor %s in %d: %s (%d days missing).",
+            self.index_id,
+            ctx.sensor_id,
+            ctx.year,
+            START_NOT_COVERED,
+            missed,
+        )
+        details: dict[str, float | int | str] = {
+            STATUS_KEY: START_NOT_COVERED,
+            MISSING_AT_START_KEY: missed,
+        }
+        return self._result(ctx, selection, None, daily=curve.cumulative_c_d, details=details)
+
+    def _prediction(
+        self,
+        ctx: IndexContext,
+        stages: tuple[PhenologyStage, ...],
+        curve: ThermalTimeCurve,
+        missed_at_start: int,
+    ) -> IndexResult:
+        period = self.params.period
         reached = {stage.label: curve.date_reached(stage.f_star_c_d) for stage in stages}
         details = _stage_details(stages, reached, curve)
+        details[MISSING_AT_START_KEY] = missed_at_start
         last_date = reached[stages[-1].label]
         if last_date is None:
             details[STATUS_KEY] = f"{stages[-1].label} {NOT_REACHED}"
+            selection = self._season_days(ctx, period)
             return self._result(ctx, selection, None, daily=curve.cumulative_c_d, details=details)
         selection = self._season_days(ctx, Season(period.start, _month_day(last_date)))
+        details["date"] = last_date.isoformat()
         value_doy = float(_day_of_year(last_date))
         return self._result(ctx, selection, value_doy, daily=curve.cumulative_c_d, details=details)
 
@@ -229,34 +274,41 @@ class GfvParams(PhenologyParams):
         description="Prediction period; starts March 1 (day of year 60 in common years, Parker "
         "et al., 2011); the end, October 31, is a project default.",
     )
-    flowering_f_star_c_d: float = Field(
-        GFV_FLOWERING_F_STAR_C_D,
+    flowering_f_star_c_d: float | None = Field(
+        None,
         gt=0.0,
-        description="Critical sum for flowering in °C·d, general model of Parker et al. (2011) "
-        "[to be verified]; cultivar values in Parker et al. (2013).",
+        description="Critical sum for flowering in °C·d; no default (general model: Parker et "
+        "al., 2011; cultivars: Parker et al., 2013). Without it the result is 'not "
+        "configured'.",
     )
-    veraison_f_star_c_d: float = Field(
-        GFV_VERAISON_F_STAR_C_D,
+    veraison_f_star_c_d: float | None = Field(
+        None,
         gt=0.0,
-        description="Critical sum for véraison in °C·d, general model of Parker et al. (2011) "
-        "[to be verified]; cultivar values in Parker et al. (2013).",
+        description="Critical sum for véraison in °C·d; no default (general model: Parker et "
+        "al., 2011; cultivars: Parker et al., 2013). Without it the result is 'not "
+        "configured'.",
     )
 
     @model_validator(mode="after")
-    def _check_order(self) -> Self:
+    def _check_stages(self) -> Self:
+        if (self.flowering_f_star_c_d is None) != (self.veraison_f_star_c_d is None):
+            raise ValueError("Set both flowering_f_star_c_d and veraison_f_star_c_d, or neither.")
         _check_increasing(GfvIndex.stages_of(self))
         return self
 
 
 @index_registry.register
 class GfvIndex(ThermalTimePhenologyIndex[GfvParams]):
-    """Grapevine Flowering Véraison model: value = day of year of véraison."""
+    """Grapevine Flowering Véraison model: value = day of year of véraison.
+
+    Not configured (``value=None``) until both critical sums are set.
+    """
 
     index_id = "gfv"
     params_model = GfvParams
 
     def stages(self) -> tuple[PhenologyStage, ...]:
-        """Return flowering and véraison with their critical sums."""
+        """Return flowering and véraison with their critical sums (empty if not set)."""
         return self.stages_of(self.params)
 
     @staticmethod
@@ -271,8 +323,10 @@ class GfvIndex(ThermalTimePhenologyIndex[GfvParams]):
         Returns
         -------
         tuple of PhenologyStage
-            Flowering and véraison, in this order.
+            Flowering and véraison, in this order; empty if the critical sums are not set.
         """
+        if params.flowering_f_star_c_d is None or params.veraison_f_star_c_d is None:
+            return ()
         return (
             PhenologyStage(label="flowering", f_star_c_d=params.flowering_f_star_c_d),
             PhenologyStage(label="veraison", f_star_c_d=params.veraison_f_star_c_d),

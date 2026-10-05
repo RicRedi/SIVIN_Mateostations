@@ -8,7 +8,7 @@ from typing import Final, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sivin.analytics.base import IndexContext, IndexResult, index_registry
-from sivin.analytics.thermal.base import STATUS_KEY, ThermalIndex, ThermalParams
+from sivin.analytics.thermal.base import STATUS_KEY, ClassifiedSumParams, ThermalIndex
 from sivin.analytics.thermal.classification import ClassBound, IntervalClassification
 from sivin.analytics.thermal.formulas import huglin_daily
 from sivin.core.season import Season
@@ -23,20 +23,21 @@ NO_COEFFICIENT: Final = "latitude coefficient K unavailable (latitude unknown or
 
 
 class LatitudeBand(BaseModel):
-    """Latitude band ``[min_lat_deg, max_lat_deg)`` with its day-length coefficient K.
+    """Latitude band ``(min_lat_deg, max_lat_deg]`` with its day-length coefficient K.
 
     Attributes
     ----------
     min_lat_deg, max_lat_deg : float
-        Inclusive lower and exclusive upper latitude in degrees north.
+        Exclusive lower and inclusive upper latitude in degrees north (bands are tabulated
+        as e.g. 48°01'-50° N).
     k : float
         Day-length coefficient, dimensionless.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    min_lat_deg: float = Field(description="Inclusive lower latitude in degrees north.")
-    max_lat_deg: float = Field(description="Exclusive upper latitude in degrees north.")
+    min_lat_deg: float = Field(description="Exclusive lower latitude in degrees north.")
+    max_lat_deg: float = Field(description="Inclusive upper latitude in degrees north.")
     k: float = Field(gt=0.0, description="Day-length coefficient K, dimensionless.")
 
     @model_validator(mode="after")
@@ -48,7 +49,7 @@ class LatitudeBand(BaseModel):
         return self
 
     def contains(self, latitude_deg: float) -> bool:
-        """Tell whether ``min_lat_deg <= latitude_deg < max_lat_deg``.
+        """Tell whether ``min_lat_deg < latitude_deg <= max_lat_deg``.
 
         Parameters
         ----------
@@ -60,7 +61,7 @@ class LatitudeBand(BaseModel):
         bool
             Whether the latitude is in this band.
         """
-        return self.min_lat_deg <= latitude_deg < self.max_lat_deg
+        return self.min_lat_deg < latitude_deg <= self.max_lat_deg
 
 
 TONIETTO_CARBONNEAU_K_BANDS: Final = (
@@ -71,7 +72,9 @@ TONIETTO_CARBONNEAU_K_BANDS: Final = (
     LatitudeBand(min_lat_deg=48.0, max_lat_deg=50.0, k=1.06),
 )
 """K by 2° latitude band, 40-50° N, after Tonietto and Carbonneau (2004) [to be verified]:
-the range K = 1.02-1.06 for 40-50° is the published one; the exact band edges are not."""
+the range K = 1.02-1.06 for 40-50° is the published one; the bands are upper-inclusive as
+commonly tabulated (40°01'-42° -> 1.02, ..., 48°01'-50° -> 1.06), exact edges not verified.
+Linear interpolation of K, used by some authors, is not implemented."""
 
 HUGLIN_CLASS_BOUNDS: Final = (
     ("very_cool", 1500.0),
@@ -101,7 +104,7 @@ def huglin_classes() -> IntervalClassification:
     )
 
 
-class HuglinParams(ThermalParams):
+class HuglinParams(ClassifiedSumParams):
     """Parameters of :class:`HuglinIndex`."""
 
     base_temp_c: float = Field(
@@ -156,7 +159,9 @@ class HuglinParams(ThermalParams):
 class HuglinIndex(ThermalIndex[HuglinParams]):
     r"""Huglin heliothermal index :math:`\sum K \max(0, ((T_{mean}-10) + (T_{max}-10))/2)`.
 
-    The class is assigned only to a complete season.
+    Incomplete days contribute nothing, so the sum is biased low when days are missing
+    (``details["n_missing_days"]``). The class is assigned only to a complete season with at
+    most ``max_missing_days`` missing days.
     """
 
     index_id = "huglin"
@@ -174,7 +179,7 @@ class HuglinIndex(ThermalIndex[HuglinParams]):
         Returns
         -------
         IndexResult
-            Value in °C·d, class (complete seasons only), cumulative curve and ``k``.
+            Value in °C·d, class (see class docstring), cumulative curve and ``k``.
         """
         selection = self._season_days(ctx, self.params.period)
         k = self.params.coefficient(ctx.latitude_deg)
@@ -193,7 +198,7 @@ class HuglinIndex(ThermalIndex[HuglinParams]):
         contribution = huglin_daily(mean_temp_c, max_temp_c, self.params.base_temp_c, k)
         cumulative = contribution.cumsum().rename("cumulative_c_d")
         value_c_d = float(cumulative.iloc[-1])
-        label = self.params.classes.classify(value_c_d) if selection.complete else None
+        label = self.params.sum_class(self.params.classes, value_c_d, selection)
         return self._result(
             ctx, selection, value_c_d, classification=label, daily=cumulative, details={"k": k}
         )

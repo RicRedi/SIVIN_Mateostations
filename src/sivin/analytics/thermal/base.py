@@ -10,6 +10,7 @@ import pandas as pd
 from pydantic import Field, field_validator
 
 from sivin.analytics.base import ClimateIndex, IndexContext, IndexParams, IndexResult, SeasonDays
+from sivin.analytics.thermal.classification import IntervalClassification
 from sivin.analytics.thermal.daily_mean import DEFAULT_DAILY_MEAN, daily_mean_registry
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,30 @@ STATUS_KEY: Final = "status"
 
 NO_COMPLETE_DAYS: Final = "no complete days in the period"
 """Status detail of a result without any complete day in its period."""
+
+MISSING_DAYS_KEY: Final = "n_missing_days"
+"""Key of :attr:`IndexResult.details`: days of the evaluated period that are not complete."""
+
+DEFAULT_MAX_MISSING_DAYS: Final = 0
+"""Project default of ``max_missing_days``: a sum is classified only without missing days.
+
+Not from literature; to be tuned on real data."""
+
+
+def missing_days(selection: SeasonDays) -> int:
+    """Return the number of days of the evaluated period that are not complete.
+
+    Parameters
+    ----------
+    selection : SeasonDays
+        Complete days of the period.
+
+    Returns
+    -------
+    int
+        ``n_period_days - len(days)``.
+    """
+    return selection.n_period_days - len(selection.days)
 
 
 class ThermalParams(IndexParams):
@@ -42,6 +67,44 @@ class ThermalParams(IndexParams):
                 f"known: {', '.join(daily_mean_registry.names())}."
             )
         return name
+
+
+class ClassifiedSumParams(ThermalParams):
+    """Parameters of a classified heat sum (``gdd_winkler``, ``huglin``)."""
+
+    max_missing_days: int = Field(
+        DEFAULT_MAX_MISSING_DAYS,
+        ge=0,
+        description=(
+            "Maximum number of incomplete days (d) in the period for which the sum is still "
+            "classified; incomplete days contribute nothing, so the sum is biased low. "
+            "Project default 0, to be tuned on real data."
+        ),
+    )
+
+    def sum_class(
+        self, classes: IntervalClassification, value: float, selection: SeasonDays
+    ) -> str | None:
+        """Classify a heat sum only if the season is complete and no more days are missing.
+
+        Parameters
+        ----------
+        classes : IntervalClassification
+            The classes of the index.
+        value : float
+            The sum in the unit of the classes.
+        selection : SeasonDays
+            The complete days the sum was computed from.
+
+        Returns
+        -------
+        str or None
+            The class label, or ``None`` if the season is incomplete or more than
+            :attr:`max_missing_days` days are missing.
+        """
+        if not selection.complete or missing_days(selection) > self.max_missing_days:
+            return None
+        return classes.classify(value)
 
 
 class ThermalIndex[P: ThermalParams](ClimateIndex[P]):
@@ -97,14 +160,18 @@ class ThermalIndex[P: ThermalParams](ClimateIndex[P]):
         daily : pandas.Series, optional
             Daily or cumulative curve indexed by local date.
         details : Mapping, optional
-            Additional values; ``n_days`` (number of complete days) is always added.
+            Additional values; ``n_days`` (number of complete days) and ``n_missing_days``
+            (incomplete days of the evaluated period) are always added.
 
         Returns
         -------
         IndexResult
             The result.
         """
-        all_details: dict[str, float | int | str] = {"n_days": len(selection.days)}
+        all_details: dict[str, float | int | str] = {
+            "n_days": len(selection.days),
+            MISSING_DAYS_KEY: missing_days(selection),
+        }
         all_details.update(details or {})
         return IndexResult(
             index_id=self.index_id,

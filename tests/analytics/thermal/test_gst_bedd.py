@@ -105,6 +105,15 @@ def test_bedd_without_dtr_adjustment_and_cap(hand_context: IndexContext) -> None
     assert result.value == pytest.approx(2 + 0 + 7 + 14 + 8)  # plain GDD = 31
 
 
+def test_bedd_cap_before_adjustment(hand_context: IndexContext) -> None:
+    result = BeddIndex(BeddParams(cap_order="before_adjustment")).compute(hand_context)
+    # Apr 1: 2 - 0.5 = 1.5; Apr 2: max(0, -0.5) = 0; Apr 3: 7
+    # Apr 5: min(9, 14) + 1.75 = 10.75; Apr 6: 8 + 0.75 = 8.75 -> 28.0
+    assert result.value == pytest.approx(28.0)
+    with pytest.raises(ValidationError):
+        BeddParams.model_validate({"cap_order": "never"})
+
+
 def test_bedd_empty_and_validation(make_daily: DailyFactory, make_context: ContextFactory) -> None:
     result = BeddIndex().compute(make_context(make_daily({date(2026, 3, 1): (1, 3, 5)})))
     assert result.value is None

@@ -62,6 +62,7 @@ def test_gdd_hand_computed(hand_context: IndexContext) -> None:
     assert result.complete is False
     assert result.classification is None  # no region for an incomplete season
     assert result.details["n_days"] == 3
+    assert result.details["n_missing_days"] == 211  # 214 - 3
     assert result.estimated is False
 
 
@@ -83,6 +84,41 @@ def test_gdd_full_season_region(
     assert result.classification == "region_iii"
 
 
+@pytest.mark.parametrize(("max_missing_days", "region"), [(0, None), (2, None), (3, "region_iii")])
+def test_gdd_region_needs_few_missing_days(
+    max_missing_days: int,
+    region: str | None,
+    make_daily: DailyFactory,
+    make_context: ContextFactory,
+    constant_days: ConstantDays,
+) -> None:
+    days = constant_days(date(2026, 4, 1), 214, (12.0, 15.0, 24.0))
+    for day in (date(2026, 5, 10), date(2026, 5, 11), date(2026, 7, 1)):
+        del days[day]
+    params = GddWinklerParams(max_missing_days=max_missing_days)
+    result = GddWinklerIndex(params).compute(make_context(make_daily(days)))
+    # 211 complete days * 8 = 1688 °C·d; coverage 211 / 214 = 0.986 -> complete
+    assert result.value == pytest.approx(1688.0)
+    assert result.complete is True
+    assert result.details["n_missing_days"] == 3
+    assert result.classification == region
+
+
+def test_huglin_class_needs_few_missing_days(
+    make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
+) -> None:
+    days = constant_days(date(2026, 4, 1), 183, (12.0, 15.0, 24.0))
+    del days[date(2026, 6, 1)]
+    ctx = make_context(make_daily(days))
+    assert HuglinIndex().compute(ctx).classification is None
+    relaxed = HuglinIndex(HuglinParams(max_missing_days=1)).compute(ctx)
+    # 182 * 11.66 = 2122.12 -> temperate_warm
+    assert relaxed.value == pytest.approx(2122.12)
+    assert relaxed.classification == "temperate_warm"
+    with pytest.raises(ValidationError):
+        HuglinParams(max_missing_days=-1)
+
+
 def test_gdd_season_below_coverage_threshold_has_no_region(
     make_daily: DailyFactory, make_context: ContextFactory, constant_days: ConstantDays
 ) -> None:
@@ -100,7 +136,7 @@ def test_gdd_empty_season(make_daily: DailyFactory, make_context: ContextFactory
     assert result.coverage == 0.0
     assert result.complete is False
     assert result.daily is None
-    assert result.details == {"n_days": 0, "status": NO_COMPLETE_DAYS}
+    assert result.details == {"n_days": 0, "n_missing_days": 214, "status": NO_COMPLETE_DAYS}
 
 
 def test_huglin_hand_computed(hand_context: IndexContext) -> None:
@@ -130,13 +166,22 @@ def test_huglin_full_season_class(
 
 @pytest.mark.parametrize(
     ("latitude_deg", "expected_k"),
-    [(40.0, 1.02), (41.99, 1.02), (42.0, 1.03), (45.0, 1.04), (47.5, 1.05), (48.88, 1.06)],
+    [
+        (40.01, 1.02),
+        (42.0, 1.02),  # upper-inclusive bands: 40°01'-42° -> 1.02
+        (42.01, 1.03),
+        (45.0, 1.04),
+        (47.5, 1.05),
+        (48.0, 1.05),
+        (48.88, 1.06),
+        (50.0, 1.06),
+    ],
 )
 def test_huglin_k_by_latitude(latitude_deg: float, expected_k: float) -> None:
     assert HuglinParams().coefficient(latitude_deg) == expected_k
 
 
-@pytest.mark.parametrize("latitude_deg", [None, 39.9, 50.0, -48.88])
+@pytest.mark.parametrize("latitude_deg", [None, 39.9, 40.0, 50.01, -48.88])
 def test_huglin_without_k(
     latitude_deg: float | None, make_daily: DailyFactory, make_context: ContextFactory
 ) -> None:
@@ -163,6 +208,8 @@ def test_huglin_params_validation() -> None:
         LatitudeBand(min_lat_deg=50.0, max_lat_deg=48.0, k=1.0)
     custom = HuglinParams(k_bands=(LatitudeBand(min_lat_deg=48.0, max_lat_deg=49.0, k=1.1),))
     assert custom.coefficient(48.5) == 1.1
+    assert custom.coefficient(49.0) == 1.1
+    assert custom.coefficient(48.0) is None
 
 
 def test_registry_creates_thermal_indices_from_config_mappings() -> None:
@@ -231,3 +278,61 @@ def test_huglin_parity_with_legacy(raw_context: IndexContext) -> None:
     params = HuglinParams(daily_mean="sample_mean", k_override=1.05)
     result = HuglinIndex(params).compute(raw_context)
     assert result.value == pytest.approx(legacy, rel=1e-12)
+
+
+def _synthetic_year_series(
+    sensor_id: SensorId, year: int, first: str = "01-01", gap: tuple[str, str] | None = None
+) -> MeasurementSeries:
+    """Smooth synthetic annual and diurnal cycle at 1825 s steps (reviewer probe, round 1).
+
+    ``gap`` removes all samples in ``[gap[0], gap[1])`` (local dates).
+    """
+    start = pd.Timestamp(f"{year}-{first} 00:00", tz=PRAGUE)
+    end = pd.Timestamp(f"{year}-12-31 23:59", tz=PRAGUE)
+    stamps = pd.date_range(start, end, freq=f"{SAMPLE_INTERVAL_S}s")
+    day_of_year = stamps.dayofyear.to_numpy()
+    hour = stamps.hour.to_numpy() + stamps.minute.to_numpy() / 60.0
+    temp_c = (
+        10.0
+        - 12.0 * np.cos(2 * np.pi * (day_of_year - 15) / 365)
+        + 6.0 * np.sin(2 * np.pi * (hour - 9) / 24)
+    )
+    keep = np.ones(len(stamps), dtype=bool)
+    if gap is not None:
+        keep &= ~(
+            (stamps >= pd.Timestamp(gap[0], tz=PRAGUE)) & (stamps < pd.Timestamp(gap[1], tz=PRAGUE))
+        )
+    return MeasurementSeries.from_records(
+        sensor_id, stamps[keep], temp_c[keep], np.full(int(keep.sum()), 70.0)
+    )
+
+
+def _raw_context(series: MeasurementSeries, make_context: ContextFactory) -> IndexContext:
+    daily = DailyWeather.from_series(
+        series, PRAGUE, float(SAMPLE_INTERVAL_S), int(QcFlag.DEFAULT_EXCLUDE)
+    )
+    return make_context(daily, year=2025, series=series)
+
+
+def test_reviewer_probe_gap_is_not_classified(
+    sensor_id: SensorId, make_context: ContextFactory
+) -> None:
+    """Round-1 review probe: a 19-day gap (May 1-19) left the season complete and classified."""
+    full = GddWinklerIndex().compute(
+        _raw_context(_synthetic_year_series(sensor_id, 2025), make_context)
+    )
+    gap = GddWinklerIndex().compute(
+        _raw_context(
+            _synthetic_year_series(sensor_id, 2025, gap=("2025-05-01", "2025-05-20")),
+            make_context,
+        )
+    )
+    assert full.details["n_missing_days"] == 0
+    assert full.classification is not None
+    assert gap.details["n_missing_days"] == 19
+    assert gap.coverage == pytest.approx(195 / 214)  # 0.911 >= 0.9
+    assert gap.complete is True  # plan coverage rule unchanged
+    assert gap.classification is None  # biased-low sum is not classified
+    assert full.value is not None
+    assert gap.value is not None
+    assert gap.value < full.value

@@ -8,7 +8,7 @@ from typing import Final
 from pydantic import Field
 
 from sivin.analytics.base import IndexContext, IndexResult, index_registry
-from sivin.analytics.thermal.base import ThermalIndex, ThermalParams
+from sivin.analytics.thermal.base import ClassifiedSumParams, ThermalIndex
 from sivin.analytics.thermal.classification import ClassBound, IntervalClassification
 from sivin.analytics.thermal.formulas import fahrenheit_to_celsius_degree_days
 from sivin.analytics.thermal.thermal_time import ThermalTimeModel
@@ -46,7 +46,7 @@ def winkler_regions() -> IntervalClassification:
     return IntervalClassification(bounds=bounds, top_label=WINKLER_REGION_LABELS[-1])
 
 
-class GddWinklerParams(ThermalParams):
+class GddWinklerParams(ClassifiedSumParams):
     """Parameters of :class:`GddWinklerIndex`."""
 
     base_temp_c: float = Field(
@@ -74,8 +74,9 @@ class GddWinklerIndex(ThermalIndex[GddWinklerParams]):
     r"""Growing degree-days :math:`\sum \max(0, T_{mean} - 10)` with Winkler regions.
 
     The value is the sum over the complete days of the period; ``daily`` is the cumulative
-    curve. The region is assigned only to a complete season (a partial sum would fall into a
-    too cool region).
+    curve. Incomplete days contribute nothing, so the sum is biased low when days are missing
+    (``details["n_missing_days"]``). The region is assigned only to a complete season with at
+    most ``max_missing_days`` missing days.
     """
 
     index_id = "gdd_winkler"
@@ -93,7 +94,7 @@ class GddWinklerIndex(ThermalIndex[GddWinklerParams]):
         Returns
         -------
         IndexResult
-            Value in °C·d, Winkler region (complete seasons only) and cumulative curve.
+            Value in °C·d, Winkler region (see class docstring) and cumulative curve.
         """
         selection = self._season_days(ctx, self.params.period)
         mean_temp_c = self._mean_temp_c(selection)
@@ -101,7 +102,7 @@ class GddWinklerIndex(ThermalIndex[GddWinklerParams]):
             return self._empty_result(ctx, selection)
         curve = ThermalTimeModel(self.params.base_temp_c).accumulate(mean_temp_c)
         value_c_d = curve.total_c_d
-        region = self.params.regions.classify(value_c_d) if selection.complete else None
+        region = self.params.sum_class(self.params.regions, value_c_d, selection)
         return self._result(
             ctx, selection, value_c_d, classification=region, daily=curve.cumulative_c_d
         )

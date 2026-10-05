@@ -100,7 +100,7 @@ def bedd_daily(
     dtr_upper_c: float,
     dtr_factor: float,
 ) -> pd.Series:
-    r"""Daily biologically effective degree-days.
+    r"""Daily biologically effective degree-days, cap applied **after** the adjustments.
 
     .. math::
 
@@ -130,6 +130,43 @@ def bedd_daily(
     adjustment = dtr_adjustment(dtr_c, dtr_lower_c, dtr_upper_c, dtr_factor)
     raw = day_length_coefficient * degree_days(mean_temp_c, base_temp_c) + adjustment
     return raw.clip(lower=0.0, upper=cap_c_d)
+
+
+def bedd_daily_cap_before_adjustment(
+    mean_temp_c: pd.Series,
+    dtr_c: pd.Series,
+    *,
+    base_temp_c: float,
+    cap_c_d: float,
+    day_length_coefficient: float,
+    dtr_lower_c: float,
+    dtr_upper_c: float,
+    dtr_factor: float,
+) -> pd.Series:
+    r"""Daily biologically effective degree-days, cap applied **before** the adjustments.
+
+    .. math::
+
+        \mathrm{BEDD}_d = \max\!\left(0,
+            k \min(c, \max(0, T_{mean} - b)) + A(\mathrm{DTR})\right)
+
+    The daily mean excess is capped first (mean capped at :math:`b + c`), then the day-length
+    and DTR adjustments are applied; the result may exceed :math:`c`.
+
+    Parameters
+    ----------
+    mean_temp_c, dtr_c, base_temp_c, cap_c_d, day_length_coefficient, dtr_lower_c, \
+dtr_upper_c, dtr_factor
+        As in :func:`bedd_daily`.
+
+    Returns
+    -------
+    pandas.Series
+        Contribution in °C·d per day, never negative.
+    """
+    adjustment = dtr_adjustment(dtr_c, dtr_lower_c, dtr_upper_c, dtr_factor)
+    capped_c_d = degree_days(mean_temp_c, base_temp_c).clip(upper=cap_c_d)
+    return (day_length_coefficient * capped_c_d + adjustment).clip(lower=0.0)
 
 
 def fahrenheit_to_celsius_degree_days(degree_days_f_d: float) -> float:

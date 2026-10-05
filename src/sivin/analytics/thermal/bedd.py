@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Final, Self
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final, Literal, Self
 
+import pandas as pd
 from pydantic import Field, model_validator
 
 from sivin.analytics.base import IndexContext, IndexResult, index_registry
 from sivin.analytics.thermal.base import ThermalIndex, ThermalParams
-from sivin.analytics.thermal.formulas import bedd_daily
+from sivin.analytics.thermal.formulas import bedd_daily, bedd_daily_cap_before_adjustment
 from sivin.core.season import Season
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,18 @@ BEDD_DTR_FACTOR: Final = 0.25
 
 NO_DAY_LENGTH_ADJUSTMENT: Final = 1.0
 """Day-length coefficient that leaves the contribution unchanged."""
+
+type CapOrder = Literal["after_adjustment", "before_adjustment"]
+"""Whether the daily cap is applied after or before the day-length and DTR adjustments."""
+
+DEFAULT_CAP_ORDER: Final[CapOrder] = "after_adjustment"
+"""Default cap order: the form min(c, max(0, k·max(0, T - 10) + A)) as commonly quoted from
+Gladstones (1992) [to be verified]."""
+
+BEDD_DAILY_FORMULAS: Final[Mapping[str, Callable[..., pd.Series]]] = MappingProxyType(
+    {"after_adjustment": bedd_daily, "before_adjustment": bedd_daily_cap_before_adjustment}
+)
+"""Daily BEDD formula of each cap order (read-only)."""
 
 
 class BeddParams(ThermalParams):
@@ -69,6 +84,12 @@ class BeddParams(ThermalParams):
         "Gladstones (1992) gives latitude-dependent values that are not shipped "
         "[to be verified].",
     )
+    cap_order: CapOrder = Field(
+        DEFAULT_CAP_ORDER,
+        description="'after_adjustment': cap the adjusted daily contribution (default, form "
+        "commonly quoted from Gladstones, 1992); 'before_adjustment': cap the mean excess, "
+        "then adjust (Gladstones' monthly formulation as reported) [to be verified].",
+    )
     period: Season = Field(
         default_factory=Season.vegetation,
         description="Accumulation period, April 1 - October 31 (northern hemisphere).",
@@ -88,8 +109,11 @@ class BeddIndex(ThermalIndex[BeddParams]):
     r"""Sum of capped daily degree-days adjusted for diurnal temperature range.
 
     Daily contribution :math:`\min(c, \max(0, k \max(0, T_{mean} - 10) + A(T_{max}-T_{min})))`
-    (see :func:`~sivin.analytics.thermal.formulas.bedd_daily`); ``daily`` is the cumulative
-    curve. No classes are defined.
+    by default (see :func:`~sivin.analytics.thermal.formulas.bedd_daily`; ``cap_order``
+    selects :func:`~sivin.analytics.thermal.formulas.bedd_daily_cap_before_adjustment`
+    instead); ``daily`` is the cumulative curve. No classes are defined. Incomplete days
+    contribute nothing, so the sum is biased low when days are missing
+    (``details["n_missing_days"]``).
     """
 
     index_id = "bedd"
@@ -115,7 +139,8 @@ class BeddIndex(ThermalIndex[BeddParams]):
             return self._empty_result(ctx, selection)
         frame = selection.days.frame.loc[mean_temp_c.index]
         params = self.params
-        contribution = bedd_daily(
+        daily_formula = BEDD_DAILY_FORMULAS[params.cap_order]
+        contribution = daily_formula(
             mean_temp_c,
             frame["temp_max"] - frame["temp_min"],
             base_temp_c=params.base_temp_c,

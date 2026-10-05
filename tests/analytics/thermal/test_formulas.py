@@ -7,6 +7,7 @@ import pytest
 
 from sivin.analytics.thermal.formulas import (
     bedd_daily,
+    bedd_daily_cap_before_adjustment,
     degree_days,
     dtr_adjustment,
     fahrenheit_to_celsius_degree_days,
@@ -79,3 +80,22 @@ def test_fahrenheit_to_celsius_degree_days_winkler_bounds() -> None:
     converted = [fahrenheit_to_celsius_degree_days(v) for v in (2500.0, 3000.0, 3500.0, 4000.0)]
     assert [round(v) for v in converted] == [1389, 1667, 1944, 2222]
     assert converted[0] == pytest.approx(12500.0 / 9.0)
+
+
+def test_bedd_daily_cap_before_adjustment() -> None:
+    mean_c = pd.Series([25.0, 9.0, 15.0])
+    dtr_c = pd.Series([20.0, 15.0, 6.0])
+    result = bedd_daily_cap_before_adjustment(
+        mean_c,
+        dtr_c,
+        base_temp_c=10.0,
+        cap_c_d=9.0,
+        day_length_coefficient=1.0,
+        dtr_lower_c=10.0,
+        dtr_upper_c=13.0,
+        dtr_factor=0.25,
+    )
+    # 1: min(9, 15) + 0.25 * (20 - 13) = 9 + 1.75 = 10.75 (may exceed the cap)
+    # 2: min(9, 0) + 0.25 * (15 - 13) = 0.5 (same as the cap-after form)
+    # 3: 5 + 0.25 * (6 - 10) = 4
+    assert result.tolist() == [10.75, 0.5, 4.0]
