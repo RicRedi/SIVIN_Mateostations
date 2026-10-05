@@ -1,6 +1,6 @@
 """Put several sensors on a common time grid (MIGRATION_PLAN §2.7, WP-1.6).
 
-The sensors sample every ~1825 s with clocks that are neither synchronised nor stable, so their
+The sensors sample every ~1830 s with clocks that are neither synchronised nor stable, so their
 timestamps never coincide. :class:`SensorAligner` maps each sensor's usable samples onto one
 :class:`~sivin.alignment.grid.TimeGrid` with an
 :class:`~sivin.alignment.strategies.AlignmentStrategy` and returns an

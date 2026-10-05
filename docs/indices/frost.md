@@ -52,8 +52,8 @@ reported with the prefix `critical_`.
 | `frost_c` | 0.0 (≤) | °C | MIGRATION_PLAN §3.2 |
 | `hard_frost_c` | −2.0 (≤) | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
 | `after_date` | `None` | date | e.g. modelled budburst (WP-2.1); must lie in the season year |
-| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
-| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
+| `sampling.max_sample_duration_s` | 4575 | s | project default `[to be tuned]` (2.5 × 1830 s) |
+| `sampling.nominal_interval_s` | 1830 | s | nominal sampling interval; always set from `time.expected_interval_s` (WP-1.7) |
 
 ## Interpretation
 

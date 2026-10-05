@@ -48,8 +48,8 @@ mean of the daily means of $T - T_d$.
 | `period_start` / `period_end` | `04-01` / `10-31` | MM-DD | growing season, project choice `[to be tuned]` |
 | `magnus_a` | 17.625 | — | Alduchov & Eskridge (1996) |
 | `magnus_b_c` | 243.04 | °C | Alduchov & Eskridge (1996) |
-| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (weights) |
-| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (weights) |
+| `sampling.max_sample_duration_s` | 4575 (2.5 × 1830) | s | project default `[to be tuned]` (weights) |
+| `sampling.nominal_interval_s` | 1830 | s | nominal sampling interval (weights); always set from `time.expected_interval_s` (WP-1.7) |
 
 The legacy coefficients $a = 17.27$, $b = 237.7$ °C (`vineyard_analyst.py`) are available as
 `LEGACY_MAGNUS` and can be configured; at 20 °C / 50 % they give 9.254 °C instead of 9.261 °C.

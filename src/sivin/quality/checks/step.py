@@ -15,7 +15,7 @@ from collections.abc import Iterator, Mapping
 import numpy as np
 from pydantic import Field
 
-from sivin.core.defaults import LEGACY_SAMPLING_INTERVAL_S
+from sivin.core.defaults import DEFAULT_SAMPLING_INTERVAL_S
 from sivin.core.flags import QcFlag
 from sivin.core.schema import MeasurementSeries
 from sivin.quality.checks.base import CheckOutcome, CheckSettings, QualityCheck, check_registry
@@ -77,7 +77,7 @@ class StepSettings(CheckSettings):
         ),
     )
     max_interval_s: float = Field(
-        3 * LEGACY_SAMPLING_INTERVAL_S,
+        3 * DEFAULT_SAMPLING_INTERVAL_S,
         gt=0,
         description=(
             "Jumps across a longer interval (s) are not examined (the level may have changed "

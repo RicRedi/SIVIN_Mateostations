@@ -361,7 +361,7 @@ def test_default_nearest_covers_a_year_of_1825_s_sampling() -> None:
     assert len(panel.complete_rows("temp_c")) / len(panel) > 0.99
     offsets = panel.offsets_s("temp_c")
     assert offsets is not None
-    assert np.nanmax(offsets.to_numpy()) <= 932.5
+    assert np.nanmax(offsets.to_numpy()) <= NearestWithinTolerance().tolerance_s  # 935 s
 
 
 def test_rejects_no_series() -> None:

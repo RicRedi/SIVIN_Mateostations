@@ -130,8 +130,8 @@ WP).
 | `min_index_points`, `max_index_points` | 0, 100 | points | UC IPM |
 | `moderate_from_points`, `high_from_points` | 40, 60 | points | UC IPM classes |
 | `season.start_month/day`, `season.end_month/day` | 4/1, 10/31 | — | project default |
-| `sampling.nominal_interval_s` | 1825 | s | legacy configuration |
-| `sampling.max_sample_duration_s` | 4562.5 (2.5 × 1825) | s | project default, to be tuned |
+| `sampling.nominal_interval_s` | 1830 | s | always set from `time.expected_interval_s` (WP-1.7) |
+| `sampling.max_sample_duration_s` | 4575 (2.5 × 1830) | s | project default, to be tuned |
 
 The values attributed to Gubler et al. (1999) and UC IPM were checked in WP-L.1 against excerpts
 of the UC IPM pages and secondary descriptions found by web search (the pages themselves could
@@ -159,8 +159,8 @@ spray-interval advice depends on the fungicide and is not part of this project.
 - **Hours come from sample durations, not row counts.** Each valid sample represents the
   time until the next sample. A step longer than `max_sample_duration_s` is a data gap: the
   sample then represents only the nominal interval, and the gap ends the run. With the
-  ~1825 s sampling, 12 consecutive samples in the band (21 900 s = 6.08 h) make a favourable
-  day, and 11 samples (5.58 h) do not.
+  ~1830 s sampling, 12 consecutive samples in the band (21 960 s = 6.1 h) make a favourable
+  day, and 11 samples (5.59 h) do not.
 - **"95 °F for 15 minutes"** becomes "valid samples ≥ 35 °C representing at least 15 min".
   With ~30-minute sampling, **one valid sample ≥ 35 °C is enough**. A short heat peak between
   two samples is missed.
@@ -186,7 +186,7 @@ spray-interval advice depends on the fungicide and is not part of this project.
   `powdery_mildew_gt`.
 - Tests: `tests/analytics/disease/test_gubler_thomas.py` (state machine on a hand-built day
   sequence covering onset, growth, decline, heat interruption, bounds 0-100 and undetermined
-  days; hourly integration example; 1825 s sampling; QC exclusion; empty and complete
+  days; hourly integration example; 1825 s sampling (synthetic legacy spacing); QC exclusion; empty and complete
   season), `tests/analytics/disease/test_sampling.py`.
 
 ## References

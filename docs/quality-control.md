@@ -110,17 +110,17 @@ All checks use the real timestamps of the series; they never assume a regular gr
 values are skipped by every check except `missing`.
 
 Notation: $x_i$ value, $t_i$ time of sample $i$ (s), $\Delta t_i = t_i - t_{i-1}$,
-$\Delta t_0 = 1825$ s the nominal interval.
+$\Delta t_0$ the nominal interval (`time.expected_interval_s`, 1830 s).
 
 ### `missing` — missing values → `MISSING`
 
-A row is missing if **all** checked variables are `NaN` (`rule: all`, default) or if **any** is
-(`rule: any`).
+A row is missing if **any** checked variable is `NaN` (`rule: any`, default) or if **all** are
+(`rule: all`).
 
 | Setting | Default | Unit | Origin |
 |---|---|---|---|
 | `variables` | `[temp_c, rh_pct]` | — | both measured variables |
-| `rule` | `all` | — | project choice: the row flag is shared, `any` would discard a valid temperature whenever only humidity is missing; aggregates ignore a single `NaN` anyway |
+| `rule` | `any` | — | owner decision 2026-10-05 (whole-row validity): if one variable is missing, the whole measurement is invalid |
 
 ### `range` — plausible values → `OUT_OF_RANGE`
 
@@ -257,10 +257,10 @@ than $\Delta t_{max}$ away cannot confirm a spike. A row gets `SPIKE` if either 
 
 | Setting | Default | Unit | Origin |
 |---|---|---|---|
-| `temp_max_rate_c_per_h` | 8 (≈ 4.06 °C per 1825 s) | °C/h | project default *[to be tuned]*; method Zahumenský (2004) |
-| `rh_max_rate_pct_per_h` | 40 (≈ 20.3 % per 1825 s) | %/h | project default *[to be tuned]* |
-| `min_interval_s` | 1825 | s | nominal interval |
-| `max_interval_s` | 5475 | s | project default, 3 × nominal interval |
+| `temp_max_rate_c_per_h` | 8 (≈ 4.07 °C per 1830 s) | °C/h | project default *[to be tuned]*; method Zahumenský (2004) |
+| `rh_max_rate_pct_per_h` | 40 (≈ 20.3 % per 1830 s) | %/h | project default *[to be tuned]* |
+| `min_interval_s` | 1830 | s | nominal interval (measured median step, not linked to `time.expected_interval_s`) |
+| `max_interval_s` | 5490 | s | project default, 3 × nominal interval |
 
 ### `step` — sudden persistent level shift → `STEP` + `step` event
 
@@ -279,7 +279,7 @@ interval; a weather front spreads over several, so the last condition (neighbour
 change by at most a share $a$ of the jump) keeps fronts such as −10 °C within 1 h (two jumps of
 about −5 °C) unflagged. A gradual change (−8 °C in 2 h) has small single-interval jumps and is
 not examined at all. **Known limitation:** a front faster than one sampling interval (≥ 5 °C
-within one 1825 s interval) cannot be told from a sensor step and is flagged `STEP`; the flag is
+within one 1830 s interval) cannot be told from a sensor step and is flagged `STEP`; the flag is
 informative and does not exclude data.
 
 | Setting | Default | Unit | Origin |
@@ -290,7 +290,7 @@ informative and does not exclude data.
 | `min_window_samples` | 3 | count | project default |
 | `persistence_fraction` | 0.5 | — | project default |
 | `max_adjacent_fraction` | 0.4 | — | project default |
-| `max_interval_s` | 5475 | s | project default, 3 × nominal interval |
+| `max_interval_s` | 5490 | s | project default, 3 × nominal interval |
 
 ### `persistence` — unchanged value → `STUCK`
 
@@ -325,7 +325,7 @@ Irregular and non-positive intervals are summarised in one warning event each.
 
 | Setting | Default | Unit | Origin |
 |---|---|---|---|
-| `expected_interval_s` | 1825 | s | legacy configs (`time.expected_interval_s`) |
+| `expected_interval_s` | 1830 | s | always set from `time.expected_interval_s` (WP-1.7); the median step of the first real export |
 | `gap_factor` | 3 | — | project default *[to be tuned]* |
 | `tolerance_fraction` | 0.25 | — | project default, tolerates clock drift *[to be tuned]* |
 
@@ -558,7 +558,7 @@ take the state of their timestamp. In `advisory` mode these intervals only feed 
 | `regime.indoor_max_daily_spread_c` | 4 | °C | project default *[to be tuned]* |
 | `regime.indoor_max_rh_pct` | 75 | % | project default *[to be tuned]* |
 | `regime.indoor_max_rh_spread_pct` | 8 | % | project default *[to be tuned]* |
-| `regime.min_window_samples` | 12 | count | a quarter of a day at 1825 s |
+| `regime.min_window_samples` | 12 | count | about a quarter of a day at 1830 s |
 | `contrast.min_spread_ratio` / `spread_floor_c` | 2 / 0.5 | — / °C | project default |
 | `contrast.min_level_difference_c` | 5 | °C | project default |
 | `contrast.min_rh_excess_pct` | 15 | % | project default |

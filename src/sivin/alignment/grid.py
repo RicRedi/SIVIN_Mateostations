@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_GRID_STEP_S: Final = 1800.0
 """Default grid step in seconds: 30 min, the default named in MIGRATION_PLAN §2.7.
 
-It is the round value closest to the sensors' nominal sampling interval of 1825 s
-(:data:`sivin.core.defaults.LEGACY_SAMPLING_INTERVAL_S`).
+It is the round value closest to the sensors' nominal sampling interval of 1830 s
+(:data:`sivin.core.defaults.DEFAULT_SAMPLING_INTERVAL_S`).
 """
 
 MIN_GRID_STEP_S: Final = 1.0
-"""Smallest accepted grid step in seconds; the sensors sample about every 1825 s, so anything
+"""Smallest accepted grid step in seconds; the sensors sample about every 1830 s, so anything
 finer is a configuration error rather than a use case."""
 
 _NS_PER_S: Final = 1_000_000_000

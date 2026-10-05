@@ -35,30 +35,30 @@ def test_durations_follow_the_next_sample_and_a_gap_counts_the_nominal_interval(
     sensor_id: SensorId, durations: SampleDurations
 ) -> None:
     # Samples at 0 h, 0.5 h, 1 h, 2.25 h, 4.25 h. Steps: 1800 s, 1800 s, 4500 s (one missed
-    # sample plus drift, <= 4562.5 s cap -> counted in full), 7200 s (> cap: a gap, the sample
-    # counts only the nominal 1825 s); the last sample has no successor -> 1825 s.
+    # sample plus drift, <= 4575 s cap -> counted in full), 7200 s (> cap: a gap, the sample
+    # counts only the nominal 1830 s); the last sample has no successor -> 1830 s.
     series = series_at(sensor_id, DAY, [0, 0.5, 1, 2.25, 4.25], [1.0, 2.0, 3.0, 4.0, 5.0])
-    assert durations.durations_s(series).tolist() == [1800.0, 1800.0, 4500.0, 1825.0, 1825.0]
+    assert durations.durations_s(series).tolist() == [1800.0, 1800.0, 4500.0, 1830.0, 1830.0]
     assert durations.params == SampleDurationParams()
 
 
 def test_sample_before_a_gap_counts_only_the_nominal_interval(
     sensor_id: SensorId, durations: SampleDurations
 ) -> None:
-    # -1 °C at 02:00, then nothing until 08:00: 1825 s of frost, not 6 h and not the cap.
+    # -1 °C at 02:00, then nothing until 08:00: 1830 s of frost, not 6 h and not the cap.
     series = series_at(sensor_id, DAY, [2, 8], [-1.0, 5.0])
     hours = durations.hours_by_day(series, series.frame[Column.TEMP].to_numpy(), lambda t: t <= 0)
-    assert hours[DAY] == pytest.approx(1825 / 3600)
+    assert hours[DAY] == pytest.approx(1830 / 3600)
 
 
 def test_duration_weighted_means(sensor_id: SensorId, durations: SampleDurations) -> None:
     # 00:00 10 °C (1800 s), 00:30 10 °C (1800 s), 01:00 40 °C (step 4500 s, counted),
-    # 02:15 40 °C (last, 1825 s): weighted mean (10*3600 + 40*6325) / 9925 = 289000 / 9925
+    # 02:15 40 °C (last, 1830 s): weighted mean (10*3600 + 40*6330) / 9930 = 289200 / 9930
     # = 29.12 °C, while the arithmetic sample mean would be 25.0 °C.
     series = series_at(sensor_id, DAY, [0, 0.5, 1, 2.25], [10.0, 10.0, 40.0, 40.0])
     values = series.frame[Column.TEMP].to_numpy()
     means = durations.daily_means(series, values, [DAY, date(2026, 7, 2)])
-    assert means[DAY] == pytest.approx(289000 / 9925)
+    assert means[DAY] == pytest.approx(289200 / 9930)
     assert np.isnan(means[date(2026, 7, 2)])
     first_two = np.array([True, True, False, False])
     assert durations.weighted_mean(series, values, first_two) == pytest.approx(10.0)
@@ -175,4 +175,4 @@ def test_requested_days_without_data_get_zero(
         series, series.frame[Column.TEMP].to_numpy(), np.isfinite, [other, DAY]
     )
     assert list(hours.index) == [other, DAY]
-    assert hours.tolist() == pytest.approx([0.0, 1.0 + 1825 / 3600])
+    assert hours.tolist() == pytest.approx([0.0, 1.0 + 1830 / 3600])

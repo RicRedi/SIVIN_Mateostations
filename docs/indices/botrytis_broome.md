@@ -96,8 +96,8 @@ WP).
 | `coefficients.wetness_temp_sq` | −0.001511 | 1/(h·°C²) | Broome et al. (1995), as quoted by UC IPM |
 | `risk_bands` | empty (no classes) | — (0-1) | none; see *Interpretation* |
 | `season.*` | 4/1 - 10/31 | — | project default |
-| `sampling.nominal_interval_s` | 1825 | s | legacy configuration |
-| `sampling.max_sample_duration_s` | 4562.5 | s | project default, to be tuned |
+| `sampling.nominal_interval_s` | 1830 | s | always set from `time.expected_interval_s` (WP-1.7) |
+| `sampling.max_sample_duration_s` | 4575 (2.5 × 1830) | s | project default, to be tuned |
 
 ## Interpretation
 

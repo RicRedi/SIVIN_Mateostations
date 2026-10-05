@@ -56,8 +56,9 @@ class AlignmentConfig(BaseModel):
         description=(
             "Parameters of the strategy (read-only mapping), validated by the strategy's own "
             "model; units in the key names. nearest_within_tolerance: 'tolerance_s' (explicit "
-            "override), 'expected_interval_s' (default 1825 s), 'margin_s' (default 20 s); "
-            "linear_interpolation: 'max_gap_s' (default 2737.5 s). Empty = defaults."
+            "override), 'expected_interval_s' (set from time.expected_interval_s, 1830 s), "
+            "'margin_s' (default 20 s); linear_interpolation: 'max_gap_s' (default 2745 s). "
+            "Empty = defaults."
         ),
     )
     grid_step_s: float = Field(

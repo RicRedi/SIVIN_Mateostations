@@ -1,6 +1,6 @@
 """Time represented by each raw sample, for duration-weighted hour metrics.
 
-The sensors sample about every 1825 s, but not exactly, and samples go missing. Counting rows
+The sensors sample about every 1830 s, but not exactly, and samples go missing. Counting rows
 (as the legacy ``frost_events_count`` did) therefore does not measure time. Here each sample is
 read as a step function (zero-order hold): its value holds from its own timestamp until the next
 sample of the series; after a step longer than ``max_sample_duration_s`` (a data gap) it holds

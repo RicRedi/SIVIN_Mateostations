@@ -40,17 +40,18 @@ def test_durations_follow_the_actual_steps_and_stop_at_gaps() -> None:
     assert len(timing) == 5
 
 
-def test_durations_of_regular_legacy_sampling() -> None:
-    timing = SamplingParams().durations().measure(utc_seconds(*(n * 1825.0 for n in range(12))))
-    # 12 samples, 1825 s each -> 21900 s = 6.083 h, the threshold of 6 h is reached.
-    assert timing.durations_s.sum() == 12 * 1825.0
-    assert timing.durations_s.sum() / 3600 == pytest.approx(6.0833, abs=1e-4)
+def test_durations_of_regular_nominal_sampling() -> None:
+    timing = SamplingParams().durations().measure(utc_seconds(*(n * 1830.0 for n in range(12))))
+    # 12 samples, 1830 s each (the last one counts the nominal 1830 s) -> 21960 s = 6.1 h,
+    # the threshold of 6 h is reached.
+    assert timing.durations_s.sum() == 12 * 1830.0
+    assert timing.durations_s.sum() / 3600 == pytest.approx(6.1)
 
 
 def test_one_missing_sample_is_bridged_two_are_a_gap() -> None:
-    timing = SamplingParams().durations().measure(utc_seconds(0, 3650, 3650 + 5475))
-    # Default cap 2.5 x 1825 = 4562.5 s: 3650 s bridged, 5475 s is a gap.
-    np.testing.assert_array_equal(timing.durations_s, [3650.0, 1825.0, 1825.0])
+    timing = SamplingParams().durations().measure(utc_seconds(0, 3660, 3660 + 5490))
+    # Default cap 2.5 x 1830 = 4575 s: 3660 s bridged, 5490 s is a gap (nominal 1830 s).
+    np.testing.assert_array_equal(timing.durations_s, [3660.0, 1830.0, 1830.0])
     np.testing.assert_array_equal(timing.followed, [True, False, False])
 
 

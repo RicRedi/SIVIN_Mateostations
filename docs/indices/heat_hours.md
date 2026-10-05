@@ -57,8 +57,8 @@ $$H_B = \frac{1}{3600}\sum_{i \in D} \Delta t_i \cdot \mathbf{1}\left[T_i \in B\
 | `optimum_max_c` | 30.0 | °C | project default (MIGRATION_PLAN §3.2), not a literature value |
 | `heat_stress_c` | 30.0 | °C | project default (MIGRATION_PLAN §3.2); background Greer & Weedon (2012): photosynthesis optimum 30 °C |
 | `extreme_heat_c` | 35.0 | °C | project default (MIGRATION_PLAN §3.2); background Mori et al. (2007): 35 °C treatment |
-| `sampling.max_sample_duration_s` | 4562.5 | s | project default `[to be tuned]` (2.5 × 1825 s) |
-| `sampling.nominal_interval_s` | 1825 | s | nominal sampling interval (legacy configs) |
+| `sampling.max_sample_duration_s` | 4575 | s | project default `[to be tuned]` (2.5 × 1830 s) |
+| `sampling.nominal_interval_s` | 1830 | s | nominal sampling interval; always set from `time.expected_interval_s` (WP-1.7) |
 
 ## Interpretation
 
@@ -73,7 +73,7 @@ Weedon one white variety).
   higher, so the hours underestimate the heat load on exposed bunches.
 - With ~30 min sampling each sample stands for ~30 min; short peaks between samples are missed.
 - A sample followed by a gap longer than `max_sample_duration_s` counts only the nominal
-  interval; the default cap of 2.5 × 1825 s still bridges one missed sample plus clock drift.
+  interval; the default cap of 2.5 × 1830 s still bridges one missed sample plus clock drift.
   The same rule is used by the disease models (WP-2.3), so the two copies can be unified.
   Days with gaps are mostly excluded by the daily coverage rule anyway.
 

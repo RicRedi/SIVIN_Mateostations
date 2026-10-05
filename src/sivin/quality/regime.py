@@ -104,7 +104,7 @@ class RegimeSettings(BaseModel):
         ge=2,
         description=(
             "Fewest samples (count) a 24-h window needs to contribute a daily spread. Project "
-            "default: a quarter of a day at the nominal 1825 s interval."
+            "default: about a quarter of a day at the nominal 1830 s interval."
         ),
     )
 
