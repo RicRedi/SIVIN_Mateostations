@@ -3,6 +3,12 @@
 Methodology after Zahumenský (2004): a value outside fixed physical limits or outside
 climatological limits of the site is flagged. The numeric limits below are project defaults,
 not values quoted from that guideline.
+
+:class:`RangeCheck` covers temperature and humidity only. The auxiliary variables are checked
+by :mod:`sivin.quality.checks.precip` and :mod:`sivin.quality.checks.battery`, which never set
+row flags: a flag is row-wide and would also exclude the temperature and humidity of the row
+(owner decision Q9, 2026-10-05). :func:`runs_of` groups the samples those checks report into
+events.
 """
 
 from __future__ import annotations
@@ -122,3 +128,34 @@ def _outside(values: npt.NDArray[np.float64], low: float, high: float) -> npt.ND
     """Tell which values lie outside ``[low, high]``; ``NaN`` is not outside."""
     with np.errstate(invalid="ignore"):
         return np.asarray((values < low) | (values > high), dtype=np.bool_)
+
+
+def runs_of(
+    mask: npt.NDArray[np.bool_], considered: npt.NDArray[np.bool_] | None = None
+) -> tuple[tuple[int, int], ...]:
+    """Find the runs of consecutive ``True`` values of a mask.
+
+    Parameters
+    ----------
+    mask : numpy.ndarray of bool
+        One entry per sample.
+    considered : numpy.ndarray of bool, optional
+        Samples that take part (e.g. those with a value). A sample that does not take part
+        neither ends nor extends a run; all samples take part when omitted.
+
+    Returns
+    -------
+    tuple of (int, int)
+        ``(first, last)`` row positions (inclusive) of every run, in row order.
+    """
+    positions = np.flatnonzero(
+        np.ones(len(mask), dtype=np.bool_) if considered is None else considered
+    )
+    selected = np.asarray(mask, dtype=np.bool_)[positions]
+    edges = np.diff(np.concatenate(([False], selected, [False])).astype(np.int8))
+    starts = np.flatnonzero(edges == 1)
+    stops = np.flatnonzero(edges == -1)
+    return tuple(
+        (int(positions[start]), int(positions[stop - 1]))
+        for start, stop in zip(starts, stops, strict=True)
+    )
