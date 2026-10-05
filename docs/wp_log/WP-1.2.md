@@ -571,3 +571,76 @@ worse than doing nothing. Fix:
 3. **One empty variable is a WARNING: agree.** It is consistent with the per-variable NaN
    policy (round 1, deviation 1) and keeps temperature when the humidity channel fails. An
    ERROR when both are empty covers the "no measurement" case.
+
+### Round 3
+
+Verdict: APPROVE (round 3)
+
+Reviewed commit 59bd4c6. Scripts are in `/tmp/claude-0/review-1.2/`: `t4.py`, `r2.py`–`r5.py`.
+
+**Gates observed:**
+- `make lint` → `All checks passed!`, `56 files already formatted`.
+- `make type` → `Success: no issues found in 30 source files`.
+- `make test` → `359 passed`.
+- `make cov` → `TOTAL 1981 0 396 0 100%`.
+- Scope is unchanged: only WP-1.2 files.
+
+**Round 2 blocker: fixed.**
+- A glitch of +60 days on row 2 of 2000 → 1999/1999 genuine rows kept and the glitched row
+  dropped (`out-of-sequence`, WARNING 0.1 %).
+- A glitch of +3 days on row 51 of 100 → 99/99 rows kept.
+- A glitch of +3 h on row 2 → only the glitched row is dropped.
+
+**Re-runs:**
+- The exhaustive `t4.py` (5152 overlap files across the fall-back) gives `bad 0`, 0 rejected,
+  2002 rows lost, all reported.
+- `r2.py` (normal single exports: end or start inside the repeated hour, a fast clock, clock
+  corrections of 300 s, 4200 s and 3 h, New Year, outages, an export ending now, spring
+  forward) gives the same results as in round 2. The correction of 3 h now drops 1 row
+  (`out-of-sequence`).
+- `t5.py`–`t8.py` give the same results as in round 2.
+
+**Attacks on the new logic (`r4.py`), with the genuine instants as ground truth:**
+- **Glitch bursts (+3 days) in the middle of a 400-row file:**
+  - 1, 2 or 3 consecutive glitched rows, and glitches at rows 200/202/204 → 0 genuine rows
+    lost, all glitched rows dropped.
+  - 4 or 5 consecutive glitched rows → ERROR `out-of-sequence` (34.5 %) and the file is
+    rejected. This is loud.
+- **Genuine outages of 2, 3, 4 and 6 h,** in the middle and directly after the first row → all
+  rows kept, no finding.
+- **Glitches inside or next to the repeated hour on 2026-10-25,** +3 days and −5 h, on rows
+  before, inside and after the hour:
+  - the glitched row is dropped and no row is misplaced;
+  - a glitch on the second ambiguous row loses the remaining 3 rows of the repeated hour. The
+    group then has no clock jump, so the WP-0.1 converter cannot resolve it. This is reported,
+    and it is the same as a missing sample.
+- **Newest-first file with a glitch** → reversed, the glitched row dropped, 399/399 rows
+  correct.
+- **A glitch followed by a real clock reset** of −3 days (persisting) → ERROR, file rejected
+  (34.8 %).
+- **Two exports concatenated in the wrong order** (later first) → ERROR, file rejected (50 %).
+  Loud; the second half cannot be told apart from a clock reset.
+
+**Worst case of the documented first-row edge case (`r5.py`).** I swept a glitch on row 1 from
++15 min to +24 h in steps of 15 min, over 400 rows at 1825 s:
+- **up to +2.5 h:** 0 genuine rows lost; the glitched row is kept with its wrong time;
+- **+2.75 to +3.5 h:** 1–2 genuine rows lost (worst: 2 rows, about 1 h of data) plus the
+  glitched row kept;
+- **from +3.75 h:** the glitched row is dropped and nothing is lost.
+
+So the worst case is bounded at 2 rows and 1 wrongly timed row, and only for the very first
+row. The hand-off note says "between 2 h and about 4 h"; the measured window is 2.75–3.5 h.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `src/sivin/ingest/parsers/order.py:55-57` (`_LOOKAHEAD_ROWS`), `_out_of_sequence` | A burst of ≥ 4 consecutive forward-glitched rows within the last ~5 % of a file is taken as a new timeline. Repro: 400 rows, rows 387–390 +3 days → accepted, the 4 glitched rows are imported at the wrong time (+3 days), 9 genuine rows are dropped, with only a WARNING `out-of-sequence` (2.2 %). In the middle of a file the same burst is an ERROR. The rows after the burst continue the pre-burst timeline exactly, which a genuine clock reset would not do. Optional: when dropped rows return to within `max_backward_step_s` of the reference *before* the jump, re-anchor and drop the jumped run instead. Otherwise, document the burst limit of 3 rows in `docs/data-format.md`. | open |
+| minor | `src/sivin/ingest/parsers/order.py:271-302` (round 2) | Repeated-hour rows at a file boundary that a single export could resolve are dropped. Documented in round 3, and restored by the next overlapping export. Accepted. | accepted |
+| nit | `docs/wp_log/WP-1.2.md` (what was not verified) | The first-row edge case: state the measured bound. Window 2.75–3.5 h at 1825 s; at most 2 genuine rows lost and the glitched row kept with its wrong time. A glitch ≤ 2 h, on any row, is by design not detected and is imported as a backward step. | open |
+
+**Assessment of the departure (no running median): agree.** A median of the last k rows lags a
+monotonic series by about k/2 samples. A reset of just over `max_backward_step_s` would then
+escape. "Never accept a forward outlier" together with a look-ahead fixes the round-2 failure
+without that lag. The attacks above show that a burst of up to 3 rows is handled. Longer bursts
+are loud (ERROR) except near the end of a file (minor above).
+
+No blocker or major finding remains. The open items are optional refinements and documentation.
