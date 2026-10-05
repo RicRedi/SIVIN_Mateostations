@@ -492,3 +492,220 @@ are counted as vineyard data. This is documented and raised as owner question Q2
 Not reviewed: behaviour on real exports (none available). All rates above depend on my
 synthetic model, especially the RH of cloudy summer days. They show failure modes; they are not
 field error rates.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewer: independent reviewer agent, 2026-10-05, head `8df28ef`. The merge `f80f650` brings
+in `wp/0.1` only. The WP's own round-2 commits (`0331170`, `e5093a9`, `8df28ef`) touch only
+`src/sivin/quality/**`, `tests/quality/**`, `docs/quality-control.md` and this note.
+
+#### Gates (run by the reviewer)
+
+- `make lint`: `All checks passed!`, `57 files already formatted`
+- `make type`: `Success: no issues found in 39 source files`
+- `make test`: `419 passed`
+- `make cov`: `Total coverage: 99.76%`; `pytest --cov=sivin.quality --cov-branch tests/quality`:
+  1298 statements, 3 missed, 3 partial branches (99 %), 229 passed.
+
+#### Round-1 scenarios re-run (reviewer generator `gen.py`, unchanged)
+
+I re-ran `s1`–`s8` unchanged. Every figure in the worker's "Measured on the reviewer's
+independent generator" table above matched my own output, including:
+
+- the 180 summer runs (0 false transitions);
+- the 30 plain and 30 extreme years (0 false transitions);
+- offices at 12 °C and 30 °C (15/15);
+- multi-year runs (6/6 for 1, 3 and 5 years);
+- known-date scenarios B and C (0 % flagged, 0 relocation warnings);
+- gaps (15/15 each);
+- the 35 °C car (offset 0, a few summer runs −3).
+
+The one exception: `s7` (confidence quantiles of false transitions) raised an `IndexError`,
+because there were no false transitions left to take quantiles of. All four round-1 majors are
+fixed on that generator.
+
+#### Guard against overfitting: new generator `gen2.py` and unseen scenarios
+
+The worker tuned against `gen.py`, so I wrote `gen2.py` (in `/tmp/claude-0/review-1.5/`) with
+different parameters:
+
+- cloudiness drawn from Beta(0.6, 0.6) with day-to-day persistence 0.8, giving more fully
+  overcast and fully clear days;
+- the daily temperature range reduced by up to 85 % under cloud;
+- RH coupling to temperature that depends on cloud (4 %/°C on clear days, 1.5 %/°C on overcast
+  days), plus its own AR(1) daily-mean anomaly (σ 6 %);
+- sample noise σ 0.45 °C and synoptic anomaly σ 4 °C;
+- the hour of the daily maximum varying between 12 and 15 UTC;
+- clock drift −3·10⁻⁴ and jitter σ 15 s.
+
+Variant **dry-overcast**: cloud does not raise RH. This is a stress test; its summer RH median
+of about 58 % on overcast days is at the dry end of what is plausible.
+
+New scenarios: an office with night setback (first-order heating), a humid basement, deployment
+into heavy rain, spring frost nights right after deployment, two sensors swapped between sites,
+a service visit during a cold front, a long overcast autumn, and adversarial known dates.
+
+Default settings throughout. "Correct" means exactly the expected transitions, each within ±1
+sample. All data are synthetic: the tables show failure modes, not field rates.
+
+**Detection, office → outdoor 20 d (`gen2`, n=15 per cell):**
+
+| Office stay | winter | spring | summer | autumn |
+|---|---|---|---|---|
+| 1 d | 15 | 14 | 12 (1 office missed, 1 false pair) | 15 |
+| 3 d | 15 | 15 | **13** (2 offices missed) | 15 |
+| 14 d | 15 | 15 | 14 (1 false pair) | 15 |
+| 1 d, dry-overcast | 15 | 12 | 11 | 12 |
+| 3 d, dry-overcast | 15 | **11** (3 false pairs) | **11** (3 false pairs) | **10** (4 false pairs) |
+| 14 d, dry-overcast | 15 | 12 | 13 | 13 |
+
+**Unseen office variants and weather at deployment (office 3 d → outdoor 15 d, n=15):**
+
+| Scenario | Correct | Outcome |
+|---|---|---|
+| setback 16 → 22 °C, inertia τ = 3 h, January | **0/15** | no event, **no warning**; office rows unflagged |
+| setback 16 → 22 °C, τ = 3 h, October | **0/15** | 14 no event, 1 false pair |
+| setback 18 → 22 °C, τ = 6 h, February | 15/15 | |
+| humid basement 15 °C, RH 80 %, May / January | **0/15, 0/15** | no event (RH above `indoor_max_rh_pct` 75 %); office rows unflagged |
+| basement 14 °C, RH 72 %, March | 15/15 | |
+| office 24 °C, RH 60 %, August | 12/15 | 3 no event |
+| deployed into heavy rain (2 d, daily range ≈ 1 °C, RH ≈ 97 %), spring 10 °C | 12/15 | 15 found, 3 off by more than one sample |
+| heavy rain, summer 18 °C | 9/15 | 4 no event |
+| heavy rain, summer 21 °C | **4/15** | 11 found but 1–3 h late (transport trimming, see below), 4 no event |
+| heavy rain, autumn 6 °C | 14/15 | |
+| spring frost nights (Tmin −3 / −1 °C) after deployment | 15/15, 15/15 | |
+| two sensors swapped between sites (office → A → car 1 h → B), both known | 15/15 in every season | 0–2 warnings in 15 runs; outdoor rows flagged 0.1–0.7 % |
+| same, no known dates | 15, 15, 14, 14 | no relocation event (expected) |
+| service visit 2 d during a −8 °C/2 h front | win 15, spr 15, **sum 7**, aut 15 | summer: 3 runs missed the first office stay |
+
+**False alarms (outdoor only, 20 seeds × 365 d, `gen2`):**
+
+| Scenario | False transitions | `PRE_DEPLOYMENT` rows | `unconfirmed_transition` warnings |
+|---|---|---|---|
+| plain year | 6 in 3/20 seeds = **0.30 per sensor-year** (May, Aug, Sep) | mean 11, max 94 (≈ 2 d) | 2.2 per year |
+| long overcast autumn (Oct–Dec, RH ≈ 93 %, daily range ≈ 1 °C) | 0.30 per sensor-year (none in Oct–Dec) | mean 11, max 94 | 2.0 per year |
+| dry-overcast plain year (stress) | 70 in 15/20 seeds = **3.5 per sensor-year** | mean 348, **max 1340 (≈ 28 d)** | 4.7 per year |
+| dry-overcast, long overcast autumn | 3.0 per sensor-year | mean 299, max 1340 | 3.5 per year |
+
+Runtime is about 0.2 s per sensor-year (0.9 s for 5 years).
+
+Sensitivity of `indoor_max_daily_spread_c` (10 years of `gen2` each):
+
+| Spread threshold | Gen2 false transitions per sensor-year | `PRE_DEPLOYMENT` rows per year | Setback office 16 → 22 °C detected |
+|---|---|---|---|
+| 4 °C | 0.40 | 16 | 0/15 |
+| 6 °C | 0.60 | 26 | 4/15 |
+
+Raising the threshold does not fix the setback office; it buys some detection with more false
+alarms.
+
+**Known-date rules (adversarial, `gen2`, 10 seeds per case):**
+
+| Known time vs truth | Outdoor rows flagged because of the known date (max) |
+|---|---|
+| −30, −7, −5.9, −3, 0 h | 0 |
+| +3 h | 6 (3 h) |
+| +5.9 h | 12 (6 h) |
+| +7, +30, +48 h | 0 |
+| before the data, after the data, 3 random times | 0 |
+| service visit with the redeployment known at −24, −5.9, 0, +7 h; known time inside the visit; only the first deployment known | 0 |
+| redeployment known at +5.9 h | 12 (6 h) |
+
+Data loss through known dates is therefore **bounded but not zero**. A registry time later than
+the detected deployment, within `known_tolerance_s`, moves the boundary to the registry time.
+Up to 6 h of vineyard data then become `PRE_DEPLOYMENT`, without a warning. In every other case
+known dates only shorten or remove indoor intervals or add warnings; they never create
+exclusions.
+
+#### Code review (round 2)
+
+- **Readability and transparency.** The pipeline (local change points → absolute indoor-like
+  rules → indoor runs → refine/trim → relative votes → reconcile with known dates) is spread
+  over `windows.py`, `regime.py`, `segmentation.py`, `boundaries.py`, `contrast.py` and
+  `timeline.py`. Each class is small and well documented: every criterion is a named boolean
+  in `IndoorAssessment.criteria` or `ContrastVerdict.votes`, and the event detail lists the
+  votes. A researcher can follow it with `docs/quality-control.md`. It is considerably more
+  machinery than in round 1, but still rule-based and inspectable.
+- **2-of-4 voting.** The four votes form two correlated pairs: the temperature and humidity
+  spread ratios both measure the daily cycle, and level difference and humidity excess both
+  measure the step. So "2 of 4" can be one physical signal counted twice. This is acceptable
+  as a heuristic, but the docs should say so. With temperature only, both remaining votes are
+  needed. Confidence (share of votes, 0.5–1 when confirmed) is documented as heuristic.
+- **Transport heuristic** (`boundaries.py:170-198`). The outdoor reference is the day starting
+  3 h after the boundary. If the weather changes within that day (a warm afternoon followed by
+  rain), real vineyard samples fall outside the reference ±3 °C and are moved to the indoor
+  side. Heavy rain at 21 °C, n=15: deployment offsets +1 to +6 samples with trimming, 0 without
+  (`transport.max_duration_s = 0`). Car at 35 °C with trimming off: −3 samples. The trimming
+  helps the car case but costs up to 3 h of real data in the rain case. Not documented.
+- **`IndoorRun.applied`.** A service run is applied only when both boundaries are confirmed,
+  and a retrieval alone never excludes data. This is good and matches "when in doubt, do not
+  exclude". A run that starts with the data needs only a confirmed deployment.
+
+#### Findings (round 2)
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| minor | `src/sivin/quality/regime.py:77-101`, `docs/quality-control.md` (Limitations) | Some offices are missed silently | open (owner, Q1/Q3) |
+| minor | `src/sivin/quality/regime.py:93-101` | False alarms rest on the "steady humidity" assumption | open (owner, Q1/Q3) |
+| minor | `src/sivin/quality/boundaries.py:170-198` | Transport trimming can cut real vineyard data | open |
+| minor | `src/sivin/quality/timeline.py` (`_apply`, move to known time) | Known dates can exclude up to `known_tolerance_s` of vineyard data without a warning | open |
+| minor | `src/sivin/quality/segmentation.py:84-94` | Summer offices are missed more often than in other seasons | open |
+| nit | `src/sivin/quality/contrast.py:205-223`, docs | The four votes are two correlated pairs | open |
+| nit | `src/sivin/quality/checks/persistence.py` | A temperature sensor stuck during fog is never flagged | open |
+
+**Some offices are missed silently.** A humid basement (RH ≥ 75 %) or an office with strong
+night setback (16 → 22 °C, daily spread > 4 °C) is never indoor-like: 0/15 each, with no
+warning. Its days enter the indices; a January office adds about 12 GDD per day. The Limitations
+section mentions only the sunny window sill. Suggestion: document both cases. Consider a
+warning when the first days of a series differ strongly from later data but no run is
+confirmed. Tune `indoor_max_rh_pct` and `indoor_max_daily_spread_c` on real office data.
+
+**False alarms rest on the "steady humidity" assumption.** The indoor-like rule takes outdoor
+humidity to follow the daily cycle, or to exceed 75 %, on overcast days. Where cloud does not
+raise RH (`gen2` dry-overcast), false service visits rise to 3–3.5 per sensor-year and up to
+28 days of vineyard data are excluded. With the plain `gen2` the rate is 0.30 per sensor-year
+(mean 11 rows per year). The worker states the assumption in the hand-off note but not in
+`docs/quality-control.md`. Suggestion: document it and verify it on real data before trusting
+`PRE_DEPLOYMENT` for service visits. Consider a maximum service duration, or a warning for long
+detected visits.
+
+**Transport trimming can cut real vineyard data.** A weather change within the reference day
+moves up to 3 h of real vineyard samples to `PRE_DEPLOYMENT` (rain-at-21 °C case: +1 to +6
+samples). Suggestion: document it, or take the outdoor reference from a window that excludes
+weather changes, e.g. the median of the following days' same-hour values.
+
+**Known dates can exclude vineyard data without a warning.** A registry time up to 6 h later
+than the detected deployment moves the boundary later: ≤ 12 samples flagged, no warning. Data
+loss is bounded but not impossible. Suggestion: when the known time is later than the detected
+deployment, keep the earlier time ("when in doubt, do not exclude"), or warn when the offset
+exceeds one sample.
+
+**Summer offices are missed more often.** With `gen2`, 2/15 three-day summer offices are
+missed (overcast summer days with RH ≤ 75 % are themselves indoor-like and merge with the
+office run). The service + front scenario misses 3/15 first offices. In summer it also gives
+a warning (`unconfirmed_transition`) and the office rows stay unflagged. Acceptable given the
+warning; record it in the Limitations section.
+
+**The four votes are two correlated pairs** (daily-cycle pair, step pair). State this in the
+docs next to `min_votes`.
+
+**A stuck temperature sensor during fog is never flagged.** The fog exemption (≥ 50 % of the run
+at RH ≥ 97 %) applies to both variables, so a stuck temperature sensor is not detected during
+fog. Document it next to the existing RH note.
+
+None of these is a correctness defect in the code. All are threshold or assumption risks that
+only real exports (Q1) and known deployment dates (Q3) can settle, so I hand them to the owner.
+The rule that data are excluded only when both boundaries are confirmed, and the bounded effect
+of known dates, keep the damage limited.
+
+#### Deviations assessment (round 2)
+
+- Deviation 5 (known times override detection only near themselves, unmatched detections
+  applied with a warning): accepted. The residual tolerance-window exclusion is a minor finding.
+- Deviation 6 (room band 5–35 °C plus relative votes instead of the comfort band): accepted.
+  It implements plan §2.7 step 2 and fixes the 12 °C and 30 °C offices. The cost is reliance on
+  the humidity criteria (see the false-alarm and missed-office findings).
+- Deviation 7 (a sensor with only indoor data is not flagged): accepted. It is flagged
+  retroactively once the deployment is in the data.
