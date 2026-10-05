@@ -52,7 +52,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | Class / module | Responsibility |
 |---|---|
 | `contract/types.ts` | TypeScript mirror of §2.6 (`Manifest`, `LatestFile`, `RawMonthFile`, `DailyFile`, `EventsFile`, `IndicesFile`, `SensorsGeoJSON` with the registry properties of §2.4). |
-| `contract/validate*.ts`, `FieldReader`, `ContractError` | Hand-written runtime validation of every file. A mismatch throws `ContractError` with file, JSON path and problem, e.g. `manifest.json: $.schema_version must be one of [1], got 2`. Unknown extra fields are ignored (forward compatible); `schema_version` must be exactly 1. |
+| `contract/validate*.ts`, `FieldReader`, `ContractError` | Hand-written runtime validation of every file. A mismatch throws `ContractError` with file, JSON path and problem, e.g. `manifest.json: $.schema_version must be one of [1], got 2`. Unknown extra fields are ignored (forward compatible); an event of an unknown `type` is skipped with a console warning (WP-3.2); a malformed *optional* field is ignored with a warning; `schema_version` must be exactly 1. |
 | `data/DataClient` | Fetches contract files relative to the data base URL, validates and caches them (one request per file per page load; failed requests are retried on the next call). `getRawRange(id, start, end)` picks the **UTC** months overlapping `[start, end)` that the manifest lists, fetches them in parallel and merges them into one `RawSeries`. A listed month that cannot be loaded is an error; months not listed are skipped. |
 | `domain/RawSeries` | Columnar raw samples of one sensor, merged from monthly files, sorted by `t`, one sample per time. |
 | `domain/TimeSeries` | Immutable value object of one variable (`t[]`, `values[]`, `null` = no valid value). `withGapBreaks` inserts `null` where samples are too far apart so charts draw gaps. |
@@ -71,7 +71,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `ui/SensorList` | Checkbox list of all sensors (keyboard path to the comparison). |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
 | `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
-| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail). |
+| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site`, grey bands for `off_site` (below). |
 | `ui/SensorColors` | Line colours of the compared sensors, assigned in selection order; a sensor keeps its colour while selected, a new one takes the first free colour, so the (at most 8) compared sensors never share a colour. |
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
 | `ui/App` | Coordinates store and views: user actions update the store, changes re-render views and reload the chart. |
@@ -148,9 +148,21 @@ STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 `t_end` (Unix seconds, exclusive) is required for `off_site` and is `null` while the sensor is
 still off site. On a point event (`deployment`, `retrieval`, `step`) a `t_end` is **ignored with
 a console warning** instead of rejecting the file (tolerant reading of optional fields, owner
-decision 2026-10-05), so a SiteBuilder that writes `t_end: null` on every event loses no markers. The contract types model this as a
-union (`PointSensorEvent | OffSiteEvent`, `isOffSiteEvent`), and `eventInWindow` keeps an
-`off_site` period that merely overlaps the chart window (a point event must lie inside it).
+decision 2026-10-05). The contract types model the events as a union
+(`PointSensorEvent | MarkedIntervalEvent | OffSiteEvent`, `isOffSiteEvent`,
+`isMarkedIntervalEvent`), and `eventInWindow` keeps an `off_site` period that merely overlaps the
+chart window (a point event, and the start `t` of a marked interval, must lie inside it).
+
+**Event types the SiteBuilder publishes** ([site.md](site.md#eventsidjson)): besides `off_site`
+and the point events, two advisory intervals of quality control, `low_battery` (a low-battery
+episode) and `unlogged_off_site` (an indoor-like period the off-site log does not cover). They
+need an integer `t_end` ≥ `t`, are drawn like a point event at `t` (dashed line) with an
+**amber** button (`#b45309`, 5.0:1 against white) whose label names the period
+("Slabá baterie" / "Schwache Batterie" / "Low battery", "Možné nezapsané období mimo vinici" /
+"Möglicher nicht eingetragener Zeitraum außerhalb des Weinbergs" / "Possible unlogged off-site
+period", then "<from> – <to>"), and **hide no data**. An event of any **other type is skipped
+with a console warning** — the file is not rejected — so a pipeline that publishes a new kind
+never breaks the chart. Bigger presentation work (e.g. a band for `unlogged_off_site`) is WP-3.4.
 
 `SeriesChart` draws every period that overlaps the window as a translucent grey band across the
 plotting area (uPlot `drawClear` hook, under grid and lines; an open period runs to the window
@@ -179,8 +191,8 @@ panel instead of a silently wrong chart.
 **Raw month files are UTC months.** `series/<id>/raw/<YYYY-MM>.json` contains exactly the samples
 with `t` in that calendar month in **UTC** (e.g. `2026-07` = `[2026-07-01T00:00Z,
 2026-08-01T00:00Z)`), and `raw_months` lists those UTC keys. §2.6 does not say this explicitly;
-this is the interpretation the web implements and **WP-3.2 (`SiteBuilder`) must follow** (it
-matches §1.5 "internally always UTC"). Months in Europe/Prague time would make up to two hours
+this is the interpretation the web implements and the `SiteBuilder` (WP-3.2) follows (it
+matches §1.5 "internally always UTC"; owner decision 2026-10-05). Months in Europe/Prague time would make up to two hours
 at each month boundary silently disappear from the chart. Listed as a contract clarification
 for the owner. `indices/<season>.json` is typed, validated and
 available through `DataClient.getIndices` but not displayed yet (WP-3.4).
@@ -188,21 +200,48 @@ available through `DataClient.getIndices` but not displayed yet (WP-3.4).
 ## Synthetic fixture and real data
 
 `web/public/data/` holds a **synthetic** data set generated by `scripts/generate-fixture.mjs`
-(seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, step 1825 s with
-a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB; sensor 77799986 has one synthetic
+(seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, a fixed synthetic
+sampling step with a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB; sensor 77799986 has one synthetic
 `off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
 
 The badge is controlled at build time by `VITE_DEMO_DATA`: any value other than `false`
 (including unset) shows it. Nothing in the contract marks data as synthetic.
 
-To use real data (WP-3.2 `SiteBuilder`, deployed by WP-4.1):
+### Real data
 
-1. Generate `site/data/` with the pipeline.
+The pipeline writes the real data with `sivin build-site` (or as the last step of `sivin run`)
+into `site/data/` ([site.md](site.md)); the deployment is WP-4.1. To serve them:
+
+1. Generate `site/data/` with the pipeline (`sivin run`, or `sivin build-site` after
+   `sivin ingest`).
 2. Build with `VITE_DEMO_DATA=false npm run build`.
 3. Replace `dist/data/` with the generated `site/data/` before uploading the Pages artifact
    (or copy `site/data/` into `web/public/data/` before the build). The app always reads
    `<base>/data/`; to read from elsewhere, change `DATA_BASE_URL` in `src/main.ts`.
+   `site/data/.build-state.json` is the pipeline's incremental build state; the app never reads
+   it.
+
+What the real data look like to the portal:
+
+- Raw months hold **every** sample, flagged ones included; the display mask hides excluded
+  rows (e.g. off-site samples, `PRE_DEPLOYMENT`). `precip_mm`/`battery_v` are present only for
+  months with such values; they are read but not drawn yet (WP-3.4).
+- `daily.json` may carry `precip_sum_mm`, `precip_n_samples` (values in the sum) and
+  `battery_min_v` (optional, not drawn yet).
+- `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
+  optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
+  history). The UI does not grey out retired sensors yet (WP-3.4).
+- A sensor without a valid sample (e.g. off site the whole time) is missing from `latest.json`
+  and is drawn grey on the map.
+- `indices/<season>.json` entries may carry `estimated` (index based on a proxy).
+
+**Cross-language contract test.** `web/tests/fixtures/python-site/` is written by the Python
+pipeline (`sivin run --skip-fetch` on the trimmed real export of 77799986 and a synthetic
+sensor; regenerate with `.venv/bin/python -m tests.site.python_site` in the repository root).
+`tests/pythonSite.test.ts` loads every file there through the validators and the `DataClient`
+and fails on any `ContractError` or contract warning; the Python test
+`tests/e2e/test_site.py` fails when the committed fixture is stale.
 
 Note: the root `.gitignore` ignores every `data/` directory, so `web/public/data/` and
 `web/src/data/` were added with `git add -f`; new files there need the same until `.gitignore`

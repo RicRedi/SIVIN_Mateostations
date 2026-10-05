@@ -34,6 +34,7 @@ apply.
 | `quality` | `QualityPipelineSettings` (`sivin.quality`) | enabled checks, `check_settings` per check, deployment detector ([quality-control.md](quality-control.md)) |
 | `alignment` | `AlignmentConfig` (`sivin.alignment`) | strategy, its `params`, grid step, span ([alignment.md](alignment.md)) |
 | `analytics` | `AnalyticsConfig` (`sivin.config.sections`) | coverage thresholds, exclusion masks, `indices` parameters per index ([indices](indices/)) |
+| `site` | `SiteSettings` (`sivin.site.settings`) | staleness threshold of `latest.json`, published event kinds; output in `<paths.site_dir>/data` ([site.md](site.md)) |
 
 The models of the subsystems live in their packages; `SivinConfig` (`sivin.config.model`)
 composes them. `sivin.config` imports the subsystems, so importing it loads pandas; the CLI
