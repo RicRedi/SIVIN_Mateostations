@@ -1,11 +1,14 @@
 """Parsers of the data provider's portal exports: CSV and XLSX.
 
 Layout reconstructed from the legacy scripts (``generate_animation.py``, ``chrome_driver.py``,
-``sampl_freq_basic.py``) and **not verified on a real export** (owner questions Q1, Q2): a
-title row (``Meteo Data;``), a header row with Czech names (``Datum a čas``, ``Teplota (°C)``,
-``Vlhkost (%)``, possibly more columns), values with a decimal comma and local wall-clock
-timestamps. The header row is searched for, so the number of title rows does not matter. The
-sensor comes from the file name, e.g. ``MeteoData_8615620 77678271 (VUT)_20260301_223857.csv``.
+``sampl_freq_basic.py``): a title row (``Meteo Data;``), a header row with Czech names
+(``Datum a čas``, ``Teplota (°C)``, ``Vlhkost (%)``, possibly more columns), values with a
+decimal comma and local wall-clock timestamps. The CSV layout is **verified on one real export**
+(sensor 77799986, MIGRATION_PLAN §0.6.1): it also has precipitation and battery columns, which
+are ignored, is newest first and ends with a line ``;``. The XLSX layout is still unverified.
+The header row is searched for, so the number of title rows does not matter. The sensor comes
+from the file name, e.g. ``MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`` or
+``MeteoData_8615620_77799986_VUT_20260301_223842.csv``.
 """
 
 from __future__ import annotations

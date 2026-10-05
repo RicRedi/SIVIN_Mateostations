@@ -1,4 +1,8 @@
-"""Shared helpers of the ingest tests. All data are SYNTHETIC (see tests/fixtures/exports)."""
+"""Shared helpers of the ingest tests.
+
+All data are SYNTHETIC (see tests/fixtures/exports), except the real export in
+``tests/fixtures/exports/real`` used by ``test_real_export.py``.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,10 @@ import pytest
 from sivin.ingest.parsers.columns import ParserSettings
 
 EXPORTS = Path(__file__).resolve().parents[1] / "fixtures" / "exports"
-"""Directory of the committed synthetic export fixtures."""
+"""Directory of the committed export fixtures (synthetic, except :data:`REAL_EXPORTS`)."""
+
+REAL_EXPORTS = EXPORTS / "real"
+"""Directory of the trimmed REAL export (public by owner decision 2026-10-05)."""
 
 PORTAL_CSV_NAME = "MeteoData_8615620 77678271 (VUT)_20260301_223857.csv"
 LATEST = datetime(2030, 1, 1)
