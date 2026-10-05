@@ -32,6 +32,10 @@ def make_utc_series(sensor_id: SensorId) -> UtcSeriesFactory:
         source: str | Sequence[str] | None = "synthetic.csv",
         qc: Sequence[int] | None = None,
         sensor: SensorId | None = None,
+        *,
+        precip_mm: Sequence[float] | None = None,
+        precip_total_mm: Sequence[float] | None = None,
+        battery_v: Sequence[float] | None = None,
     ) -> MeasurementSeries:
         return MeasurementSeries.from_records(
             sensor or sensor_id,
@@ -40,6 +44,9 @@ def make_utc_series(sensor_id: SensorId) -> UtcSeriesFactory:
             rh_pct,
             qc=qc,
             source=source,
+            precip_mm=precip_mm,
+            precip_total_mm=precip_total_mm,
+            battery_v=battery_v,
         )
 
     return factory

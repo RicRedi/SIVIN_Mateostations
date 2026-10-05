@@ -18,13 +18,26 @@ import numpy as np
 import pandas as pd
 
 from sivin.core.ids import SensorId
-from sivin.core.schema import Column, MeasurementSeries, SchemaError
+from sivin.core.schema import VALUE_COLUMNS, Column, MeasurementSeries, SchemaError
 from sivin.storage.errors import StoreFormatError
 
 logger = logging.getLogger(__name__)
 
-STORED_COLUMNS: Final = (Column.TIMESTAMP, Column.TEMP, Column.RH, Column.SOURCE)
-"""Columns of a stored file, in this order. ``qc`` is not stored (recomputed at build time)."""
+STORED_COLUMNS: Final = (Column.TIMESTAMP, *VALUE_COLUMNS, Column.SOURCE)
+"""Columns of a stored file, in this order. ``qc`` is not stored (recomputed at build time).
+
+``timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source`` (since WP-1.9).
+"""
+
+LEGACY_STORED_COLUMNS: Final = (Column.TIMESTAMP, Column.TEMP, Column.RH, Column.SOURCE)
+"""Columns of a file written before WP-1.9 (``timestamp_utc,temp_c,rh_pct,source``).
+
+Such a file is still read; its precipitation and battery values are ``NaN``. It is rewritten
+in the current layout the next time its data change.
+"""
+
+READABLE_LAYOUTS: Final = (STORED_COLUMNS, LEGACY_STORED_COLUMNS)
+"""Headers :meth:`CsvSeriesCodec.read` accepts, newest first."""
 
 FILE_ENCODING: Final = "utf-8"
 """Text encoding of stored files (no byte-order mark)."""
@@ -98,19 +111,23 @@ class SeriesCodec(ABC):
 class CsvSeriesCodec(SeriesCodec):
     """The CSV file format of the measurement store.
 
-    One header line ``timestamp_utc,temp_c,rh_pct,source``, then one line per sample in
-    strictly increasing time order; UTF-8 without BOM, LF line ends, ``,`` separator, RFC 4180
-    quoting (only where needed, ``"`` doubled). Fields:
+    One header line ``timestamp_utc,temp_c,rh_pct,precip_mm,precip_total_mm,battery_v,source``,
+    then one line per sample in strictly increasing time order; UTF-8 without BOM, LF line
+    ends, ``,`` separator, RFC 4180 quoting (only where needed, ``"`` doubled). Fields:
 
     * ``timestamp_utc``: ISO 8601 UTC with ``Z``, ``YYYY-MM-DDTHH:MM:SS``; a fraction of a second
       is appended only when non-zero, with trailing zeros removed (up to 9 digits).
-    * ``temp_c`` (°C), ``rh_pct`` (%): ``.`` decimal point, positional notation, the shortest
-      digits that read back as the same ``float64``, at least one fractional digit; an empty
-      field means missing (``NaN``).
+    * ``temp_c`` (°C), ``rh_pct`` (%), ``precip_mm`` (mm), ``precip_total_mm`` (mm),
+      ``battery_v`` (V): ``.`` decimal point, positional notation, the shortest digits that read
+      back as the same ``float64``, at least one fractional digit; an empty field means missing
+      (``NaN``).
     * ``source``: name of the source file the row came from; empty when unknown.
 
     Encoding is a pure function of the data, so the same series always gives the same bytes,
-    and ``read`` followed by ``write`` reproduces a file byte for byte.
+    and ``read`` followed by ``write`` reproduces a file in the current layout byte for byte.
+    :meth:`read` also accepts the layout written before WP-1.9
+    (:data:`LEGACY_STORED_COLUMNS`, ``timestamp_utc,temp_c,rh_pct,source``) and returns
+    ``NaN`` for the columns it lacks; :meth:`write` always writes the current layout.
     """
 
     file_suffix: ClassVar[str] = ".csv"
@@ -149,13 +166,14 @@ class CsvSeriesCodec(SeriesCodec):
         Returns
         -------
         MeasurementSeries
-            The stored rows (always with a ``source`` column) and ``qc = 0``.
+            The stored rows (always with a ``source`` column) and ``qc = 0``; columns the
+            file's layout lacks are ``NaN``.
 
         Raises
         ------
         StoreFormatError
-            On a wrong header, a wrong number of fields, a malformed timestamp or value, or
-            timestamps that are not strictly increasing.
+            On a header that is none of :data:`READABLE_LAYOUTS`, a wrong number of fields, a
+            malformed timestamp or value, or timestamps that are not strictly increasing.
         """
         text = io.TextIOWrapper(stream, encoding=FILE_ENCODING, newline="")
         try:
@@ -164,33 +182,38 @@ class CsvSeriesCodec(SeriesCodec):
             raise StoreFormatError(f"{origin}: not a readable CSV file: {error}") from error
         finally:
             text.detach()
-        expected_header = [str(column) for column in STORED_COLUMNS]
-        if not rows or rows[0] != expected_header:
+        layouts = {tuple(str(column) for column in layout): layout for layout in READABLE_LAYOUTS}
+        layout = layouts.get(tuple(rows[0])) if rows else None
+        if layout is None:
+            expected = " or ".join(repr(",".join(header)) for header in layouts)
             raise StoreFormatError(
-                f"{origin}: header must be {','.join(expected_header)!r}, "
+                f"{origin}: header must be {expected}, "
                 f"got {','.join(rows[0]) if rows else 'an empty file'!r}."
             )
-        return self._decoded_series(rows[1:], sensor_id, origin)
+        return self._decoded_series(rows[1:], layout, sensor_id, origin)
 
     def _encoded_rows(self, series: MeasurementSeries) -> Iterator[list[str]]:
         frame = series.frame
         timestamps = _format_timestamps(frame[Column.TIMESTAMP])
-        temps = frame[Column.TEMP].to_numpy()
-        humidities = frame[Column.RH].to_numpy()
+        values = [
+            [_format_value(value) for value in frame[column].to_numpy()] for column in VALUE_COLUMNS
+        ]
         if Column.SOURCE in frame.columns:
             sources = frame[Column.SOURCE].astype("str").tolist()
         else:
             sources = [""] * len(frame)
-        for timestamp, temp_c, rh_pct, source in zip(
-            timestamps, temps, humidities, sources, strict=True
-        ):
-            yield [timestamp, _format_value(temp_c), _format_value(rh_pct), source]
+        for timestamp, *fields, source in zip(timestamps, *values, sources, strict=True):
+            yield [timestamp, *fields, source]
 
     def _decoded_series(
-        self, rows: list[list[str]], sensor_id: SensorId, origin: str
+        self,
+        rows: list[list[str]],
+        layout: tuple[Column, ...],
+        sensor_id: SensorId,
+        origin: str,
     ) -> MeasurementSeries:
         first_data_line = 2
-        n_fields = len(STORED_COLUMNS)
+        n_fields = len(layout)
         for line, row in enumerate(rows, start=first_data_line):
             if len(row) != n_fields:
                 raise StoreFormatError(f"{origin}:{line}: expected {n_fields} fields, got {row}.")
@@ -202,15 +225,21 @@ class CsvSeriesCodec(SeriesCodec):
             raise StoreFormatError(f"{origin}: invalid timestamp: {error}") from error
         if not (timestamps.is_monotonic_increasing and timestamps.is_unique):
             raise StoreFormatError(f"{origin}: timestamps are not strictly increasing.")
-        temps = [_parse_value(row[1], origin, line) for line, row in enumerate(rows, 2)]
-        humidities = [_parse_value(row[2], origin, line) for line, row in enumerate(rows, 2)]
+        values = {
+            column: [_parse_value(row[position], origin, line) for line, row in enumerate(rows, 2)]
+            for position, column in enumerate(layout)
+            if column in VALUE_COLUMNS
+        }
         try:
             return MeasurementSeries.from_records(
                 sensor_id,
                 pd.DatetimeIndex(timestamps),
-                temps,
-                humidities,
-                source=[row[3] for row in rows],
+                values[Column.TEMP],
+                values[Column.RH],
+                source=[row[layout.index(Column.SOURCE)] for row in rows],
+                precip_mm=values.get(Column.PRECIP),
+                precip_total_mm=values.get(Column.PRECIP_TOTAL),
+                battery_v=values.get(Column.BATTERY),
             )
         except SchemaError as error:
             raise StoreFormatError(f"{origin}: {error}") from error

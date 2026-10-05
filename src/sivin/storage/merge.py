@@ -10,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from sivin.core import schema
 from sivin.core.schema import Column, MeasurementSeries
 from sivin.storage.conflicts import ConflictDecision, ConflictPolicy, ValueConflict
 
@@ -22,16 +23,23 @@ A changed rounding of the provider's export could make every value of a year con
 keeps the log, the append result and the run log small in that case. Project default.
 """
 
-VALUE_COLUMNS: Final = (Column.TEMP, Column.RH)
-"""Measured columns, merged independently of each other."""
+VALUE_COLUMNS: Final = schema.VALUE_COLUMNS
+"""Measured columns, merged independently of each other.
+
+``temp_c``, ``rh_pct`` and, since WP-1.9, ``precip_mm``, ``precip_total_mm`` and ``battery_v``
+(:data:`sivin.core.schema.VALUE_COLUMNS`). The auxiliary columns follow exactly the same rules as
+temperature and humidity: a stored missing value is filled, an incoming missing value is
+ignored, two different present values are a conflict for the policy.
+"""
 
 
 @dataclass(frozen=True, slots=True)
 class AppendCounts:
     """Counts of one append (or one merged partition).
 
-    Row counts refer to incoming rows, value counts to single ``temp_c`` / ``rh_pct`` values of
-    incoming rows whose timestamp is already stored.
+    Row counts refer to incoming rows, value counts to single values of :data:`VALUE_COLUMNS`
+    (``temp_c``, ``rh_pct``, ``precip_mm``, ``precip_total_mm``, ``battery_v``) of incoming rows
+    whose timestamp is already stored.
 
     Attributes
     ----------
@@ -118,7 +126,8 @@ class SeriesMerger:
     """Merges incoming rows into stored rows on ``timestamp_utc``, column by column.
 
     * timestamp not stored yet → the row is added;
-    * for each of ``temp_c`` and ``rh_pct`` of a stored timestamp:
+    * for each column of :data:`VALUE_COLUMNS` of a stored timestamp (temperature, humidity,
+      precipitation, precipitation counter, battery voltage):
 
       - equal values, or both missing → nothing changes;
       - stored missing, incoming present → the value is filled in;
@@ -304,7 +313,7 @@ def _indexed(series: MeasurementSeries) -> pd.DataFrame:
     frame = series.frame
     if Column.SOURCE not in frame.columns:
         frame[Column.SOURCE] = pd.Series("", index=frame.index, dtype="str")
-    columns = [str(Column.TEMP), str(Column.RH), str(Column.SOURCE)]
+    columns = [*(str(column) for column in VALUE_COLUMNS), str(Column.SOURCE)]
     return frame.set_index(str(Column.TIMESTAMP))[columns]
 
 
@@ -315,4 +324,7 @@ def _series(template: MeasurementSeries, frame: pd.DataFrame) -> MeasurementSeri
         frame[Column.TEMP].to_numpy(),
         frame[Column.RH].to_numpy(),
         source=frame[Column.SOURCE].astype("str").tolist(),
+        precip_mm=frame[Column.PRECIP].to_numpy(),
+        precip_total_mm=frame[Column.PRECIP_TOTAL].to_numpy(),
+        battery_v=frame[Column.BATTERY].to_numpy(),
     )
