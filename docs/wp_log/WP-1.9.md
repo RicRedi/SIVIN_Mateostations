@@ -377,3 +377,71 @@ field, drop that field and warn on the console. Required columns stay strict.
 5. **`DAILY_COLUMNS` unchanged, new `ALL_DAILY_COLUMNS`.** Accepted. Existing callers
    (`frame[list(DAILY_COLUMNS)]` in the thermal fixtures, ripening, winter freeze) keep working
    (full suite green). Frames without the aux columns construct a `DailyWeather` with NaN.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed head `00d092e`. It includes the merge `43a028a` of `origin/wp/1.8-offsite-log`
+(`c458c3e`). The merge commit has both parents. Against WP-1.8 it changes only the 35 files of
+this WP, so no WP-1.8 file was altered.
+
+**Gates observed** in `/home/user/wt/wp-1.9`:
+- **Python:** `make lint` (ruff clean, 211 files formatted). `make type`: `Success: no issues
+  found in 127 source files`. `make test`: `1506 passed`. `make cov`: TOTAL 99 %. `daily.py`,
+  `tabular.py`, `validation.py`, `battery.py` and `precip.py` are each at 100 %.
+- **Web:** `npm ci`, `npm run lint` (exit 0), `npm run typecheck` (exit 0), `npm test` with 15
+  files / 153 tests passed, `npm run build` OK.
+
+**Probes re-run** (`/tmp/claude-0/review-1.9/`):
+- **Full real export (3520 rows):** accepted with no findings, all six columns read. Counter and
+  range checks report nothing with the defaults. The battery check gives one event (2 readings
+  at 3.0 V).
+- **Mixed storage scenario** (old-layout file of 60 rows, then the full import): `new_rows=3460,
+  filled_values=180`, no conflicts. All five value columns equal the parsed series, so nothing
+  is lost. A repeated append writes nothing and the SHA-256 is unchanged. Read → write is
+  byte-identical for both partitions.
+- **Off-site exclusion after the WP-1.8 merge:** I ran the real export through
+  `QualityPipeline` with the committed `sensors/offsite_log.yaml`.
+  - All 3520 rows get `PRE_DEPLOYMENT`, and `DailyWeather.from_series` (default auxiliary mask)
+    gives **no** `precip_sum_mm`, `battery_min_v` or precipitation count on any day.
+  - With the period shortened to end at 2025-12-19 00:00, no day before 2025-12-19 has
+    precipitation. The days after it show hand-checked sums: 2025-12-19 = 1.5 mm
+    (0.3 + 0.9 + 0.3), 2025-12-21 = 0.3 mm, 2026-02-09 = 0.9 mm.
+  - A `SPIKE` flag on a rainy row lowers `n_samples` (47 → 46) but keeps `precip_sum_mm = 1.5`
+    and `precip_n_samples = 47`.
+- **Round-1 example:** a row with T missing now counts. `precip_sum_mm` is 6.0 (was 4.0) and
+  `battery_min_v` is 3.1 V (was 3.6).
+- **Parsers:**
+  - A unitless `Battery` column with values of 85 now becomes NaN with a `battery-bounds`
+    WARNING.
+  - Negative precipitation becomes NaN.
+  - `Srážky (l/m2)` is accepted.
+  - The other variants behave as in round 1.
+- **Battery hysteresis:** for the readings 3.3, 3.2, 3.3, 3.2, 3.3, 3.2, 3.4, 3.2 with
+  threshold 3.3 V and recovery 3.4 V, the result is 2 episodes, `((1, 5), (7, 7))`, instead of
+  one event per dip.
+- **Event text:** the `precip_range` detail is now neutral.
+
+**Status of the round-1 findings:**
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | `src/sivin/core/daily.py` | Auxiliary daily aggregates were taken over T/RH-valid rows | resolved: `auxiliary_exclude_mask`, default `PRE_DEPLOYMENT \| MANUAL_EXCLUDE` (owner/orchestrator decision), `precip_n_samples`; off-site exclusion verified after the WP-1.8 merge |
+| minor | `src/sivin/ingest/parsers/tabular.py`, `validation.py` | Out-of-bounds aux values were kept | resolved: read as missing, with a WARNING |
+| minor | `src/sivin/quality/checks/precip.py` | Event text claimed a set-aside | resolved |
+| minor | `src/sivin/quality/checks/battery.py` | Battery flapping | resolved: hysteresis, `recovery_margin_v` 0.1 V [to be tuned] |
+| minor | `web/src/contract/validateSeries.ts` | A malformed optional field rejected the whole file | resolved: field ignored with a warning, required fields stay strict |
+| minor | `MIGRATION_PLAN.md` §2.6 | `daily.json` example lacked the new fields | resolved outside this branch: orchestrator commit `ec3f11f` (not yet on `origin/main` at review time) |
+| nit | `src/sivin/storage/merge.py:218` | `source` of an old row moves to the new export when only precipitation is filled | open (existing WP-1.4 rule; accepted) |
+| nit | `src/sivin/ingest/parsers/columns.py` | `l/m²` not accepted | resolved |
+| nit | `web/tests/contract.optional.test.ts` | Message `like "t"` for daily files | open (existing `FieldReader` text, outside scope) |
+
+**New observations (round 2):**
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| nit | `src/sivin/core/daily.py` / plan §2.6 | `precip_n_samples` exists in `DailyWeather` but not in the web `daily.json` contract. WP-3.2 should decide whether to publish it, so the portal can mark partial rain days. | open (follow-up) |
+| nit | `docs/wp_log/WP-1.9.md` | The worker edited the Status column of the round-1 review table. The statuses are correct (verified above), but per the reviewer role, review statuses should be set by the reviewer. | open (process note) |
+
+No blockers or majors remain.
