@@ -24,10 +24,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: pipeline
-  cancel-in-progress: false
-
 permissions: {}
 
 env:
@@ -35,6 +31,16 @@ env:
   DATA_WORKTREE: .data-branch
   LOCAL_TIMEZONE: Europe/Prague
   LOCAL_RUN_HOUR: "6"
+  # Never committed to the data branch, whatever its .gitignore says (enforced in the commit
+  # step as well): downloads are fetched again on every run, rejected exports would pile up
+  # daily (their reports go into the run artifact), temporary files of interrupted writes,
+  # and any .env file.
+  DATA_BRANCH_GITIGNORE: |
+    # Written by .github/workflows/pipeline.yml; the workflow also enforces these rules.
+    /data/downloads/
+    /data/quarantine/
+    *.tmp
+    .env
 
 jobs:
   gate:
@@ -73,15 +79,26 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Concurrency is set on the jobs after the gate, not on the workflow, so the no-op run of
+    # the other cron (and its gate job) never enters a group. GitHub runs one job of a group
+    # at a time and keeps at most ONE pending job per group: a newly queued job cancels the
+    # pending one (never the running one, cancel-in-progress: false). Each job has its own
+    # group (pipeline-data, pipeline-pages, pipeline-deploy): with one shared group the next
+    # job of a run (queued when its predecessor ends) would cancel a waiting job of a newer
+    # run. Per job, a cancelled pending job is always superseded by a newer run (which fetches
+    # the same exports or deploys newer data), and the order of the runs is kept because each
+    # job only becomes ready after the previous job of its run.
+    concurrency:
+      group: pipeline-data
+      cancel-in-progress: false
     permissions:
       contents: write
     outputs:
       data_sha: ${{ steps.commit.outputs.data_sha }}
     steps:
+      # No ref: the triggering ref, which for schedule is always the default branch (main).
       - name: Check out main
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
 
       - name: Check out the data branch (create it if missing)
         run: |
@@ -112,13 +129,7 @@ jobs:
 
           The data are public by decision of the owner.
           EOF
-            cat > "$DATA_WORKTREE/.gitignore" <<'EOF'
-          # Exports are downloaded again on every run; rejected ones are listed in the job
-          # summary and their validation reports are kept as a short-lived run artifact.
-          /data/downloads/
-          /data/quarantine/
-          .*.tmp
-          EOF
+            printf '%s' "$DATA_BRANCH_GITIGNORE" > "$DATA_WORKTREE/.gitignore"
           else
             echo "::error::Cannot list the branches of origin (git exit code $status)."
             exit 1
@@ -200,29 +211,36 @@ jobs:
         if: steps.judge.outputs.publish == 'true'
         env:
           CODE: ${{ steps.run.outputs.code }}
+          STARTED: ${{ steps.run.outputs.started }}
         run: |
           set -euo pipefail
+          counts=""
+          if json=$(sivin --log-level INFO report --format json --run latest --since "$STARTED" 2> /dev/null); then
+            counts=$(jq -r 'select(.record) | "\(.new_rows) new rows from \(.files) files, \(.rejected_files) rejected, \(.failures) other failures"' <<< "$json" 2> /dev/null) || counts=""
+          fi
           rm -rf "${DATA_WORKTREE:?}/data" "${DATA_WORKTREE:?}/site"
           cp -a data "$DATA_WORKTREE/data"
           if [ -d site/data ]; then
             mkdir -p "$DATA_WORKTREE/site"
             cp -a site/data "$DATA_WORKTREE/site/data"
           fi
-          run_log=$(find data/runs -name '*.jsonl' | sort | tail -n 1)
-          record=$(tail -n 1 "$run_log")
-          files=$(jq '.files | length' <<< "$record")
-          rows=$(jq '[.appends[].new_rows] | add // 0' <<< "$record")
-          failures=$(jq '.failures | length' <<< "$record")
           cd "$DATA_WORKTREE"
-          git add -A
+          rm -rf data/downloads data/quarantine
+          find . -path ./.git -prune -o \( -name '*.tmp' -o -name '.env' \) -type f -print -exec rm -f -- {} +
+          if [ ! -f .gitignore ]; then printf '%s' "$DATA_BRANCH_GITIGNORE" > .gitignore; fi
+          git add -A -- . ':(exclude)data/downloads' ':(exclude)data/quarantine' ':(exclude,glob)**/*.tmp' ':(exclude,glob)**/.env'
+          git rm -r -q --cached --ignore-unmatch -- data/downloads data/quarantine ':(glob)**/*.tmp' ':(glob)**/.env'
           if git diff --cached --quiet; then
             echo "No changes in the data; nothing to commit."
           else
-            message="data: run of $(date -u +%Y-%m-%d), ${rows} new rows from ${files} files, ${failures} failures (exit code ${CODE})"
+            message="data: run of $(date -u +%Y-%m-%d)${counts:+, $counts} (exit code ${CODE})"
             git -c user.name="github-actions[bot]" \
                 -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
                 commit -q -m "$message"
-            git push origin "HEAD:refs/heads/$DATA_BRANCH"
+            if ! git push origin "HEAD:refs/heads/$DATA_BRANCH"; then
+              echo "::error::The push to '$DATA_BRANCH' was rejected: the branch changed after this run checked it out (another push). Nothing was lost; run the workflow again (Actions -> pipeline -> Run workflow, or re-run this run)."
+              exit 1
+            fi
             echo "Pushed: $message"
           fi
           echo "data_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -247,13 +265,15 @@ jobs:
     needs: collect
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: pipeline-pages
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
       - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - name: Check out the data committed by this run
@@ -275,19 +295,18 @@ jobs:
 
       - name: Site data
         run: |
-          set +e -uo pipefail
+          set -euo pipefail
           rm -rf data site
           mkdir -p data
           if [ -d "$DATA_WORKTREE/data" ]; then cp -a "$DATA_WORKTREE/data/." data/; fi
           if [ -d "$DATA_WORKTREE/site" ]; then cp -a "$DATA_WORKTREE/site" site; fi
-          sivin --log-level INFO build-site
-          code=$?
+          code=0
+          sivin --log-level INFO build-site || code=$?
           case "$code" in
             0) ;;
             1) echo "::warning::Some sensors or indices failed; their last good site data are published." ;;
             *) echo "::error::sivin build-site failed (exit code $code)."; exit 1 ;;
           esac
-          set -e
           rm -rf web/public/data
           cp -a site/data web/public/data
 
@@ -302,8 +321,17 @@ jobs:
         working-directory: web
         env:
           VITE_DEMO_DATA: "false"
-          SITE_BASE: /${{ github.event.repository.name }}/
         run: |
+          # Project Pages serve https://<owner>.github.io/<repository>/; the repository name comes
+          # from GITHUB_REPOSITORY (owner/name, set on every runner for every event), not from the
+          # event payload, which a scheduled run does not carry.
+          name="${GITHUB_REPOSITORY#*/}"
+          if [ -z "${GITHUB_REPOSITORY:-}" ] || [ -z "$name" ] || [ "$name" = "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Cannot derive the Pages base path from GITHUB_REPOSITORY='${GITHUB_REPOSITORY:-}'."
+            exit 1
+          fi
+          export SITE_BASE="/${name}/"
+          echo "Base path: $SITE_BASE"
           npm ci
           npm run build
 
@@ -317,6 +345,9 @@ jobs:
     needs: build-site
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: pipeline-deploy
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

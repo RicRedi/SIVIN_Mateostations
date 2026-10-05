@@ -13,7 +13,7 @@ and `site/data` to `data` as `github-actions[bot]` (never forced, no empty commi
 `build-site` checks out the data commit of this run, runs `sivin build-site` (incremental),
 replaces the demo fixture with the real site data and builds the web with `VITE_DEMO_DATA=false`
 and the Pages base path; job `deploy` publishes it with `actions/deploy-pages`. `sivin report`
-(`--format markdown|text`, `--run latest|YYYY-MM-DD`, `--since`, `--outcome`) summarises a run
+(`--format markdown|text|json`, `--run latest|YYYY-MM-DD`, `--since`, `--outcome`) summarises a run
 record and the current QC warnings (incl. `low_battery` and `unlogged_off_site`), redacted.
 actionlint runs in CI. `docs/operations.md` is the owner's manual.
 
@@ -28,7 +28,8 @@ actionlint runs in CI. `docs/operations.md` is the owner's manual.
 - `src/sivin/app/summary_formats.py` (new) — `SummaryFormat` ABC (template method over the
   primitives heading/text/table/items) registered in `summary_format_registry`
   (`NamedRegistry` of `sivin.storage.registry`): `MarkdownSummary` (`markdown`), `TextSummary`
-  (`text`); `markdown_text` escaping.
+  (`text`) as `DocumentFormat`s, and `JsonSummary` (`json`, counts for the commit message);
+  `markdown_text` escaping (also `$` and bare links).
 - `src/sivin/app/factory.py` — `ServiceFactory.summary_service()`.
 - `src/sivin/cli/commands/summary.py` (new), `src/sivin/cli/main.py` — command `sivin report`.
 - `tests/app/test_summary.py`, `tests/cli/test_report.py`,
@@ -38,7 +39,7 @@ actionlint runs in CI. `docs/operations.md` is the owner's manual.
 ### Public API
 
 ```text
-sivin report [--format markdown|text] [--run latest|YYYY-MM-DD] [--since ISO] [--outcome CODE]
+sivin report [--format markdown|text|json] [--run latest|YYYY-MM-DD] [--since ISO] [--outcome CODE]
   exit 0; 2 for an unknown format or an invalid --run/--since; 3 outside a project or with an
   invalid configuration. Writes nothing.
 
@@ -127,7 +128,7 @@ In `/home/user/wt/wp-4.1` (Python 3.12 `.venv`):
    validation reports (`*.report.json`) are uploaded with the summary as a 14-day artifact; the
    rejected exports themselves are not uploaded (brief: "only the run summary and quarantine
    reports, not the downloads").
-5. **Checkout of the default branch.** Both jobs check out `github.event.repository.default_branch`
+5. **Checkout of the default branch.** (Round 2: replaced by the triggering ref, see Review.) Both jobs checked out `github.event.repository.default_branch`
    (= `main`), so a manual run started from another branch still uses the code of `main`.
 6. **`sivin report` command name and location.** Command module `cli/commands/summary.py`
    (`cli/commands/report.py` already exists for the plain-text echo helpers); default format
@@ -163,6 +164,37 @@ In `/home/user/wt/wp-4.1` (Python 3.12 `.venv`):
    check?
 5. **`site/data` committed to `data`** (Deviations 2): accept the extra history (a few hundred
    KB of changed JSON per day with 4 sensors, stored as deltas)?
+
+## Round 2 (review findings)
+
+All nine findings are fixed (Status column below). Changes:
+
+- `pipeline.yml`: base path from `GITHUB_REPOSITORY` with an `::error::` guard; no
+  `github.event.repository` (checkouts use the triggering ref); job-level concurrency in three
+  groups (deviation from "one shared group", reason in the table and in a workflow comment);
+  commit step enforces the exclusions independent of the branch `.gitignore` (rules now in the
+  workflow env `DATA_BRANCH_GITIGNORE`: `/data/downloads/`, `/data/quarantine/`, `*.tmp`,
+  `.env`), takes the counts from `sivin report --format json --since <start>` with a fallback
+  message, and explains a rejected push; `build-site` copy-in under `set -euo pipefail`.
+- `sivin report --format json` (`JsonSummary`); `SummaryFormat.render` is now abstract and the
+  shared document template lives in `DocumentFormat` (Markdown, text).
+- `markdown_text`: `$` escaped, URLs and `www.` addresses as inline code.
+- `docs/operations.md`: rollback with `git restore --source=<good sha> --staged --worktree --
+  data site`, concurrency semantics, base path, commit exclusions and message, manual runs use
+  the chosen branch, checklist step 5 "open the portal after the scheduled run".
+- Tests: bash runs of the build step (valid/empty/slash-less `GITHUB_REPOSITORY`, fake `npm`),
+  of the commit step (deleted `.gitignore` → only store/derived/site files committed; unusable
+  report → message without counts; concurrent push → `::error::`, exit 1), and of the
+  documented rollback command; JSON format and link/math escaping.
+- Local simulation (scratch, as in round 1): `.gitignore` removed from `data`, then a run with a
+  rejected export → committed tree without `data/downloads` and `data/quarantine`, `.gitignore`
+  written again, message `data: run of 2026-10-05, 94 new rows from 2 files, 1 rejected, 0
+  other failures (exit code 1)`; `build-site` step OK.
+
+Gates after round 2 (in `/home/user/wt/wp-4.1`): `make lint` → all checks passed; `make type`
+→ no issues in 179 source files; `make cov` → **1951 passed**, total 99.83 %;
+`app/summary.py`, `app/summary_formats.py`, `cli/commands/summary.py` 100 %; actionlint
+1.7.12 + shellcheck 0.11.0 → no findings.
 
 ## Review
 
@@ -205,15 +237,15 @@ local simulation; nothing was run on GitHub or against the portal.
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
-| major | .github/workflows/pipeline.yml:305 | `SITE_BASE: /${{ github.event.repository.name }}/` is very likely empty on the daily `schedule` runs (the schedule event payload carries `schedule`/`workflow`, not `repository`; not verifiable here). Verified locally: with an empty name, `SITE_BASE=//` and Vite emits `src="//assets/index-….js"` (protocol-relative URL to host `assets`) → every scheduled deploy would publish a blank site; manual runs would be fine, so the first-run checklist would not catch it until the next morning. | open |
-| minor | .github/workflows/pipeline.yml:115-121, 205-217 | Exclusion of `data/downloads/` and `data/quarantine/` relies only on the `.gitignore` committed once to the `data` branch; the copy-out copies the whole `data/` and runs `git add -A`. Verified: after removing `.gitignore` from `data`, the next run committed `data/downloads/MeteoData_….csv` and the quarantined files to the public branch. | open |
-| minor | .github/workflows/pipeline.yml:27-29 | Workflow-level `concurrency` also covers the no-op gate run. GitHub keeps one pending run per group and cancels the older pending one, so the no-op cron an hour later (or any later trigger) cancels a real run (scheduled or manual) still waiting behind a long run. | open |
-| nit | .github/workflows/pipeline.yml:84, 256 | `ref: ${{ github.event.repository.default_branch }}` has the same empty-on-schedule issue; harmless (checkout falls back to the triggering ref = default branch), but fix together with the major. | open |
-| nit | .github/workflows/pipeline.yml:225 | A rejected push fails with git's generic hint only; an `::error::` line ("data branch changed meanwhile, re-run the workflow") would match docs/operations.md step 5. | open |
-| nit | .github/workflows/pipeline.yml:278-282 | In `build-site` the copy-in of the data commit runs under `set +e`, so a failed `cp` is ignored. | open |
-| nit | .github/workflows/pipeline.yml:211-215 | Commit-message counts come from the last line of the newest run-log file without the `--since` check of the summary; a malformed last line fails the commit step via `jq`. | open |
-| nit | src/sivin/app/summary_formats.py:252 | `markdown_text` does not neutralise GFM autolinks (bare `https://…`, `www.…`) or `$…$` math; texts come from the pipeline's own messages, so low risk. | open |
-| nit | docs/operations.md:254 | `git checkout <good sha> -- data site` keeps files added after `<good sha>` (e.g. a new year file); `git rm -r -q data site && git checkout <good sha> -- data site` restores the state exactly. | open |
+| major | .github/workflows/pipeline.yml:305 | `SITE_BASE: /${{ github.event.repository.name }}/` is very likely empty on the daily `schedule` runs (the schedule event payload carries `schedule`/`workflow`, not `repository`; not verifiable here). Verified locally: with an empty name, `SITE_BASE=//` and Vite emits `src="//assets/index-….js"` (protocol-relative URL to host `assets`) → every scheduled deploy would publish a blank site; manual runs would be fine, so the first-run checklist would not catch it until the next morning. | fixed (round 2): base path from `GITHUB_REPOSITORY` (`${GITHUB_REPOSITORY#*/}`) in the build step, which fails with `::error::` for an empty/invalid value; no event payload anywhere (`github.event.repository` absent, tested); bash test with a fake `npm` for valid, empty and slash-less values |
+| minor | .github/workflows/pipeline.yml:115-121, 205-217 | Exclusion of `data/downloads/` and `data/quarantine/` relies only on the `.gitignore` committed once to the `data` branch; the copy-out copies the whole `data/` and runs `git add -A`. Verified: after removing `.gitignore` from `data`, the next run committed `data/downloads/MeteoData_….csv` and the quarantined files to the public branch. | fixed (round 2): the commit step removes `data/downloads`, `data/quarantine`, `*.tmp`, `.env` from the copy, adds with exclude pathspecs, `git rm --cached --ignore-unmatch` on the same paths, rewrites a missing `.gitignore` (rules in the workflow env `DATA_BRANCH_GITIGNORE`, also `*.tmp` and `.env`); pytest runs the step with the branch `.gitignore` deleted and asserts the committed tree; the local simulation (deleted `.gitignore`, rejected export in quarantine) committed neither |
+| minor | .github/workflows/pipeline.yml:27-29 | Workflow-level `concurrency` also covers the no-op gate run. GitHub keeps one pending run per group and cancels the older pending one, so the no-op cron an hour later (or any later trigger) cancels a real run (scheduled or manual) still waiting behind a long run. | fixed (round 2) with a deviation: concurrency on the jobs after the gate, but three groups (`pipeline-data`, `pipeline-pages`, `pipeline-deploy`) instead of one shared group: with one group, the next job of a finished run (queued when its predecessor ends) would cancel the pending `collect` of a newer run — the same problem in another place. Semantics in a workflow comment and docs/operations.md; tested |
+| nit | .github/workflows/pipeline.yml:84, 256 | `ref: ${{ github.event.repository.default_branch }}` has the same empty-on-schedule issue; harmless (checkout falls back to the triggering ref = default branch), but fix together with the major. | fixed (round 2): no `ref:` (triggering ref; schedule = default branch); documented for manual runs |
+| nit | .github/workflows/pipeline.yml:225 | A rejected push fails with git's generic hint only; an `::error::` line ("data branch changed meanwhile, re-run the workflow") would match docs/operations.md step 5. | fixed (round 2): `::error::` with cause and what to do; tested with a concurrent push in a local repository |
+| nit | .github/workflows/pipeline.yml:278-282 | In `build-site` the copy-in of the data commit runs under `set +e`, so a failed `cp` is ignored. | fixed (round 2): `set -euo pipefail`; only `sivin build-site` is allowed to fail (`|| code=$?`) |
+| nit | .github/workflows/pipeline.yml:211-215 | Commit-message counts come from the last line of the newest run-log file without the `--since` check of the summary; a malformed last line fails the commit step via `jq`. | fixed (round 2): counts from the new `sivin report --format json --run latest --since <start>`; any failure (no record, bad JSON, jq) falls back to `data: run of <date> (exit code N)`; tested |
+| nit | src/sivin/app/summary_formats.py:252 | `markdown_text` does not neutralise GFM autolinks (bare `https://…`, `www.…`) or `$…$` math; texts come from the pipeline's own messages, so low risk. | fixed (round 2): `$` escaped; `scheme://…` and `www.…` rendered as inline code (not linked); tests |
+| nit | docs/operations.md:254 | `git checkout <good sha> -- data site` keeps files added after `<good sha>` (e.g. a new year file); `git rm -r -q data site && git checkout <good sha> -- data site` restores the state exactly. | fixed (round 2): `git restore --source=<good sha> --staged --worktree -- data site` from a clean tree; pytest runs the documented command and checks that a later file is removed and the tree equals `<good sha>` |
 
 Suggested fixes:
 

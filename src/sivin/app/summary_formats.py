@@ -1,13 +1,16 @@
-"""Renderings of a :class:`~sivin.app.summary.RunSummary`: Markdown (job summary) and text.
+"""Renderings of a :class:`~sivin.app.summary.RunSummary`: Markdown, text and JSON.
 
 Every format is a :class:`SummaryFormat` registered in :data:`summary_format_registry` under its
-``name``; ``sivin report --format NAME`` picks one. A format only defines the primitives
-(heading, paragraph, table, list); the content and its order are shared
-(:meth:`SummaryFormat.render`), so both formats always say the same.
+``name``; ``sivin report --format NAME`` picks one. The documents for people
+(:class:`DocumentFormat`: Markdown for the job summary, text for a terminal) only define the
+primitives (heading, paragraph, table, list); the content and its order are shared
+(:meth:`DocumentFormat.render`), so both always say the same. :class:`JsonSummary` gives the
+counts for scripts (the commit message of the scheduled workflow).
 """
 
 from __future__ import annotations
 
+import json
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -33,7 +36,7 @@ _LOCAL_FORMAT: Final = "%Y-%m-%d %H:%M %Z"
 
 
 class SummaryFormat(ABC):
-    """A rendering of the run summary; subclasses define the text primitives.
+    """A rendering of the run summary.
 
     Register a new format with ``@summary_format_registry.register`` and a class variable
     ``name``.
@@ -41,8 +44,27 @@ class SummaryFormat(ABC):
 
     name: ClassVar[str] = ""
 
+    @abstractmethod
     def render(self, summary: RunSummary) -> str:
         """Return the whole summary as text.
+
+        Parameters
+        ----------
+        summary : RunSummary
+            What to show.
+
+        Returns
+        -------
+        str
+            The rendering, ending with a line break.
+        """
+
+
+class DocumentFormat(SummaryFormat):
+    """A summary document for people; subclasses define the text primitives."""
+
+    def render(self, summary: RunSummary) -> str:
+        """Return the whole summary as a document.
 
         Parameters
         ----------
@@ -249,8 +271,12 @@ def _utc(moment: datetime) -> str:
 summary_format_registry: Final = NamedRegistry[SummaryFormat](SummaryFormat)
 """The registered summary formats, by ``name``."""
 
-_MARKDOWN_SPECIAL: Final = re.compile(r"([\\`*_\[\]<>|~&#])")
-"""ASCII punctuation that could start Markdown or HTML markup; escaped with a backslash."""
+_MARKDOWN_SPECIAL: Final = re.compile(r"([\\`*_\[\]<>|~&#$])")
+"""ASCII punctuation that could start Markdown, HTML or math (``$``) markup; escaped with a
+backslash."""
+
+_BARE_LINK: Final = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9+.-]*://|www\.)\S+")
+"""A URL (``scheme://...``) or ``www.`` address that GitHub would turn into a link."""
 
 
 def markdown_text(value: str) -> str:
@@ -264,14 +290,24 @@ def markdown_text(value: str) -> str:
     Returns
     -------
     str
-        The text with markup characters backslash-escaped and line breaks as spaces, so a
-        message can neither break a table nor inject HTML or links.
+        The text with markup characters (also ``$`` of math) backslash-escaped and line breaks
+        as spaces, so a message can neither break a table nor inject HTML or links. URLs and
+        ``www.`` addresses become inline code, which GitHub does not link.
     """
-    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(value.splitlines()))
+    text = " ".join(value.splitlines())
+    parts = []
+    position = 0
+    for match in _BARE_LINK.finditer(text):
+        parts.append(_MARKDOWN_SPECIAL.sub(r"\\\1", text[position : match.start()]))
+        link = match.group().replace("`", "'").replace("|", "\\|")
+        parts.append(f"`{link}`")
+        position = match.end()
+    parts.append(_MARKDOWN_SPECIAL.sub(r"\\\1", text[position:]))
+    return "".join(parts)
 
 
 @summary_format_registry.register
-class MarkdownSummary(SummaryFormat):
+class MarkdownSummary(DocumentFormat):
     """GitHub-flavoured Markdown, for ``$GITHUB_STEP_SUMMARY``."""
 
     name: ClassVar[str] = "markdown"
@@ -300,7 +336,7 @@ def _row(cells: Sequence[str], escape: bool = True) -> str:
 
 
 @summary_format_registry.register
-class TextSummary(SummaryFormat):
+class TextSummary(DocumentFormat):
     """Plain text for a terminal: aligned columns, no markup."""
 
     name: ClassVar[str] = "text"
@@ -322,3 +358,29 @@ class TextSummary(SummaryFormat):
 
     def items(self, values: Sequence[str]) -> str:
         return "\n".join(f"- {self.text(value)}" for value in values)
+
+
+@summary_format_registry.register
+class JsonSummary(SummaryFormat):
+    """The counts of the summary as one JSON object, for scripts.
+
+    Keys: ``record`` (``false`` without a run record), ``started_at``, ``files``,
+    ``new_rows``, ``rejected_files``, ``failures`` (other than rejected files),
+    ``warning_kinds`` and ``outcome`` (exit code or ``null``). Counts are numbers [count].
+    """
+
+    name: ClassVar[str] = "json"
+
+    def render(self, summary: RunSummary) -> str:
+        record = summary.record
+        document = {
+            "record": record is not None,
+            "started_at": record.to_dict()["started_at"] if record is not None else None,
+            "files": len(record.files) if record is not None else 0,
+            "new_rows": summary.new_rows,
+            "rejected_files": len(summary.rejected_files),
+            "failures": len(summary.other_failures),
+            "warning_kinds": len(summary.warnings),
+            "outcome": summary.outcome.code if summary.outcome is not None else None,
+        }
+        return json.dumps(document, sort_keys=True) + "\n"

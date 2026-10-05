@@ -65,6 +65,12 @@ class TestReport:
         assert "Outcome: OK (exit code 0). Everything succeeded." in result.stdout
         assert "### Export files\n\n- MeteoData\\_8615620 77678271 (VUT)" in result.stdout
 
+    def test_json_counts_for_the_commit_message(self, project: Project) -> None:
+        result = invoke("report", "--format", "json", "--since", RUN_TIME.isoformat())
+        assert result.exit_code == 0, result.output
+        document = json.loads(result.stdout)
+        assert (document["record"], document["files"], document["new_rows"]) == (True, 1, 94)
+
     def test_text_is_the_default(self, project: Project) -> None:
         result = invoke("report")
         assert result.exit_code == 0, result.output

@@ -10,7 +10,7 @@ from sivin.app.outcome import Outcome
 from sivin.cli.common import finish, handled, state_of
 from sivin.cli.console import console
 
-FORMAT_HELP = "Output format: markdown (GitHub job summary) or text."
+FORMAT_HELP = "Output format: markdown (GitHub job summary), text, or json (counts for scripts)."
 
 
 def report(

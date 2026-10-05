@@ -354,7 +354,7 @@ def full_summary(max_items: int = 50) -> RunSummary:
 
 class TestMarkdown:
     def test_registered_formats(self) -> None:
-        assert summary_format_registry.names() == ("markdown", "text")
+        assert summary_format_registry.names() == ("json", "markdown", "text")
         assert isinstance(summary_format_registry.create("markdown"), MarkdownSummary)
 
     def test_full_summary(self) -> None:
@@ -414,10 +414,39 @@ class TestMarkdown:
         text = MarkdownSummary().render(RunSummary(None, warnings=(group,)))
         assert "| 77678271 | low\\_battery | 1 | - |  |" in text
 
+    def test_links_and_math_are_neutralised(self) -> None:
+        assert markdown_text("see https://x.example/a_b|c and www.example.org, $x$") == (
+            "see `https://x.example/a_b\\|c` and `www.example.org,` \\$x\\$"
+        )
+        assert markdown_text("odd `ftp://h/`x") == "odd \\``ftp://h/'x`"
+
     def test_escaping(self) -> None:
         assert markdown_text("a|b <script> [x](y) *z*\nnext & #1") == (
             "a\\|b \\<script\\> \\[x\\](y) \\*z\\* next \\& \\#1"
         )
+
+
+class TestJson:
+    def test_counts(self) -> None:
+        text = summary_format_registry.create("json").render(full_summary())
+        assert text.endswith("\n")
+        assert json.loads(text) == {
+            "record": True,
+            "started_at": "2026-10-05T04:00:12Z",
+            "files": 1,
+            "new_rows": 47,
+            "rejected_files": 1,
+            "failures": 1,
+            "warning_kinds": 2,
+            "outcome": 1,
+        }
+
+    def test_without_record(self) -> None:
+        document = json.loads(summary_format_registry.create("json").render(RunSummary(None)))
+        assert document["record"] is False
+        assert document["started_at"] is None
+        assert document["files"] == 0
+        assert document["outcome"] is None
 
 
 class TestText:
@@ -430,7 +459,7 @@ class TestText:
         assert "- a|b.csv: rejected: column <Teplota> missing" in text
 
     def test_a_new_format_is_a_registered_class(self) -> None:
-        class Shout(TextSummary):
+        class Shout(TextSummary):  # a DocumentFormat with one primitive changed
             name = "shout"
 
             def text(self, value: str) -> str:

@@ -84,7 +84,21 @@ class TestTriggers:
         )
 
     def test_one_run_at_a_time_never_cancelled(self, workflow: dict[Any, Any]) -> None:
-        assert workflow["concurrency"] == {"group": "pipeline", "cancel-in-progress": False}
+        jobs = workflow["jobs"]
+        assert "concurrency" not in workflow
+        assert "concurrency" not in jobs["gate"]
+        groups = {name: jobs[name]["concurrency"] for name in ("collect", "build-site", "deploy")}
+        assert groups == {
+            "collect": {"group": "pipeline-data", "cancel-in-progress": False},
+            "build-site": {"group": "pipeline-pages", "cancel-in-progress": False},
+            "deploy": {"group": "pipeline-deploy", "cancel-in-progress": False},
+        }
+
+    def test_checks_out_the_triggering_ref(self, workflow: dict[Any, Any]) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        assert "github.event.repository" not in text
+        for job in ("collect", "build-site"):
+            assert "ref" not in step(workflow, job, "Check out main").get("with", {})
 
     def test_local_time_settings(self, workflow: dict[Any, Any]) -> None:
         assert workflow["env"]["LOCAL_TIMEZONE"] == "Europe/Prague"
@@ -236,10 +250,10 @@ class TestSafety:
 
     def test_never_force_push(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        pushes = [line for line in text.splitlines() if "git push" in line]
-        assert pushes == ['            git push origin "HEAD:refs/heads/$DATA_BRANCH"']
+        pushes = [line.strip() for line in text.splitlines() if "git push" in line]
+        assert pushes == ['if ! git push origin "HEAD:refs/heads/$DATA_BRANCH"; then']
         assert "--force" not in text
-        assert "force" not in text.lower()
+        assert re.search(r"\bforce\b|force-with-lease|--force", text, flags=re.IGNORECASE) is None
 
     def test_actions_pinned_to_major_versions(self, workflow: dict[Any, Any]) -> None:
         uses = [
@@ -276,8 +290,8 @@ class TestSafety:
 class TestDeployment:
     def test_web_built_with_real_data_and_the_pages_base(self, workflow: dict[Any, Any]) -> None:
         build = step(workflow, "build-site", "Build the web portal")
-        assert build["env"]["VITE_DEMO_DATA"] == "false"
-        assert build["env"]["SITE_BASE"] == "/${{ github.event.repository.name }}/"
+        assert build["env"] == {"VITE_DEMO_DATA": "false"}
+        assert 'name="${GITHUB_REPOSITORY#*/}"' in build["run"]
         site = step(workflow, "build-site", "Site data")["run"]
         assert "rm -rf web/public/data" in site
         assert "cp -a site/data web/public/data" in site
@@ -291,6 +305,48 @@ class TestDeployment:
         assert deploy["environment"]["name"] == "github-pages"
         assert deploy["steps"][0]["uses"].startswith("actions/deploy-pages@")
         assert workflow["jobs"]["build-site"]["needs"] == "collect"
+
+    @pytest.fixture
+    def fake_npm(self, tmp_path: Path) -> Path:
+        """An ``npm`` that records the SITE_BASE of ``npm run build``."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "npm"
+        fake.write_text(
+            '#!/bin/sh\nif [ "$1" = run ]; then echo "$SITE_BASE" > "$NPM_LOG"; fi\n',
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        return bin_dir
+
+    @needs_bash
+    @pytest.mark.parametrize(
+        ("repository", "base"),
+        [("RicRedi/SIVIN_Mateostations", "/SIVIN_Mateostations/"), ("", None), ("noslash", None)],
+    )
+    def test_base_path_from_the_repository_name(
+        self,
+        workflow: dict[Any, Any],
+        fake_npm: Path,
+        tmp_path: Path,
+        repository: str,
+        base: str | None,
+    ) -> None:
+        build = step(workflow, "build-site", "Build the web portal")
+        log = tmp_path / "npm.log"
+        env = {
+            "GITHUB_REPOSITORY": repository,
+            "NPM_LOG": str(log),
+            "PATH": f"{fake_npm}{os.pathsep}{os.environ['PATH']}",
+        }
+        process, _ = run_script(build["run"], tmp_path, env, workflow)
+        if base is None:
+            assert process.returncode == 1
+            assert "::error::Cannot derive the Pages base path" in process.stdout
+            assert not log.exists()
+        else:
+            assert process.returncode == 0, process.stderr
+            assert log.read_text(encoding="utf-8") == f"{base}\n"
 
     def test_site_built_from_the_commit_of_this_run(self, workflow: dict[Any, Any]) -> None:
         checkout = step(workflow, "build-site", "Check out the data committed by this run")
@@ -336,7 +392,7 @@ class TestDataBranch:
         )
         ignored = (branch / ".gitignore").read_text(encoding="utf-8").splitlines()
         rules = [line for line in ignored if line and not line.startswith("#")]
-        assert rules == ["/data/downloads/", "/data/quarantine/", ".*.tmp"]
+        assert rules == ["/data/downloads/", "/data/quarantine/", "*.tmp", ".env"]
         assert (branch / "README.md").read_text(encoding="utf-8").startswith("# SIVIN")
         assert not (branch / "pyproject.toml").exists()
         assert (clone / "data").is_dir()
@@ -365,3 +421,172 @@ class TestDataBranch:
         assert (clone / "data" / "raw" / "77678271" / "2026.csv").read_text(encoding="utf-8") == (
             "synthetic\n"
         )
+
+    def _commit(
+        self, workflow: dict[Any, Any], clone: Path, sivin_output: str
+    ) -> subprocess.CompletedProcess[str]:
+        bin_dir = clone.parent / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "sivin"
+        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SIVIN_OUTPUT"\n', encoding="utf-8")
+        fake.chmod(0o755)
+        script = step(workflow, "collect", "Commit and push the data branch")["run"]
+        env = {
+            "CODE": "0",
+            "STARTED": "2026-10-05T04:00:00Z",
+            "FAKE_SIVIN_OUTPUT": sivin_output,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        }
+        return run_script(script, clone, env, workflow)[0]
+
+    def _committed(self, clone: Path) -> tuple[set[str], str]:
+        origin = clone.parent / "origin.git"
+        files = subprocess.run(
+            [GIT or "git", "-C", str(origin), "ls-tree", "-r", "--name-only", "data"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        message = subprocess.run(
+            [GIT or "git", "-C", str(origin), "log", "-1", "--format=%s", "data"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return set(files), message
+
+    def test_commit_excludes_downloads_quarantine_temporary_and_env_files(
+        self, workflow: dict[Any, Any], clone: Path
+    ) -> None:
+        assert (
+            run_script(step(workflow, "collect", self.SCRIPT)["run"], clone, {}, workflow)[
+                0
+            ].returncode
+            == 0
+        )
+        (clone / ".data-branch" / ".gitignore").unlink()
+        for relative in (
+            "data/raw/77678271/2026.csv",
+            "data/raw/77678271/.2026.csv.x1.tmp",
+            "data/downloads/MeteoData_8615620 77678271 (VUT)_20261005_060000.csv",
+            "data/quarantine/bad.csv",
+            "data/quarantine/bad.csv.report.json",
+            "data/.env",
+            "site/data/manifest.json",
+        ):
+            path = clone / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic\n", encoding="utf-8")
+        counts = '{"record": true, "files": 4, "new_rows": 94, "rejected_files": 1, "failures": 0}'
+        process = self._commit(workflow, clone, counts)
+        assert process.returncode == 0, process.stderr
+        files, message = self._committed(clone)
+        assert files == {
+            ".gitignore",
+            "README.md",
+            "data/raw/77678271/2026.csv",
+            "site/data/manifest.json",
+        }
+        assert re.fullmatch(
+            r"data: run of \d{4}-\d{2}-\d{2}, 94 new rows from 4 files, 1 rejected, "
+            r"0 other failures \(exit code 0\)",
+            message,
+        )
+
+    def test_commit_message_without_counts_when_the_report_is_unusable(
+        self, workflow: dict[Any, Any], clone: Path
+    ) -> None:
+        assert (
+            run_script(step(workflow, "collect", self.SCRIPT)["run"], clone, {}, workflow)[
+                0
+            ].returncode
+            == 0
+        )
+        (clone / "data" / "runs").mkdir(parents=True)
+        (clone / "data" / "runs" / "2026-10-05.jsonl").write_text("{broken\n", encoding="utf-8")
+        process = self._commit(workflow, clone, "not json")
+        assert process.returncode == 0, process.stderr
+        assert re.fullmatch(
+            r"data: run of \d{4}-\d{2}-\d{2} \(exit code 0\)", self._committed(clone)[1]
+        )
+
+    def test_rejected_push_explains_what_to_do(
+        self, workflow: dict[Any, Any], clone: Path, tmp_path: Path
+    ) -> None:
+        assert GIT is not None
+        git = [GIT, "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        assert (
+            run_script(step(workflow, "collect", self.SCRIPT)["run"], clone, {}, workflow)[
+                0
+            ].returncode
+            == 0
+        )
+        assert self._commit(workflow, clone, "{}").returncode == 0
+        subprocess.run(
+            [*git, "-C", str(clone), "worktree", "remove", "--force", ".data-branch"], check=True
+        )
+        assert (
+            run_script(step(workflow, "collect", self.SCRIPT)["run"], clone, {}, workflow)[
+                0
+            ].returncode
+            == 0
+        )
+        other = tmp_path / "other"
+        subprocess.run(
+            [*git, "clone", "-q", "-b", "data", str(tmp_path / "origin.git"), str(other)],
+            check=True,
+        )
+        (other / "note.txt").write_text("concurrent\n", encoding="utf-8")
+        subprocess.run([*git, "-C", str(other), "add", "-A"], check=True)
+        subprocess.run([*git, "-C", str(other), "commit", "-q", "-m", "concurrent"], check=True)
+        subprocess.run([*git, "-C", str(other), "push", "-q", "origin", "data"], check=True)
+        (clone / "data" / "raw").mkdir(parents=True)
+        (clone / "data" / "raw" / "new.csv").write_text("synthetic\n", encoding="utf-8")
+        process = self._commit(workflow, clone, "{}")
+        assert process.returncode == 1
+        assert "::error::The push to 'data' was rejected" in process.stdout
+        assert self._committed(clone)[1] == "concurrent"
+
+
+@needs_git
+def test_documented_rollback_restores_the_exact_tree(tmp_path: Path) -> None:
+    """docs/operations.md: ``git restore --source=<sha> --staged --worktree -- data site``."""
+    assert GIT is not None
+    git = [
+        GIT,
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-C",
+        str(tmp_path),
+    ]
+    subprocess.run([*git, "init", "-q", "-b", "data"], check=True)
+
+    def write(relative: str, text: str) -> None:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    write("data/raw/77678271/2026.csv", "good\n")
+    write("site/data/manifest.json", "good\n")
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "good"], check=True)
+    good = subprocess.run(
+        [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    write("data/raw/77678271/2026.csv", "bad\n")
+    write("data/raw/77678271/2027.csv", "added later\n")
+    write("site/data/series/77678271/daily.json", "added later\n")
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "bad"], check=True)
+    docs = (WORKFLOW.parents[2] / "docs" / "operations.md").read_text(encoding="utf-8")
+    command = "git restore --source=<good sha> --staged --worktree -- data site"
+    assert command in docs
+    subprocess.run([*git, *command.replace("<good sha>", good).split()[1:]], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "rollback"], check=True)
+    diff = subprocess.run(
+        [*git, "diff", "--stat", good, "HEAD"], capture_output=True, text=True, check=True
+    )
+    assert diff.stdout == ""
+    assert not (tmp_path / "data/raw/77678271/2027.csv").exists()

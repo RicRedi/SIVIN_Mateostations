@@ -58,21 +58,33 @@ never starts anything, it only downloads the JSON files of the last deployment.
    summary was written, and nothing is committed or deployed.
 5. **Commit.** The changed files are copied back into `.data-branch/` and committed as
    `github-actions[bot]` with a message like `data: run of 2026-10-05, 94 new rows from 4
-   files, 0 failures (exit code 0)`, then pushed with a plain `git push` (never forced). No
-   change, no commit. A rejected push (someone else pushed to `data` meanwhile) fails the job
-   and nothing is lost; run the workflow again.
+   files, 0 rejected, 0 other failures (exit code 0)` (counts from `sivin report --format json`
+   for this run; without usable counts the message is just `data: run of <date> (exit code
+   N)`), then pushed with a plain `git push` (never forced). No change, no commit.
+   `data/downloads/`, `data/quarantine/`, `*.tmp` and `.env` files are removed from the copy
+   and excluded from the commit by the step itself, whatever the branch's `.gitignore` says
+   (a missing `.gitignore` is written again). A rejected push (someone else pushed to `data`
+   meanwhile) fails the job with an error that says so; nothing is lost; run the workflow
+   again.
 6. **build-site** checks out `main` and exactly the data commit of this run, runs `sivin
    build-site` (incremental: every sensor is reused from the committed `site/data` and its
    build state, so it only refreshes the manifest and repairs missing files), replaces the
    synthetic demo fixture `web/public/data/` with `site/data/`, builds the web with
-   `VITE_DEMO_DATA=false` (no "demo data" badge) and `SITE_BASE=/<repository name>/`, and
+   `VITE_DEMO_DATA=false` (no "demo data" badge) and the base path `/<repository name>/`
+   (from `GITHUB_REPOSITORY`, which every runner sets; the step fails with an error instead of
+   building with an empty name), and
    uploads the Pages artifact. Web and data of the same commit are always deployed together
    (required since WP-3.2, see its hand-off note).
 7. **deploy** publishes the artifact with `actions/deploy-pages` to the `github-pages`
    environment.
 
-Only one run at a time (`concurrency: pipeline`, never cancelled). A run started while another
-is running waits; if a third one arrives, GitHub cancels the waiting one (only one waits).
+**Overlapping runs.** Each job after the gate has its own concurrency group
+(`pipeline-data` for `collect`, `pipeline-pages` for `build-site`, `pipeline-deploy` for
+`deploy`), never cancelling a running job. The gate has none, so the no-op run of the other
+cron never waits or cancels anything. A job that finds its group busy waits; GitHub keeps only
+one waiting job per group, so a newer run's job cancels an older waiting one — which is always
+superseded by the newer run (same exports, newer data). With one shared group, the next job of a
+finished run could cancel the waiting `collect` of a newer run; hence three groups.
 
 **Permissions.** The workflow grants nothing by default. `collect` gets `contents: write` (to
 push `data`), `build-site` `contents: read`, `deploy` `pages: write` and `id-token: write`.
@@ -147,7 +159,9 @@ The workflow file must be on the default branch before the *Run workflow* button
 4. *Run workflow* again without options. Expected: about 0 new rows (only samples measured since
    the previous run), rows mostly `identical_skipped`; `site/data` mostly reused.
 5. The next morning: exactly one scheduled run, started after 06:00 Prague time (one of the
-   two crons ends in the gate with "Not the 06:00 local cron today").
+   two crons ends in the gate with "Not the 06:00 local cron today"). **Open the portal after
+   this scheduled run** too: the first scheduled deployment is the first one built from a
+   `schedule` event.
 6. Report to the agents what differed (portal behaviour, export names, timings).
 
 ## Running it by hand
@@ -168,7 +182,9 @@ $ gh run watch                                          # follow it
   sensor is rebuilt, ignoring the build state (the result is byte-identical to an incremental
   build; use it if the site data look inconsistent).
 
-The pipeline always runs the code of the default branch (`main`).
+The checkouts use the triggering ref: a scheduled run always uses the default branch (`main`);
+a manual run uses the branch chosen in *Run workflow* (keep it on `main`; the `github-pages`
+environment normally accepts deployments from the default branch only).
 
 ## Reading the job summary
 
@@ -189,7 +205,8 @@ Open the run (Actions → pipeline → the run) and scroll to the summary. It sh
   look like an indoor period that the off-site log does not cover: add an entry to
   `sensors/offsite_log.yaml` if the sensor was indeed off site), `irregular_sampling`, `gap`, …
 
-The same report is available locally: `sivin report` (text) or `sivin report --format markdown`;
+The same report is available locally: `sivin report` (text), `sivin report --format markdown`
+or `--format json` (counts only, for scripts);
 `--run 2026-10-05` selects the last run of that UTC day.
 
 ### Exit codes and what to do
@@ -251,8 +268,16 @@ Never force-push `data`; every change is a new commit, so everything can be undo
   imports the portal's exports again: rows that are still in the export come back (the store
   only adds and fills, [storage.md](storage.md)). To keep them out, fix the cause first (the
   off-site log, `MANUAL_EXCLUDE`, or the parser).
-- **Return to an older state:** `git checkout <good sha> -- data site`, commit, push, then
-  run with **skip_fetch**.
+- **Return to an older state** (exactly, also removing files added later, e.g. a new year
+  file):
+
+  ```console
+  $ git fetch origin data && git switch data && git status     # clean working tree
+  $ git restore --source=<good sha> --staged --worktree -- data site
+  $ git commit -m "data: roll back to <good sha>" && git push origin data
+  ```
+
+  then run with **skip_fetch** (tested: `tests/workflows/test_pipeline_workflow.py`).
 - **Lost or broken `site/data` or build state:** run with **full_site_build**.
 - **Redeploy an older state without changing `data`:** re-run the `build-site` and `deploy`
   jobs of an older workflow run (Actions → that run → *Re-run jobs*); `build-site` checks out the
