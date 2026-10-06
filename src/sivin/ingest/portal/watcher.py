@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Final, NoReturn
 
@@ -26,6 +27,15 @@ DEFAULT_IGNORED_PREFIXES: Final = (".",)
 
 DEFAULT_MIN_EXPORT_SIZE_BYTES: Final = 1
 """Smallest accepted export size in bytes: an empty file is never a valid export."""
+
+
+class FileKind(Enum):
+    """How the download watcher treats a file of the download directory."""
+
+    COMPLETE = "complete"
+    UNFINISHED = "unfinished"
+    IGNORED = "ignored"
+    TOO_SMALL = "too small"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +136,27 @@ class DownloadWatcher:
         """
         return frozenset(self._orphaned)
 
+    def classify(self, name: str, size_bytes: int) -> FileKind:
+        """Return how the watcher treats a file, by its name and size.
+
+        Parameters
+        ----------
+        name : str
+            File name (not a path).
+        size_bytes : int
+            File size (bytes).
+
+        Returns
+        -------
+        FileKind
+            ``UNFINISHED`` (partial-download suffix), ``IGNORED`` (ignored prefix),
+            ``TOO_SMALL`` (below ``min_size_bytes``) or ``COMPLETE``; the name rules come first.
+        """
+        kind = self._name_kind(name)
+        if kind is FileKind.COMPLETE and size_bytes < self._min_size_bytes:
+            return FileKind.TOO_SMALL
+        return kind
+
     def snapshot(self) -> DirectorySnapshot:
         """Record the files present now; call it right before triggering the download.
 
@@ -197,7 +228,7 @@ class DownloadWatcher:
         for name in sorted(sizes):
             if previous_sizes.get(name) != sizes[name]:
                 continue
-            if sizes[name] < self._min_size_bytes:
+            if self.classify(name, sizes[name]) is FileKind.TOO_SMALL:
                 too_small.add(name)
             elif self._belongs_to_other_sensor(name, expected):
                 self._orphaned.add(name)
@@ -248,9 +279,14 @@ class DownloadWatcher:
         return None
 
     def _is_complete(self, name: str) -> bool:
-        return not name.endswith(self._partial_suffixes) and not name.startswith(
-            self._ignored_prefixes
-        )
+        return self._name_kind(name) is FileKind.COMPLETE
+
+    def _name_kind(self, name: str) -> FileKind:
+        if name.endswith(self._partial_suffixes):
+            return FileKind.UNFINISHED
+        if name.startswith(self._ignored_prefixes):
+            return FileKind.IGNORED
+        return FileKind.COMPLETE
 
     def _file_sizes(self) -> dict[str, int]:
         sizes: dict[str, int] = {}
