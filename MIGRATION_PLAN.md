@@ -115,6 +115,8 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | 2026-10-05 | Vyřazení čidla = `status: retired` v registru; data se nemažou (návrh orchestrátora, owner nerozporoval). |
 | 2026-10-05 | Interní poznámky (`notes` čidla, `note` umístění) se **nepublikují** na webu; `sensors.geojson` na webu je veřejná projekce registru. |
 | 2026-10-05 | Výběr čidel na webu škálovatelný: rozbalovací seznam s vyhledáváním, **dvě úrovně členění obec → viniční trať** (WP-3.5). Registr dostává pole `municipality` a `track` místo `site`. |
+| 2026-10-06 | Poznámky v logu mimo-vinici (`note`) jsou **interní**; na webu se z off-site události publikuje jen kategorie důvodu (`reason`). |
+| 2026-10-06 | Q4 (část): všechna 4 čidla obec **Dolní Věstonice**; trať **Nad Silnicí** (77678271, 77680921, 77800065) a **U Kapličky** (77799986). Více čidel v jedné trati je běžný stav. Odrůda zatím neuvedena. |
 
 ### 0.6 Otevřené otázky na ownera
 
@@ -123,7 +125,7 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | Q1 | ✅ Dodán reálný CSV export čidla 77799986 (§0.6.1). | — | — |
 | Q2 | ✅ Místní čas. | — | — |
 | Q3 | ✅ Nahrazeno logem mimo-vinici (§2.8). | — | — |
-| Q4 | Odrůda a název vinice pro každé čidlo. | Odrůdové parametry fenologických modelů (WP-2.1), popisky v mapě. | Nic (volitelné pole) |
+| Q4 | Odrůda pro každé čidlo (obec a trať ✅ 2026-10-06). | Odrůdové parametry fenologických modelů (WP-2.1), popisky v mapě. | Nic (volitelné pole) |
 | Q5 | ✅ 1× denně v 6:00 místního času. | — | — |
 | Q6 | Zveřejnit repozitář a zapnout GitHub Pages se zdrojem „GitHub Actions" (owner, před dokončením WP-4.1). | Nasazení webu. | Deploy ve WP-4.1 |
 | Q7 | Přidat Secrets `SIVIN_USER`, `SIVIN_PASSWORD` (owner). | Automatické stahování. | První ostrý běh WP-4.1 |
@@ -549,7 +551,9 @@ aktualizace než špatně označená data). Úprava: přímo v GitHubu, později
 (WP-3.3).
 
 Kontrakt webu (§2.6) se rozšiřuje o intervalovou událost v `events/<id>.json`:
-`{ "type": "off_site", "t": <start>, "t_end": <end | null>, "source": "log", "detail": "<reason: note>" }`.
+`{ "type": "off_site", "t": <start>, "t_end": <end | null>, "source": "log", "detail": "<reason>" }`.
+`detail` nese jen kategorii důvodu (např. `service`); text `note` z logu je interní a na web
+se nepublikuje (rozhodnutí 2026-10-06).
 
 ---
 
