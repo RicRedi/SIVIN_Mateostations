@@ -27,8 +27,15 @@ from selenium.webdriver.support import expected_conditions as ec
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.clock import Clock, SystemClock
 from sivin.ingest.portal.credentials import PortalCredentials
+from sivin.ingest.portal.diagnostics import DownloadDiagnostics
 from sivin.ingest.portal.driver import WebDriverFactory
-from sivin.ingest.portal.errors import PortalLoginError, ViewModelError
+from sivin.ingest.portal.errors import (
+    DownloadIncompleteError,
+    DownloadTimeoutError,
+    PortalError,
+    PortalLoginError,
+    ViewModelError,
+)
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.page import Locator, PortalPage
 from sivin.ingest.portal.settings import PortalSettings
@@ -80,6 +87,9 @@ class PortalClient:
         Time source for the settle pauses and the download watcher.
     watcher : DownloadWatcher, optional
         Download detection; built from the settings when omitted.
+    diagnostics : DownloadDiagnostics, optional
+        Collects the WARNING block logged when a download fails; built from the settings and
+        the watcher's directory when omitted.
 
     Raises
     ------
@@ -95,6 +105,7 @@ class PortalClient:
         parser: ViewModelParser | None = None,
         clock: Clock | None = None,
         watcher: DownloadWatcher | None = None,
+        diagnostics: DownloadDiagnostics | None = None,
     ) -> None:
         if not settings.download_dir.is_absolute():
             raise ValueError(
@@ -115,6 +126,7 @@ class PortalClient:
             ignored_prefixes=settings.ignored_download_prefixes,
             min_size_bytes=settings.min_export_size_bytes,
         )
+        self._diagnostics = diagnostics or DownloadDiagnostics(settings, self._watcher.directory)
         self._web_driver: WebDriver | None = None
         self._devices: list[PortalDevice] = []
 
@@ -283,10 +295,34 @@ class PortalClient:
         button = page.export_button(device)
         before = self._watcher.snapshot()
         page.press(button)
-        path = self._watcher.wait_for_new_file(before, expected=device.sensor_id)
+        try:
+            path = self._watcher.wait_for_new_file(before, expected=device.sensor_id)
+        except (DownloadTimeoutError, DownloadIncompleteError) as error:
+            self._log_diagnostics(device, error)
+            raise
         self._check_name(device, path)
         logger.info("Downloaded the export of %s: %s", device, path.name)
         return path
+
+    def _log_diagnostics(self, device: PortalDevice, error: PortalError) -> None:
+        """Log one WARNING block describing the failed download; never raises.
+
+        The caller re-raises ``error``, so nothing here may replace it: an unexpected error
+        while collecting is logged by its name only.
+        """
+        try:
+            report = self._diagnostics.collect(self._driver)
+        except Exception as failure:  # the original download error must reach the caller
+            logger.warning(
+                "Export of %s failed (%s); diagnostics unavailable (%s).",
+                device,
+                type(error).__name__,
+                type(failure).__name__,
+            )
+            return
+        logger.warning(
+            "Export of %s failed (%s); diagnostics:\n%s", device, type(error).__name__, report
+        )
 
     @staticmethod
     def _check_name(device: PortalDevice, path: Path) -> None:

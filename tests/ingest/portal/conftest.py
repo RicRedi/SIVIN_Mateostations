@@ -20,6 +20,7 @@ from selenium.webdriver.common.by import By
 
 from sivin.ingest.portal.client import SELENIUM_WIRE_LOGGER, PortalClient
 from sivin.ingest.portal.credentials import PortalCredentials, Secret
+from sivin.ingest.portal.diagnostics import JS_READY_STATE
 from sivin.ingest.portal.driver import WebDriverFactory
 from sivin.ingest.portal.page import JS_CLICK, xpath_literal
 from sivin.ingest.portal.settings import TEXT_PLACEHOLDER, PortalSettings, PortalTimeouts
@@ -71,8 +72,10 @@ class FakeElement:
         displayed: bool = True,
         value: str | None = None,
         on_click: Callable[[], None] | None = None,
+        text: str = "",
     ) -> None:
         self._portal = portal
+        self.text = text
         self.key = key
         self._displayed = displayed
         self._value = value
@@ -145,6 +148,15 @@ class FakePortalDriver:
         self._spinner_polls_left = 0
         self._late: list[Path] = []
         self._visits: dict[str, int] = {}
+        self.title = "Synthetic portal"
+        self.ready_state = "complete"
+        self.window_handles = ["window-1"]
+        self.notices: list[FakeElement] = []
+
+    @property
+    def current_url(self) -> str:
+        """A synthetic URL of the current page with a token-like query and a fragment."""
+        return f"{self.settings.portal_url}{self.page}?session=synthetic-token#top"
 
     def get(self, url: str) -> None:
         self.log.append(("get", url))
@@ -168,11 +180,14 @@ class FakePortalDriver:
         if self.quit_error is not None:
             raise self.quit_error
 
-    def execute_script(self, script: str, *args: Any) -> None:
+    def execute_script(self, script: str, *args: Any) -> str | None:
+        if script == JS_READY_STATE:
+            return self.ready_state
         if script == JS_CLICK:
             args[0].click()
         else:
             self.log.append(("script", args[0].key))
+        return None
 
     def find_element(self, by: str, value: str) -> FakeElement:
         elements = self.find_elements(by, value)
@@ -183,6 +198,8 @@ class FakePortalDriver:
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if (by, value) == (By.ID, self.settings.selectors.spinner_id) and self.page != "login":
             return [FakeElement(self, "spinner")]
+        if (by, value) == (By.CSS_SELECTOR, self.settings.selectors.notification_css):
+            return list(self.notices)
         return self._elements().get((by, value), [])
 
     def spinner_visible(self) -> bool:

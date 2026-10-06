@@ -85,6 +85,15 @@ class PortalSelectors(_Settings):
         ),
     )
 
+    notification_css: str = Field(
+        "[role='alert'], [role='status'], .alert, .toast, .notification",
+        description=(
+            "CSS selector of visible portal error or notification messages, whose text is "
+            "logged when a download fails; generic ARIA roles and common toast classes, not "
+            "taken from the portal's HTML, [to be verified]. Empty disables the search (CSS)."
+        ),
+    )
+
     @field_validator("link_xpath_template", "tab_xpath_template", "section_button_xpath_template")
     @classmethod
     def _has_placeholder(cls, value: str) -> str:
