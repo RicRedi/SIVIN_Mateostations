@@ -22,6 +22,7 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 | `PortalPage` | `page.py` | Locators, explicit waits and clicks on the portal's pages (used by the client). |
 | `ViewModelParser` | `viewmodel.py` | Pure parser of the DotVVM viewmodel JSON into `PortalDevice` objects. |
 | `DownloadWatcher` | `watcher.py` | Detects the file a click produced: a *new*, non-empty, size-stable file that is not a late file of an earlier download and not another sensor's export. |
+| `DownloadDiagnostics`, `DownloadReport` | `diagnostics.py` | After a failed download: what the download directories, the browser and the portal's notices show, logged as one WARNING block (see [When a download fails](#when-a-download-fails)). |
 | `PortalSession` | `session.py` | One run: login, device list, one export per device; a failing device is recorded, the run goes on. Returns `SessionResult`. |
 
 `import sivin.ingest.portal` loads only the Selenium-free parts (settings, credentials, value
@@ -128,6 +129,7 @@ values.
 | `selectors.link_xpath_template` | `//a[contains(., {text})]` | XPath | Folder and device links; `{text}` becomes a quoted literal. |
 | `selectors.tab_xpath_template` | `//a[contains(text(), {text})]` | XPath | Tab link. |
 | `selectors.excel_button_xpath` | `//button[.//i[contains(@class, 'mdi-file-excel')]]` | XPath | All Excel export buttons; the first visible one is only the fallback. |
+| `selectors.notification_css` | `[role='alert'], [role='status'], .alert, .toast, .notification` | CSS | Visible error/notification messages whose text is logged when a download fails; generic, not taken from the portal's HTML ([to be verified]). Empty disables the search. |
 | `selectors.section_button_xpath_template` | heading containing `{text}` → nearest ancestor with an Excel button → its Excel buttons | XPath | Excel button of the export section ([to be verified] against the real HTML). |
 | `timeouts.element_wait_s` | 15 | s | Maximum wait for an element or the spinner. |
 | `timeouts.download_wait_s` | 30 | s | Maximum wait for the export file. |
@@ -208,7 +210,56 @@ setting in `config/sivin.yaml` (no code change needed):
 | `TimeoutException: Tab 'Meteorologická data' is not clickable.` | `meteo_tab_name`, `selectors.tab_xpath_template` |
 | `ExportButtonNotFoundError` | `selectors.excel_button_xpath`, `selectors.section_button_xpath_template`; the window size in `chrome_arguments` |
 | `TimeoutException: Spinner #UpdateProgress is still visible.` | `selectors.spinner_id`, `timeouts.element_wait_s` |
-| `DownloadTimeoutError` | `timeouts.download_wait_s`; Chrome's download preferences; free disk space |
+| `DownloadTimeoutError` | read the diagnostics block first ([When a download fails](#when-a-download-fails)); then `timeouts.download_wait_s`, Chrome's download preferences, free disk space |
+
+## When a download fails
+
+When the export button was pressed but no file was accepted (`DownloadTimeoutError` or
+`DownloadIncompleteError`), the client logs **one WARNING block** right before the error goes
+on to `PortalSession` (which retries and records the device exactly as before):
+
+```text
+WARNING Export of 8615620 77678271 failed (DownloadTimeoutError); diagnostics:
+  download dir /…/data/downloads: 1 entry: MeteoData_8615620 77678271 (VUT)_20260301_223851.xlsx.crdownload (7 B, unfinished)
+  Chrome default dir /home/runner/Downloads: absent
+  browser: title …; url https://lemon.e-service.cz/…; readyState complete; windows 1
+  portal notices: none visible
+```
+
+(Synthetic example from the tests, not a real run.)
+
+| Line | What it shows |
+|---|---|
+| `download dir` | Every entry of `download_dir`, newest first, with its size in bytes, also the ones the watcher does not take: `unfinished` (a `partial_download_suffixes` ending, e.g. `.crdownload`) and `ignored` (an `ignored_download_prefixes` beginning, e.g. Chrome's hidden `.com.google.Chrome.*`). At most 10 entries, then `… and N more`; `empty` or `absent` otherwise. |
+| `Chrome default dir` | `~/Downloads` of the user running the browser, listed only when it exists and differs from `download_dir`; `absent` otherwise. |
+| `browser` | Page title, the current URL **without** user info, query string and fragment (they may carry tokens), `document.readyState` and the number of open windows/tabs. |
+| `portal notices` | Texts of visible elements matching `selectors.notification_css` (at most 3, each cut to 200 characters), `none visible`, or `not searched` when the selector is empty. |
+
+Any item that cannot be read says `unavailable (<ExceptionName>)`; collecting never replaces
+the download error. Credentials, cookies, page source and input values are never logged.
+
+**Reading it — provider or our side?**
+
+- **Provider side (likely):** `download dir` is `empty` (or holds only older exports), the default
+  directory is `absent` or unchanged, the browser is still on the device page with
+  `readyState complete` and one window, and possibly a portal notice. The button was pressed,
+  and the portal produced no file. Confirm by exporting by hand in a normal browser; if that
+  fails too, it is the provider.
+- **Download still running or slow:** an `unfinished` file in `download dir`, growing between
+  retries — raise `timeouts.download_wait_s`, check disk space.
+- **Our side, download preferences ignored:** the new export is in `Chrome default dir`, not in
+  `download dir` — check `ChromeDriverFactory.download_preferences` and `download_dir`.
+- **Our side, export opened a tab:** `windows 2` or more, or the URL is no longer the portal page
+  — the export was opened instead of downloaded.
+- **Empty export:** a complete file of `0 B` (with `DownloadIncompleteError`) — the portal
+  produced an empty file; usually the provider.
+- **`url` shows the login page:** the portal session ended before the export; the client does
+  not log in again, so the remaining devices of the run are likely to fail as well.
+
+The notification selector is generic (ARIA `alert`/`status` roles and common toast classes) and
+has not been checked against the portal's HTML; `none visible` therefore does not prove that
+the portal showed no message. Set `selectors.notification_css` once the real message element is
+known.
 
 ## Troubleshooting
 
