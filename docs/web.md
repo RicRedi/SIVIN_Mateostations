@@ -5,8 +5,8 @@ Static map portal for the SIVIN vineyard weather sensors. It is served by GitHub
 site data contract, [MIGRATION_PLAN.md §2.6](../MIGRATION_PLAN.md) (`schema_version: 1`). There
 is no server and no API key.
 
-Stack: TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite, Leaflet (map), uPlot (time
-series), ESLint (typescript-eslint, strict type-checked), Vitest (+ jsdom for DOM components).
+Stack: TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite, Leaflet (map) with
+`leaflet.markercluster` (marker clustering, bundled), uPlot (time series), ESLint (typescript-eslint, strict type-checked), Vitest (+ jsdom for DOM components).
 No UI framework: components are plain TypeScript classes that own a DOM subtree.
 
 ## Run locally
@@ -38,11 +38,13 @@ main.ts  (composition root: builds every object, injects collaborators through c
   ├─ data/      DataClient ── fetch + cache + validate ──► contract/ (types + validators)
   ├─ domain/    TimeSeries, RawSeries, Resampler, QcMask, TimeZone,
   │             TimeWindow, WindowSpec, TimeWindowFactory, ResolutionPolicy, alignSeries
-  ├─ app/       SensorCatalog, ChartDataLoader, ChartPresenter        (no DOM)
-  ├─ state/     Store<T>, AppState, HashStateCodec                    (no DOM)
+  ├─ app/       SensorCatalog, SensorGrouping, SensorQuery,
+  │             ChartDataLoader, ChartPresenter                       (no DOM)
+  ├─ state/     Store<T>, AppState, GroupSelection, HashStateCodec    (no DOM)
   ├─ i18n/      I18n, LanguagePreference, cs/de/en dictionaries
-  └─ ui/        App, HeaderView, MapView, SensorPanel, SensorList, TimeWindowControl,
+  └─ ui/        App, HeaderView, MapView, ClusterIcon, SensorPanel, TimeWindowControl,
                 SeriesChart, EventMarkers, SensorColors, HashSync, palette, dom
+                picker/  SensorPicker, PickerTree, SensorChips
 ```
 
 Dependencies point downwards only: `ui` → `app` → `domain`/`data` → `contract`. There are no
@@ -52,7 +54,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | Class / module | Responsibility |
 |---|---|
 | `contract/types.ts` | TypeScript mirror of §2.6 (`Manifest`, `LatestFile`, `RawMonthFile`, `DailyFile`, `EventsFile`, `IndicesFile`, `SensorsGeoJSON` with the registry properties of §2.4). |
-| `contract/validate*.ts`, `FieldReader`, `ContractError` | Hand-written runtime validation of every file. A mismatch throws `ContractError` with file, JSON path and problem, e.g. `manifest.json: $.schema_version must be one of [1], got 2`. Unknown extra fields are ignored (forward compatible); `schema_version` must be exactly 1. |
+| `contract/validate*.ts`, `FieldReader`, `ContractError` | Hand-written runtime validation of every file. A mismatch throws `ContractError` with file, JSON path and problem, e.g. `manifest.json: $.schema_version must be one of [1], got 2`. Unknown extra fields are ignored (forward compatible); an event of an unknown `type` is skipped with a console warning (WP-3.2); a malformed *optional* field is ignored with a warning; `schema_version` must be exactly 1. |
 | `data/DataClient` | Fetches contract files relative to the data base URL, validates and caches them (one request per file per page load; failed requests are retried on the next call). `getRawRange(id, start, end)` picks the **UTC** months overlapping `[start, end)` that the manifest lists, fetches them in parallel and merges them into one `RawSeries`. A listed month that cannot be loaded is an error; months not listed are skipped. |
 | `domain/RawSeries` | Columnar raw samples of one sensor, merged from monthly files, sorted by `t`, one sample per time. |
 | `domain/TimeSeries` | Immutable value object of one variable (`t[]`, `values[]`, `null` = no valid value). `withGapBreaks` inserts `null` where samples are too far apart so charts draw gaps. |
@@ -61,21 +63,85 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `domain/TimeZone` | Unix seconds ↔ wall-clock time of an IANA zone via `Intl` (DST-aware): local midnights, shifting by local days. |
 | `domain/WindowSpec`, `TimeWindow`, `TimeWindowFactory`, `ResolutionPolicy` | What the user asked for (`24h` / `7d` / `30d` / `season` / `custom`) → a concrete `[startT, endT)` with a resolution. Details below. |
 | `domain/alignSeries` | Puts several series on one union time axis for uPlot (`undefined` = no sample, skipped; `null` = gap). |
-| `app/SensorCatalog` | Joins `sensors.geojson`, manifest and `latest.json` into `SensorInfo` per sensor. |
+| `app/SensorCatalog` | Joins `sensors.geojson`, manifest and `latest.json` into `SensorInfo` per sensor (position, elevation, `municipality`, `track`, `variety`, registry `status`, latest values). |
+| `app/SensorGrouping` | Groups sensors municipality → vineyard track for the picker: names in Czech collation with natural number order (`Trať 2` before `Trať 10`), the unassigned group (`null`) last; within a track by label, retired sensors last. |
+| `app/SensorQuery` | The picker's search: every word of the query must occur in id, label, municipality, track or variety; case and diacritics are ignored (`foldText`: NFD, combining marks removed, lower case). |
+| `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and the group checkbox within the comparison limit: a group with **any** selected sensor is cleared (so a partly selected group can always be cleared, also at the limit); a group without one is added in group order up to 8 and the rest is reported (`groupNotice`: "only n added", or the plain limit message when nothing fit). |
 | `app/ChartDataLoader` | Loads raw / hourly / daily series and in-window events **per sensor** (`Promise.allSettled`): a sensor whose series fail becomes a failure entry shown as a per-sensor error above the chart, the other sensors still render. A missing or invalid events file degrades to "no events" with a `console.warn`. |
 | `app/ChartPresenter` | Resolves the window from the state (falling back to the default window if a spec cannot be resolved), shows "loading", the data or an error; drops responses of superseded requests. |
 | `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution. Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
 | `i18n/I18n`, `LanguagePreference` | UI strings cs (default) / de / en, manifest labels, number/date formatting. Lookup: language → Czech → key. The language is stored in `localStorage` (every access in `try/catch`). Priority at start: URL hash → stored preference → Czech. |
-| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. |
-| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor list, metadata and latest values of the selected sensors, time-window controls, chart. |
-| `ui/SensorList` | Checkbox list of all sensors (keyboard path to the comparison). |
+| `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. **Clustering** (`leaflet.markercluster`, see *Clustering* below): markers closer than `CLUSTER_RADIUS_PX` (42 px) on screen merge into a badge with the count, coloured by the **mean latest temperature** of its members on the marker scale; a click on a badge, or Enter on a focused one, zooms in to its sensors (at the highest zoom it spreads them). A badge that hides a selected sensor has a blue ring. Leaflet re-creates a marker's element when it leaves a cluster, so the keyboard attributes are re-applied on every `add`. |
+| `ui/ClusterIcon` | Content of a cluster badge: the count, an accessible name ("Skupina čidel: 5 – přiblížit"), the colour (below) and the selection ring. |
+| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor picker, metadata (incl. municipality and track) and latest values of the selected sensors, time-window controls, chart. |
+| `ui/picker/SensorPicker` | Sensor selection that scales to larger networks (WP-3.5), details below. |
+| `ui/picker/PickerTree` | The grouped checkbox list (composite of group nodes and sensor rows). The DOM is built once; `update` only shows, hides and checks, so focus stays where it is while typing or toggling. |
+| `ui/picker/ModalSheet` | Makes the open panel modal in the phone layout: `role="dialog"`, `aria-modal="true"`, every other part of the page `inert`, Tab / Shift+Tab wrap inside the sheet; all undone on close. |
+| `ui/ClusterIcon` (colours) | `appearance(tempsC, selectedCount)`: mean of the members' current temperatures (stale or missing ones ignored) on `TemperatureScale`; grey `STALE_COLOR` with a dashed ring only when no member has a value; text dark or white, whichever has the higher WCAG contrast (`inkFor`). |
+| `ui/picker/SensorChips` | The selected sensors as removable chips in their line colour, in selection order; they double as the chart legend. |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
 | `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
-| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail). |
+| `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site` (the latter only if the pipeline is configured to publish it), grey bands for `off_site` (below). |
 | `ui/SensorColors` | Line colours of the compared sensors, assigned in selection order; a sensor keeps its colour while selected, a new one takes the first free colour, so the (at most 8) compared sensors never share a colour. |
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
 | `ui/App` | Coordinates store and views: user actions update the store, changes re-render views and reload the chart. |
 | `ui/HashSync` | Two-way binding between store and `location.hash` (`replaceState`, no history spam). |
+
+### Sensor picker
+
+Owner decision 2026-10-05: the selection must scale beyond a handful of sensors. The panel shows
+
+- a **disclosure button** "Čidla (n/N) ▾" (`aria-expanded`, `aria-controls`). It opens a panel
+  with a **search field** (focused on open) and the sensors grouped **municipality → vineyard
+  track** (`municipality`, `track` of the registry; a sensor without a value is listed under
+  *Nezařazeno* on that level). Each group has a disclosure button with its name and
+  "selected/visible" count, and a **tri-state checkbox** over its *visible* sensors. A group
+  without a selected sensor is added in list order until 8 sensors are selected, with a notice
+  how many were added ("Srovnat lze nejvýše 8 čidel – ze skupiny bylo přidáno jen 6."; just
+  "Srovnat lze nejvýše 8 čidel." when nothing fit). A group with **any** selected sensor
+  (checked or mixed) is cleared by its checkbox, so a partly selected group can always be
+  cleared, also at the limit.
+- **Search** filters by id, label, municipality, track and variety, case- and
+  diacritics-insensitive: every word of the query must be the **start of a word** of one of
+  those fields ("ryzl mik"; "obec b trat 4" finds Obec B / Trať 4 only — "b" does not match
+  inside "obec", "4" not inside an id "90000401"). Words are split at anything that is not a
+  letter or digit. Starting a search expands all groups. During a search the group checkbox
+  acts on the matches, and says so: its name is "Vybrat nalezená v <group>", its state
+  refers to the matches, and a hint "nalezeno m z n" next to the name shows how many of the
+  group's sensors match.
+- Retired sensors are listed last in their track and greyed (not struck through: their data are
+  kept), with "vyřazeno"; the variety is shown under the label.
+- **Limit notice** once, in the picker: inside the open panel, else right under the button
+  (the side panel no longer repeats it).
+- **Chips** below the button: the compared sensors in their line colour with a × button
+  ("Odebrat … ze srovnání"); removing one moves focus to the next chip, or to the button.
+- **Keyboard:** Tab through the controls (native checkboxes and buttons), ↓/↑ move between the
+  visible controls of the open panel, Escape closes it and returns focus to the button; a click
+  outside closes it. On phones (≤ 760 px, `PHONE_LAYOUT_QUERY` in `main.ts`, checked on each
+  opening) the open panel is a **modal full-screen sheet** (`ModalSheet`): `role="dialog"`,
+  `aria-modal="true"`, the rest of the page `inert`, Tab trapped inside, a title
+  "Výběr čidel (n/N)" and a "Hotovo" button; closing restores everything and returns focus to
+  the button.
+- The selection stays in the URL hash (`#s=…`) as before; the open/closed state, the search and
+  collapsed groups are not part of the URL.
+
+Screenshots: `docs/wp_log/img/WP-3.5-*.png`.
+
+### Clustering
+
+`MapView` puts the markers into a `leaflet.markercluster` group. `CLUSTER_RADIUS_PX`
+(`src/ui/MapView.ts`, a named constant) is its `maxClusterRadius`: the larger of a marker's
+(20 px) and a badge's (34 px) diameter plus an 8 px margin = **42 px**, so neither markers nor
+badges overlap. The first choice, 28 px (one marker diameter), was checked against a
+**synthetic 200-sensor site** (10 municipalities × 7 tracks, 1440 × 900, overview zoom): 26
+badges, many of them overlapping, because a badge is larger than a marker; 44 px gave 16 badges
+and 60 px 8 (screenshot `WP-3.5-200-sensors-map.png`, 42 px). Change the constant to cluster
+more or less aggressively.
+
+A badge is coloured by the **mean latest temperature** of its members (only current values:
+stale and missing ones are ignored) on the same scale as the markers, so the temperature
+picture stays visible when zoomed out. It is grey with a dashed ring only when no member has a
+current value. Text is dark or white, whichever contrasts more.
 
 ### Time windows and resolution
 
@@ -142,15 +208,34 @@ STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 
 ```json
 { "type": "off_site", "t": 1780552800, "t_end": 1780668000, "source": "log",
-  "detail": "service: battery replacement" }
+  "detail": "service" }
 ```
+
+`detail` of an `off_site` event is only the **reason category** of the off-site log (`office`,
+`service`, `transport`, `storage`, `other`), never its free-text note (by analogy with the owner
+decision of 2026-10-05 on registry notes; [site.md](site.md#eventsidjson)). The web translates it
+("Mimo vinici: servis", "Nicht im Weinberg: Wartung", "Not in the vineyard: service"); any other
+text (data published before this rule) is shown as it is.
 
 `t_end` (Unix seconds, exclusive) is required for `off_site` and is `null` while the sensor is
 still off site. On a point event (`deployment`, `retrieval`, `step`) a `t_end` is **ignored with
 a console warning** instead of rejecting the file (tolerant reading of optional fields, owner
-decision 2026-10-05), so a SiteBuilder that writes `t_end: null` on every event loses no markers. The contract types model this as a
-union (`PointSensorEvent | OffSiteEvent`, `isOffSiteEvent`), and `eventInWindow` keeps an
-`off_site` period that merely overlaps the chart window (a point event must lie inside it).
+decision 2026-10-05). The contract types model the events as a union
+(`PointSensorEvent | MarkedIntervalEvent | OffSiteEvent`, `isOffSiteEvent`,
+`isMarkedIntervalEvent`), and `eventInWindow` keeps an `off_site` period that merely overlaps the
+chart window (a point event, and the start `t` of a marked interval, must lie inside it).
+
+**Event types the SiteBuilder publishes** ([site.md](site.md#eventsidjson)): besides `off_site`
+and the point events, two advisory intervals of quality control, `low_battery` (a low-battery
+episode) and `unlogged_off_site` (an indoor-like period the off-site log does not cover; published
+only when enabled in the pipeline's `site.events`). They
+need an integer `t_end` ≥ `t`, are drawn like a point event at `t` (dashed line) with an
+**amber** button (`#b45309`, 5.0:1 against white) whose label names the period
+("Slabá baterie" / "Schwache Batterie" / "Low battery", "Možné nezapsané období mimo vinici" /
+"Möglicher nicht eingetragener Zeitraum außerhalb des Weinbergs" / "Possible unlogged off-site
+period", then "<from> – <to>"), and **hide no data**. An event of any **other type is skipped
+with a console warning** — the file is not rejected — so a pipeline that publishes a new kind
+never breaks the chart. Bigger presentation work (e.g. a band for `unlogged_off_site`) is WP-3.4.
 
 `SeriesChart` draws every period that overlaps the window as a translucent grey band across the
 plotting area (uPlot `drawClear` hook, under grid and lines; an open period runs to the window
@@ -162,7 +247,7 @@ depend on the flags. Lines of other compared sensors continue through the band. 
 focusable grey square handle at its centre (handles of bands at the same place, e.g. two
 compared sensors serviced together, are stacked downwards), whose accessible name and tooltip
 read
-"Mimo vinici: <detail> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
+"Mimo vinici: <reason> – <sensor> · <from> – <to>" (de "Nicht im Weinberg", en "Not in the
 vineyard"; open end "dosud" / "bis heute" / "ongoing"). The logic is in
 `src/ui/EventMarkers.ts` (`offSiteBands`, `withoutBands`, `EventMarkers.drawBands`).
 
@@ -179,8 +264,8 @@ panel instead of a silently wrong chart.
 **Raw month files are UTC months.** `series/<id>/raw/<YYYY-MM>.json` contains exactly the samples
 with `t` in that calendar month in **UTC** (e.g. `2026-07` = `[2026-07-01T00:00Z,
 2026-08-01T00:00Z)`), and `raw_months` lists those UTC keys. §2.6 does not say this explicitly;
-this is the interpretation the web implements and **WP-3.2 (`SiteBuilder`) must follow** (it
-matches §1.5 "internally always UTC"). Months in Europe/Prague time would make up to two hours
+this is the interpretation the web implements and the `SiteBuilder` (WP-3.2) follows (it
+matches §1.5 "internally always UTC"; owner decision 2026-10-05). Months in Europe/Prague time would make up to two hours
 at each month boundary silently disappear from the chart. Listed as a contract clarification
 for the owner. `indices/<season>.json` is typed, validated and
 available through `DataClient.getIndices` but not displayed yet (WP-3.4).
@@ -188,21 +273,67 @@ available through `DataClient.getIndices` but not displayed yet (WP-3.4).
 ## Synthetic fixture and real data
 
 `web/public/data/` holds a **synthetic** data set generated by `scripts/generate-fixture.mjs`
-(seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, step 1825 s with
-a per-sensor phase and ±3 s clock jitter, ≈ 0.55 MB; sensor 77799986 has one synthetic
-`off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). It is
+(seeded PRNG, documented model, 4 real sensor positions, 1 Jun – 30 Sep 2026, a fixed synthetic
+sampling step with a per-sensor phase and ±3 s clock jitter; sensor 77799986 has one synthetic
+`off_site` service period, 4 Jun 06:00 – 5 Jun 14:00 UTC). To exercise the picker and the
+clustering at scale (WP-3.5) it has **16 more synthetic sensors** (ids `9xxxxxxx`, label
+"… (demo)") with data for September 2026 only, so there are 20 sensors: the synthetic ones in
+the fictional municipalities "Obec A/B/C" with tracks "Trať 1–6" (one without a track, one
+without any grouping, one `inactive`, one `retired`), and the **four real sensor ids with
+municipality, track and variety `null`**, so the demo makes no fictional claim about real
+devices (≈ 1.4 MB in total). Names, ids and varieties of the synthetic sensors are invented. The registry in the fixture is the public projection (`notes`
+and `note` are `null`), like the pipeline's output. It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
 
 The badge is controlled at build time by `VITE_DEMO_DATA`: any value other than `false`
 (including unset) shows it. Nothing in the contract marks data as synthetic.
 
-To use real data (WP-3.2 `SiteBuilder`, deployed by WP-4.1):
+### Real data
 
-1. Generate `site/data/` with the pipeline.
+The pipeline writes the real data with `sivin build-site` (or as the last step of `sivin run`)
+into `site/data/` ([site.md](site.md)); the deployment is WP-4.1. To serve them:
+
+1. Generate `site/data/` with the pipeline (`sivin run`, or `sivin build-site` after
+   `sivin ingest`).
 2. Build with `VITE_DEMO_DATA=false npm run build`.
 3. Replace `dist/data/` with the generated `site/data/` before uploading the Pages artifact
    (or copy `site/data/` into `web/public/data/` before the build). The app always reads
    `<base>/data/`; to read from elsewhere, change `DATA_BASE_URL` in `src/main.ts`.
+   (The pipeline's incremental build state is kept in `data/derived/`, not in `site/data`.)
+
+What the real data look like to the portal:
+
+- Raw months hold **every** sample, flagged ones included; the display mask hides excluded
+  rows (e.g. off-site samples, `PRE_DEPLOYMENT`). `precip_mm`/`battery_v` are present only for
+  months with such values; they are read but not drawn yet (WP-3.4).
+- `daily.json` may carry `precip_sum_mm`, `precip_n_samples` (values in the sum) and
+  `battery_min_v` (optional, not drawn yet).
+- `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
+  optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
+  history); a sensor whose last pipeline build failed has `data_status: "error"` and
+  `last_built_at`. The UI does not use them yet (WP-3.4); the picker takes the status from
+  `sensors.geojson`.
+- `sensors.geojson` is the **public projection** of the registry: `notes` and every placement's
+  `note` are `null` (owner decision 2026-10-05). `municipality` and `track` group the picker;
+  missing keys are read as `null`. A `site` key (registry format before 2026-10-05) is ignored
+  with a console warning.
+- **Staleness at viewing time.** The manifest carries `stale_after_s`; `SensorCatalog.build`
+  marks a latest sample stale if `latest.json` says so **or** if it is older than
+  `stale_after_s` at the current time (`withStaleness`), so a pipeline that stopped publishing
+  still greys the sensors out. Without `stale_after_s` (older data) only the build-time
+  `stale` counts.
+- A sensor without a valid sample (e.g. off site the whole time) is missing from `latest.json`
+  and is drawn grey on the map.
+- `indices/<season>.json` entries may carry `estimated` (index based on a proxy), `status`
+  (`ok` / `no_data`) and `detail`; a `no_data` entry has `value` and `class` `null`, and an
+  incomplete result has `class: null`.
+
+**Cross-language contract test.** `web/tests/fixtures/python-site/` is written by the Python
+pipeline (`sivin run --skip-fetch` on the trimmed real export of 77799986 and a synthetic
+sensor; regenerate with `.venv/bin/python -m tests.site.python_site` in the repository root).
+`tests/pythonSite.test.ts` loads every file there through the validators and the `DataClient`
+and fails on any `ContractError` or contract warning; the Python test
+`tests/e2e/test_site.py` fails when the committed fixture is stale.
 
 Note: the root `.gitignore` ignores every `data/` directory, so `web/public/data/` and
 `web/src/data/` were added with `git add -f`; new files there need the same until `.gitignore`
@@ -236,6 +367,8 @@ The contract fixes the raw columns to `temp_c` and `rh_pct` and the daily column
 
 `npm test` runs Vitest with V8 coverage over `src/**` and fails below 85 % of lines. Excluded
 from coverage, because they are thin glue over Leaflet, uPlot/canvas or the page bootstrap and
-are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts`,
-`src/ui/SeriesChart.ts`. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
+are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts` (including the
+clustering glue), `src/ui/SeriesChart.ts`. The picker logic (`SensorGrouping`, `SensorQuery`,
+`GroupSelection`) has unit tests; `SensorPicker`, `PickerTree`, `SensorChips` and `ClusterIcon`
+are tested under jsdom on the 20-sensor fixture. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
 other DOM components are tested under jsdom.

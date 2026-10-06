@@ -24,8 +24,12 @@ describe('the committed synthetic fixture', () => {
     const manifest = parseManifest(fixtureJson('manifest.json'));
     expect(manifest.schema_version).toBe(1);
     expect(manifest.display_timezone).toBe('Europe/Prague');
-    expect(Object.keys(manifest.sensors)).toHaveLength(4);
-    expect(parseSensorsGeoJSON(fixtureJson('sensors.geojson')).features).toHaveLength(4);
+    expect(Object.keys(manifest.sensors)).toHaveLength(20);
+    const registry = parseSensorsGeoJSON(fixtureJson('sensors.geojson'));
+    expect(registry.features).toHaveLength(20);
+    // Public projection (owner decision 2026-10-05): no internal notes.
+    expect(registry.features.every((f) => f.properties.notes === null && f.properties.placements.every((p) => p.note === null))).toBe(true);
+    expect(new Set(registry.features.map((f) => f.properties.municipality))).toEqual(new Set(['Obec A', 'Obec B', 'Obec C', null]));
     expect(parseLatestFile(fixtureJson('latest.json')).sensors['77800065']?.stale).toBe(true);
     expect(parseIndicesFile(fixtureJson('indices/2026.json'), 'indices/2026.json').season).toBe(2026);
     for (const [id, sensor] of Object.entries(manifest.sensors)) {
@@ -82,8 +86,8 @@ describe('off_site events (MIGRATION_PLAN §2.8)', () => {
       { type: 'step', t: 300, source: 'detected', confidence: null, detail: null },
     ]);
     expect(warnings).toEqual([
-      'e.json: $.events[0].t_end ignored: only "off_site" events have an end, not "deployment"',
-      'e.json: $.events[1].t_end ignored: only "off_site" events have an end, not "step"',
+      'e.json: $.events[0].t_end ignored: only interval events have an end, not "deployment"',
+      'e.json: $.events[1].t_end ignored: only interval events have an end, not "step"',
     ]);
   });
 
@@ -145,7 +149,7 @@ describe('contract validation errors', () => {
 
   it('throws ContractError instances carrying file and path', () => {
     try {
-      parseEventsFile({ sensor_id: SENSOR, events: [{ type: 'moved', t: 1, source: 'detected' }] }, 'events.json');
+      parseEventsFile({ sensor_id: SENSOR, events: [{ type: 7, t: 1, source: 'detected' }] }, 'events.json');
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(ContractError);
@@ -168,6 +172,32 @@ describe('contract validation errors', () => {
     expect(() => parseSensorsGeoJSON({ type: 'Feature', features: [] })).toThrow('$.type must be one of ["FeatureCollection"]');
     const bad = { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [16.6] }, properties: {} }] };
     expect(() => parseSensorsGeoJSON(bad)).toThrow('$.features[0].geometry.coordinates must be [lon, lat]');
+  });
+
+  it('reads municipality and track, missing ones as null, and ignores an old site key with a warning', () => {
+    const properties = {
+      id: SENSOR, portal_name: `8615620 ${SENSOR}`, label: 'x', variety: null, status: 'active', notes: null,
+      placements: [{ from: '2026-06-01T00:00:00Z', to: null, lon: 16.6, lat: 48.8, elevation_m: null, note: null }],
+    };
+    const file = (props: object): unknown => ({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [16.6, 48.8] }, properties: props }],
+    });
+    const warnings: string[] = [];
+    const warn = (message: string): void => {
+      warnings.push(message);
+    };
+    const grouped = parseSensorsGeoJSON(file({ ...properties, municipality: 'Obec A', track: 'Trať 1' }), 'sensors.geojson', warn);
+    expect(grouped.features[0]?.properties).toMatchObject({ municipality: 'Obec A', track: 'Trať 1' });
+    const old = parseSensorsGeoJSON(file({ ...properties, site: 'Old vineyard' }), 'sensors.geojson', warn);
+    expect(old.features[0]?.properties).toMatchObject({ municipality: null, track: null });
+    expect('site' in (old.features[0]?.properties ?? {})).toBe(false);
+    expect(warnings).toEqual([
+      'sensors.geojson: $.features[0].properties.site is deprecated (replaced by municipality and track); ignored',
+    ]);
+    expect(() => parseSensorsGeoJSON(file({ ...properties, track: 7 }), 'sensors.geojson', warn)).toThrow(
+      '$.features[0].properties.track must be a string, got 7',
+    );
   });
 
   it('accepts null and missing optional values', () => {

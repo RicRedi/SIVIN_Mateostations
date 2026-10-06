@@ -1,9 +1,9 @@
-"""The whole pipeline in one go: fetch → ingest → QC → indices, and the run log record."""
+"""The whole pipeline in one go: fetch → ingest → QC → indices → site data, and the run log."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +13,10 @@ from sivin.app.indices import IndicesReport, IndicesService
 from sivin.app.ingest import IngestReport, IngestService
 from sivin.app.outcome import Outcome, SourceUnavailableError
 from sivin.app.quality import QualityReport, QualityService
+from sivin.app.site import SiteService
 from sivin.core.ids import SensorId
+from sivin.quality.pipeline import QualityResult
+from sivin.site.builder import SiteReport
 from sivin.storage.runlog import RunLog, RunRecord
 
 logger = logging.getLogger(__name__)
@@ -145,6 +148,11 @@ class RunReport:
         The portal could not be used at all (credentials, login, unreachable).
     fetch_note : str or None
         Why the portal was not used, e.g. ``"fetch skipped in dry-run"``.
+    site : SiteReport or None
+        The site-data step; ``None`` when it did not run (``--skip-site``, dry run, or it
+        failed altogether).
+    site_failures : tuple of str
+        Failures of the site-data step (sensors, indices, or the whole step).
     """
 
     fetch_failures: tuple[str, ...]
@@ -155,6 +163,8 @@ class RunReport:
     dry_run: bool = False
     source_unavailable: bool = False
     fetch_note: str | None = None
+    site: SiteReport | None = None
+    site_failures: tuple[str, ...] = ()
 
     @property
     def outcome(self) -> Outcome:
@@ -169,12 +179,20 @@ class RunReport:
             else Outcome.of(self.fetch_failures)
         )
         return Outcome.worst(
-            (fetch, self.ingest.outcome, self.quality.outcome, self.indices.outcome)
+            (
+                fetch,
+                self.ingest.outcome,
+                self.quality.outcome,
+                self.indices.outcome,
+                Outcome.of(self.site_failures),
+            )
         )
 
 
 class RunService:
-    """Fetch, ingest, check and compute the indices; one failing sensor never stops the run.
+    """Fetch, ingest, check, compute the indices and build the site data.
+
+    One failing sensor never stops the run.
 
     Parameters
     ----------
@@ -194,6 +212,9 @@ class RunService:
         Write nothing (the services must be built with the same flag).
     fetch_note : str, optional
         Set when ``source`` is not the portal (dry run, ``--skip-fetch``); reported and logged.
+    site : SiteService, optional
+        Builds the static site data from the QC results as the last step; ``None`` skips it
+        (``--skip-site``). Never run in a dry run.
     """
 
     __slots__ = (
@@ -204,6 +225,7 @@ class RunService:
         "_ingest",
         "_quality",
         "_recorder",
+        "_site",
         "_source",
     )
 
@@ -217,7 +239,9 @@ class RunService:
         clock: Clock,
         dry_run: bool = False,
         fetch_note: str | None = None,
+        site: SiteService | None = None,
     ) -> None:
+        self._site = site
         self._fetch_note = fetch_note
         self._source = source
         self._ingest = ingest
@@ -261,11 +285,12 @@ class RunService:
             sensor: item.whole for sensor, item in quality.sensors.items() if item.whole is not None
         }
         indices = self._indices.run(season, sensors, checked=checked)
+        site, site_failures = self._build_site(checked)
         record = self._recorder.record(
             started_at,
             self._clock(),
             ingest,
-            (*fetch_failures, *quality.failures, *indices.failures),
+            (*fetch_failures, *quality.failures, *indices.failures, *site_failures),
         )
         if not self._dry_run:
             path = self._recorder.write(record)
@@ -279,4 +304,19 @@ class RunService:
             self._dry_run,
             unavailable,
             self._fetch_note,
+            site,
+            site_failures,
         )
+
+    def _build_site(
+        self, checked: Mapping[SensorId, QualityResult]
+    ) -> tuple[SiteReport | None, tuple[str, ...]]:
+        """Build the site data unless skipped; an unwritable output fails only this step."""
+        if self._site is None or self._dry_run:
+            return None, ()
+        try:
+            report = self._site.build(checked=checked)
+        except OSError as error:
+            logger.error("Building the site data failed: %s", error)
+            return None, (f"site: {error}",)
+        return report, report.failures

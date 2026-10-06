@@ -72,3 +72,7 @@ analytics:
   indices:                          # parameters per index id (docs/indices/<id>.md)
     huglin: {}                      # e.g. {k_override: 1.05}; default K from the latitude band
     gsr: {}                         # e.g. {preset: sauvignon_blanc} for the cultivar targets
+
+site:                               # static site data, written to <paths.site_dir>/data (docs/site.md)
+  stale_after_s: 129600.0           # last valid sample older than this [s] = stale (36 h)
+  events: [off_site, deployment, retrieval, step, low_battery]   # unlogged_off_site: opt-in

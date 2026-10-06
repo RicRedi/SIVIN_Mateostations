@@ -1,6 +1,6 @@
 import uPlot from 'uplot';
 import type { SensorCatalog } from '../app/SensorCatalog';
-import { isOffSiteEvent, type OffSiteEvent, type PointSensorEvent, type SensorEvent } from '../contract';
+import { isMarkedIntervalEvent, isOffSiteEvent, type MarkerEvent, type OffSiteEvent, type SensorEvent } from '../contract';
 import { TimeSeries } from '../domain/TimeSeries';
 import type { TimeZone } from '../domain/TimeZone';
 import type { MessageKey } from '../i18n/cs';
@@ -19,11 +19,31 @@ const HANDLE_SIZE_PX = 14;
 /** Top of the first handle, as `.event-marker` in styles.css; each stacked one moves down by its size. */
 const HANDLE_TOP_PX = -2;
 const PERCENT = 100;
+/**
+ * Button colour of the advisory interval markers (`low_battery`, `unlogged_off_site`): amber,
+ * 5.0:1 against white (≥ 3:1, WCAG 1.4.11), so a warning is told apart from a transition.
+ */
+const WARNING_MARKER_COLOR = '#b45309';
 
-const EVENT_LABELS: Readonly<Record<PointSensorEvent['type'], MessageKey>> = {
+const EVENT_LABELS: Readonly<Record<MarkerEvent['type'], MessageKey>> = {
   deployment: 'eventDeployment',
   retrieval: 'eventRetrieval',
   step: 'eventStep',
+  low_battery: 'eventLowBattery',
+  unlogged_off_site: 'eventUnloggedOffSite',
+};
+
+/**
+ * Reasons of the off-site log (MIGRATION_PLAN §2.8). The site publishes only the reason as the
+ * `detail` of an `off_site` event, never the internal note; the web translates it. Any other
+ * text (data from before this rule) is shown as it is.
+ */
+const OFF_SITE_REASON_LABELS: Readonly<Record<string, MessageKey>> = {
+  office: 'reasonOffice',
+  service: 'reasonService',
+  transport: 'reasonTransport',
+  storage: 'reasonStorage',
+  other: 'reasonOther',
 };
 
 /** An event together with the sensor it belongs to. */
@@ -32,10 +52,10 @@ export interface ChartEvent {
   readonly event: SensorEvent;
 }
 
-/** A point event together with the sensor it belongs to. */
+/** A marker event (point event or marked interval) together with the sensor it belongs to. */
 interface ChartPointEvent {
   readonly sensorId: string;
-  readonly event: PointSensorEvent;
+  readonly event: MarkerEvent;
 }
 
 /**
@@ -98,7 +118,9 @@ export function withoutBands(series: TimeSeries, bands: readonly { startT: numbe
 
 /**
  * Sensor events on a uPlot chart:
- * - point events: dashed vertical lines on the canvas plus one focusable button each,
+ * - point events and the advisory intervals `low_battery` / `unlogged_off_site`: dashed vertical
+ *   lines on the canvas plus one focusable button each (amber for the advisory intervals, whose
+ *   label also names the end; they hide no data),
  * - `off_site` periods: grey bands across the plotting area (drawn under the series) plus one
  *   focusable handle each, labelled "Not in the vineyard: <detail>".
  * Every button has an accessible name and a hover/focus tooltip (type, sensor, time, detail).
@@ -115,7 +137,7 @@ export class EventMarkers {
     private readonly zone: TimeZone,
   ) {}
 
-  /** Set the point events; `off_site` events are ignored here (see {@link setBands}). */
+  /** Set the marker events; `off_site` events are ignored here (see {@link setBands}). */
   setEvents(events: readonly ChartEvent[]): void {
     this.points = events.filter((item): item is ChartPointEvent => !isOffSiteEvent(item.event));
   }
@@ -164,9 +186,14 @@ export class EventMarkers {
 
   /** Position the buttons; also the uPlot `setSize` hook. */
   place(plot: uPlot): void {
-    const markers = this.points.map(({ event, sensorId }) =>
-      this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x')),
-    );
+    const markers = this.points.map(({ event, sensorId }) => {
+      const button = this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x'));
+      if (isMarkedIntervalEvent(event)) {
+        button.classList.add('event-marker--warning');
+        button.style.background = WARNING_MARKER_COLOR;
+      }
+      return button;
+    });
     const placed: number[] = [];
     const handles = this.bands.map((band) => {
       const leftPx = plot.valToPos((band.startT + band.endT) / 2, 'x');
@@ -192,10 +219,11 @@ export class EventMarkers {
     return this.catalog.get(sensorId)?.label ?? sensorId;
   }
 
-  private describePoint(event: PointSensorEvent, sensorId: string): string {
+  private describePoint(event: MarkerEvent, sensorId: string): string {
+    const start = this.i18n.formatDateTime(event.t, this.zone.name);
     const parts = [
       `${this.i18n.t(EVENT_LABELS[event.type])} – ${this.sensorLabel(sensorId)}`,
-      this.i18n.formatDateTime(event.t, this.zone.name),
+      isMarkedIntervalEvent(event) ? `${start} – ${this.i18n.formatDateTime(event.t_end, this.zone.name)}` : start,
     ];
     if (event.confidence !== null) {
       parts.push(this.i18n.t('eventConfidence', { pct: Math.round(event.confidence * PERCENT) }));
@@ -206,9 +234,15 @@ export class EventMarkers {
     return parts.join(' · ');
   }
 
+  /** Translated off-site reason; any other text as it is. */
+  private offSiteReason(detail: string): string {
+    const key = Object.hasOwn(OFF_SITE_REASON_LABELS, detail) ? OFF_SITE_REASON_LABELS[detail] : undefined;
+    return key === undefined ? detail : this.i18n.t(key);
+  }
+
   private describeBand({ event, sensorId }: OffSiteBand): string {
     const title = this.i18n.t('eventOffSite');
-    const heading = event.detail === null ? title : `${title}: ${event.detail}`;
+    const heading = event.detail === null ? title : `${title}: ${this.offSiteReason(event.detail)}`;
     const end =
       event.t_end === null ? this.i18n.t('eventOngoing') : this.i18n.formatDateTime(event.t_end, this.zone.name);
     return [

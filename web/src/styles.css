@@ -5,6 +5,7 @@
   --ink-secondary: #52514e;
   --ink-muted: #6b6a64;
   --line: #e1e0d9;
+  --line-strong: #b9b8b0;
   --accent: #2a78d6;
   --accent-ink: #ffffff;
   --demo: #8a5a00;
@@ -179,21 +180,326 @@ input {
   border: 1px dashed var(--ink-muted);
 }
 
-.sensor-list {
+.picker {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1rem;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.picker__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.picker__caret {
+  color: var(--ink-secondary);
+  transition: transform 0.15s;
+}
+
+.picker--open .picker__caret {
+  transform: rotate(180deg);
+}
+
+.picker__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.picker__panel[hidden],
+.picker__notice[hidden],
+.picker__empty[hidden],
+.picker-chips[hidden] {
+  display: none;
+}
+
+.picker__bar {
+  display: none;
+}
+
+.picker__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.picker__close {
+  min-height: 2.5rem;
+  padding: 0.2rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.picker__search {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.picker__notice {
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid var(--demo);
+  background: var(--demo-bg);
+  font-size: 0.85rem;
+}
+
+.picker__empty {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: 0.9rem;
+}
+
+.picker__list {
+  max-height: min(24rem, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.picker-tree,
+.picker-group__body {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sensor-list label {
+.picker-group[hidden],
+.picker-group__body[hidden],
+.picker-sensor[hidden] {
+  display: none;
+}
+
+.picker-group--track > .picker-group__head,
+.picker-group--track > .picker-group__body {
+  padding-left: 1.25rem;
+}
+
+.picker-group--track > .picker-group__body {
+  padding-left: 2.5rem;
+}
+
+.picker-group__head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+}
+
+.picker-group--municipality > .picker-group__head {
+  border-top: 1px solid var(--line);
+}
+
+.picker-tree > .picker-group:first-child > .picker-group__head {
+  border-top: 0;
+}
+
+.picker-group__all,
+.picker-sensor input {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.picker-group__toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0 0.25rem;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-group--municipality > .picker-group__head .picker-group__toggle {
+  font-weight: 600;
+}
+
+.picker-group__chevron::before {
+  content: '▾';
+  display: inline-block;
+  color: var(--ink-secondary);
+  transition: transform 0.15s;
+}
+
+.picker-group__toggle[aria-expanded='false'] .picker-group__chevron::before {
+  transform: rotate(-90deg);
+}
+
+.picker-group__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.is-unassigned > .picker-group__head .picker-group__name {
+  font-style: italic;
+}
+
+.picker-group__matches {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+
+.picker-group__matches[hidden] {
+  display: none;
+}
+
+.picker-group__count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+
+.picker-sensor label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+}
+
+.picker-sensor .swatch {
+  margin-right: 0;
+}
+
+.picker-sensor__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.picker-sensor__meta {
+  font-size: 0.78rem;
+  color: var(--ink-secondary);
+}
+
+.picker-sensor__meta[hidden] {
+  display: none;
+}
+
+.picker-sensor.is-retired .picker-sensor__label {
+  color: var(--ink-muted);
+}
+
+.picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  min-height: 2rem;
+  max-width: 100%;
+  padding: 0 0 0 0.5rem;
+  border: 2px solid var(--line-strong);
+  border-radius: 999px;
+  background: #ffffff;
+  font-size: 0.8rem;
+}
+
+.picker-chip .swatch {
+  margin-right: 0;
+  border-radius: 50%;
+}
+
+.picker-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--ink-secondary);
   cursor: pointer;
+}
+
+.picker-chip__remove:hover {
+  background: var(--page);
+  color: var(--ink);
+}
+
+/* Qualified with Leaflet's class: leaflet.css (loaded later) sets `display: block` on icons. */
+.leaflet-marker-icon.sensor-cluster {
+  display: flex;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 35%);
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+/* Background and text colour are set inline: mean temperature of the members (ClusterIcon). */
+.sensor-cluster__body {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #0b0b0b;
+  border-radius: 50%;
+}
+
+.sensor-cluster--no-value .sensor-cluster__body {
+  border-style: dashed;
+}
+
+.leaflet-marker-icon.sensor-cluster--selected {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.leaflet-marker-icon.sensor-cluster:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .sensor-card {
@@ -519,6 +825,28 @@ input {
 
   .panel--collapsed .panel__body {
     display: none;
+  }
+
+  .picker__panel:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    gap: 0.6rem;
+    padding: 0.75rem;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .picker__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--gap);
+  }
+
+  .picker__list {
+    flex: 1;
+    max-height: none;
   }
 
   .panel__body {

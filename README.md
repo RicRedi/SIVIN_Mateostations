@@ -21,6 +21,14 @@ Commands, options and exit codes: [docs/cli.md](docs/cli.md); the one configurat
 [docs/architecture.md](docs/architecture.md). The rest of this README describes the legacy
 scripts and is rewritten in WP-5.2.
 
+## Operations
+
+The workflow `.github/workflows/pipeline.yml` runs the pipeline every day at 06:00
+Europe/Prague (and on demand from the Actions tab), keeps the measurements on the `data`
+branch and deploys the map portal to GitHub Pages. One-time setup, the first-run checklist,
+manual runs, the job summary and exit codes, editing the sensor registry and the off-site log,
+and recovery of the `data` branch: [docs/operations.md](docs/operations.md).
+
 ## Table of Contents
 
 - [Overview](#overview)

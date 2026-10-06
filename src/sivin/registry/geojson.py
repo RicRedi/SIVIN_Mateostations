@@ -154,6 +154,32 @@ class GeoJsonRegistryStore:
             text = path.read_text(encoding=FILE_ENCODING)
         except OSError as error:
             raise RegistryFormatError(f"Cannot read sensor registry {path}: {error}") from error
+        registry = self.loads(text, str(path))
+        logger.info("Loaded %d sensors from %s", len(registry), path)
+        return registry
+
+    def loads(self, text: str | bytes, source: str = "<text>") -> SensorRegistry:
+        """Parse the content of a registry file.
+
+        Parameters
+        ----------
+        text : str or bytes
+            The file content (bytes are decoded as UTF-8).
+        source : str, optional
+            Name of the content in error messages, e.g. the file path.
+
+        Returns
+        -------
+        SensorRegistry
+            The registry, with the settings' allowed area.
+
+        Raises
+        ------
+        RegistryFormatError
+            If the content is not valid JSON or violates the format (see :meth:`load`).
+        RegistryError
+            If the sensors violate a registry rule (duplicates, area).
+        """
         try:
             collection = SensorCollection.model_validate_json(text)
         except ValidationError as error:
@@ -161,15 +187,13 @@ class GeoJsonRegistryStore:
                 f"  {'.'.join(str(part) for part in issue['loc']) or '<root>'}: {issue['msg']}"
                 for issue in error.errors()
             )
-            raise RegistryFormatError(f"Invalid sensor registry {path}:\n{problems}") from error
+            raise RegistryFormatError(f"Invalid sensor registry {source}:\n{problems}") from error
         for feature in collection.features:
             feature.check_geometry()
-        registry = SensorRegistry(
+        return SensorRegistry(
             (feature.properties for feature in collection.features),
             area=self._settings.allowed_area,
         )
-        logger.info("Loaded %d sensors from %s", len(registry), path)
-        return registry
 
     def dumps(self, registry: SensorRegistry) -> str:
         """Render a registry as the canonical text of the registry file.
@@ -184,11 +208,26 @@ class GeoJsonRegistryStore:
         str
             The file content.
         """
+        return render_json(self.document(registry))
+
+    def document(self, registry: SensorRegistry) -> dict[str, Any]:
+        """Return the registry file as a JSON document (mappings in file key order).
+
+        Parameters
+        ----------
+        registry : SensorRegistry
+            The registry.
+
+        Returns
+        -------
+        dict
+            The FeatureCollection with the file's keys (``from``, ``to``, ``lon``, ``lat``).
+        """
         collection = SensorCollection(
             type="FeatureCollection",
             features=tuple(SensorFeature.of(sensor) for sensor in registry),
         )
-        return render_json(collection.model_dump(mode="json", by_alias=True))
+        return collection.model_dump(mode="json", by_alias=True)
 
     def save(self, registry: SensorRegistry, path: Path) -> None:
         """Write a registry file atomically (temporary file, then rename).

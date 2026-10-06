@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ChartDataLoader } from '../src/app/ChartDataLoader';
 import { ChartPresenter, type ChartView } from '../src/app/ChartPresenter';
 import type { ChartData } from '../src/app/ChartDataLoader';
-import { SensorCatalog } from '../src/app/SensorCatalog';
+import { SensorCatalog, withStaleness } from '../src/app/SensorCatalog';
 import { parseLatestFile, parseManifest, parseSensorsGeoJSON } from '../src/contract';
 import { DataClient } from '../src/data/DataClient';
 import { DISPLAY_EXCLUDE_MASK, QcMask } from '../src/domain/QcFlags';
@@ -47,8 +47,14 @@ describe('SensorCatalog', () => {
   );
 
   it('joins registry, manifest and latest values in registry order', () => {
-    expect(catalog.sensors.map((s) => s.id)).toEqual(['77678271', '77680921', '77800065', '77799986']);
+    expect(catalog.sensors.slice(0, 4).map((s) => s.id)).toEqual(['77678271', '77680921', '77800065', '77799986']);
+    expect(catalog.size).toBe(20);
     const sensor = catalog.get('77680921');
+    // Real sensor ids carry no fictional grouping in the demo; the synthetic ones do.
+    expect([sensor?.municipality, sensor?.track, sensor?.variety]).toEqual([null, null, null]);
+    expect([catalog.get('90000201')?.municipality, catalog.get('90000201')?.track]).toEqual(['Obec B', 'Trať 3']);
+    expect(sensor?.status).toBe('active');
+    expect(catalog.get('90000302')?.status).toBe('retired');
     expect(sensor?.elevation_m).toBe(201.6);
     expect(sensor?.lat).toBe(48.879593);
     expect(sensor?.hasData).toBe(true);
@@ -58,6 +64,22 @@ describe('SensorCatalog', () => {
 
   it('drops unknown ids', () => {
     expect(catalog.knownIds(['00000000', '77678271'])).toEqual(['77678271']);
+  });
+
+  it('judges staleness against the current time with stale_after_s (WP-3.2)', () => {
+    const manifest = { ...(fixtureJson('manifest.json') as Record<string, unknown>), stale_after_s: 36 * 3600 };
+    const latest = parseLatestFile(fixtureJson('latest.json'));
+    const fresh = latest.sensors['77678271'];
+    if (fresh === undefined) {
+      throw new Error('fixture sensor missing');
+    }
+    expect(fresh.stale).toBe(false);
+    const registry = parseSensorsGeoJSON(fixtureJson('sensors.geojson'));
+    const at = (nowS: number) => SensorCatalog.build(registry, parseManifest(manifest), latest, nowS).get('77678271')?.latest?.stale;
+    expect([at(fresh.t + 36 * 3600), at(fresh.t + 36 * 3600 + 1)]).toEqual([false, true]);
+    // Without stale_after_s (older data) only the pipeline's flag counts.
+    expect(SensorCatalog.build(registry, parseManifest(fixtureJson('manifest.json')), latest, fresh.t + 1e9).get('77678271')?.latest?.stale).toBe(false);
+    expect(withStaleness(null, 1, 0)).toBeNull();
   });
 });
 
@@ -122,7 +144,7 @@ describe('ChartDataLoader failure handling', () => {
     const { fetcher } = fakeFetcher(BASE, new Proxy({}, {
       has: (_, path: string) => path !== 'events/77678271.json' && fixtureExists(path),
       get: (_, path: string) =>
-        path === 'events/77680921.json' ? { sensor_id: '77680921', events: [{ type: 'moved', t: 1, source: 'x' }] } : fixtureJson(path),
+        path === 'events/77680921.json' ? { sensor_id: '77680921', events: [{ type: 'step', t: 'x', source: 'x' }] } : fixtureJson(path),
     }));
     const warnings = new Warnings();
     const window = new TimeWindow(utc(2026, 8, 22), utc(2026, 8, 23), 'raw');
@@ -132,7 +154,7 @@ describe('ChartDataLoader failure handling', () => {
     expect(data.sensors.every((s) => s.temp_c.validCount > 0)).toBe(true);
     expect(warnings.messages).toEqual([
       'Events of sensor 77678271 ignored: Cannot load data/events/77678271.json: HTTP 404',
-      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].type must be one of ["deployment","retrieval","step","off_si…, got "moved"',
+      'Events of sensor 77680921 ignored: events/77680921.json: $.events[0].t must be a finite number, got "x"',
     ]);
   });
 });

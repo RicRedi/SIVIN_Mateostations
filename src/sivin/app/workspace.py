@@ -10,6 +10,7 @@ from typing import Final, Self
 from sivin.app.outcome import SetupError
 from sivin.config import DEFAULT_CONFIG_FILE, ConfigError, SivinConfig, load_config
 from sivin.paths import ProjectPaths, ProjectRootNotFoundError
+from sivin.site.state import STATE_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,9 @@ EVENTS_DIR: Final = "events"
 
 INDICES_DIR: Final = "indices"
 """Directory below ``paths.derived_dir`` with one indices file per season."""
+
+SITE_DATA_DIR: Final = "data"
+"""Directory below ``paths.site_dir`` with the static site data (MIGRATION_PLAN §2.6)."""
 
 
 class ProjectNotFoundError(SetupError):
@@ -88,6 +92,16 @@ class Workspace:
     def indices_dir(self) -> Path:
         """Index results per season (``<paths.derived_dir>/indices``)."""
         return self.paths.resolve(self.config.paths.derived_dir) / INDICES_DIR
+
+    @property
+    def site_data_dir(self) -> Path:
+        """Static site data of the web portal (``<paths.site_dir>/data``)."""
+        return self.paths.resolve(self.config.paths.site_dir) / SITE_DATA_DIR
+
+    @property
+    def site_state_file(self) -> Path:
+        """Build state of the site data (``<paths.derived_dir>/site-build-state.json``)."""
+        return self.paths.resolve(self.config.paths.derived_dir) / STATE_FILE
 
     @property
     def quarantine_dir(self) -> Path:

@@ -1,8 +1,8 @@
 # Command line: `sivin`
 
 One command runs the whole pipeline locally and in GitHub Actions (WP-4.1): download from the
-portal → parse and validate → store → quality control with the off-site log → climate indices.
-The site export (`sivin build-site`) is WP-3.2.
+portal → parse and validate → store → quality control with the off-site log → climate indices
+→ static site data for the web portal (`sivin build-site`, [site.md](site.md)).
 
 ```
 sivin [--config FILE] [--log-level LEVEL] COMMAND [OPTIONS]
@@ -217,26 +217,61 @@ stored data for this season; nothing written.`, writes nothing and exits 0. Prin
 per sensor and index (value, unit, coverage, complete). Exit code 1 if a sensor or an index
 failed.
 
-## `sivin run [--season YEAR] [--sensor ID ...] [--skip-fetch] [--headed] [--dry-run]`
+## `sivin run [--season YEAR] [--sensor ID ...] [--skip-fetch] [--headed] [--skip-site] [--dry-run]`
 
 The whole pipeline, as the scheduled workflow (WP-4.1) runs it: `fetch` → `ingest` of the
 downloaded files → `qc` of every stored sensor (events written) → `indices` of the season from
-those QC results → one run record. It goes on past a failed device, file, sensor or index,
+those QC results → `build-site` (below) from the same QC results → one run record. It goes on past a failed device, file, sensor or index,
 and past a failed login or missing credentials (recorded as `fetch: ...`; the stored data are
 kept and still checked; exit code 4). `--season` defaults to the current year in
 `time.display_timezone`. `--skip-fetch` does not use the portal and ingests the files already
 in the download directory. `--sensor` restricts fetch, QC and indices (not the ingest of
-`--skip-fetch`); the derived files are updated in place as described above.
+`--skip-fetch`, not the site); the derived files are updated in place as described above.
+The site step is on by default and builds `site/data` incrementally with the default seasons
+(every year with data, not `--season`); `--skip-site` leaves it out. A failure of the site step
+(a sensor, an index, or an unwritable output directory, recorded as `site: ...`) gives exit
+code 1 and never stops the run.
 
 `--dry-run` **never logs in and never downloads**: it implies `--skip-fetch`, prints `Note:
 fetch skipped in dry-run.`, validates the files already in the download directory and
 computes QC and indices without writing anything (no store, no quarantine, no derived files,
-no run record). Exit codes 0, 1 or 4 (see above); 3 only if the configuration, registry or
+no site data, no run record). Exit codes 0, 1 or 4 (see above); 3 only if the configuration, registry or
 off-site log is invalid.
 
 ```console
 $ sivin run                       # daily job
 $ sivin run --skip-fetch --dry-run --season 2026
+```
+
+## `sivin build-site [--out DIR] [--season YEAR ...] [--full]`
+
+Writes the static site data of the web portal ([site.md](site.md), contract MIGRATION_PLAN
+§2.6): `manifest.json`, `sensors.geojson` (copy of the registry), `latest.json`, raw UTC months,
+daily values, events and one indices file per season. Every published sensor (registry sensors
+with stored data, retired ones included) is read **through quality control** with the off-site
+log; the indices are computed without touching `data/derived/`.
+
+| Option | Meaning |
+|---|---|
+| `--out DIR` | Output directory. Default: `<paths.site_dir>/data` (`site/data`). |
+| `--season YEAR` | Season of an indices file; repeat for several. Default: every calendar year with data. The output holds exactly these seasons. |
+| `--full` | Ignore the build state and rebuild every sensor. |
+
+The build is **incremental**: a sensor whose stored files and published files are unchanged
+since the last build is reused without being read; a changed configuration, registry, off-site
+log, set of seasons or `sivin` version rebuilds everything. The files are byte-identical to a
+full build. Files no longer produced (removed sensors, months, seasons) are deleted. Prints one
+summary line (`Site data (full|incremental) -> DIR: N sensor(s) built, M reused, K file(s)
+written, R removed; seasons: ...`) and the failures. Exit code 1 if a sensor or an index
+failed — its previously published files stay (also in a full build), the manifest marks it with
+`data_status: "error"`, and every later build retries it and exits 1 while it keeps failing —
+3 for an invalid configuration, registry or off-site log. The build state is kept in
+`<paths.derived_dir>/site-build-state.json` (one more file per other `--out` directory), never
+in the published directory.
+
+```console
+$ sivin build-site                     # site/data, incremental
+$ sivin build-site --full --season 2026 --out /tmp/site
 ```
 
 ## Typical local session
@@ -249,4 +284,5 @@ $ sivin ingest
 $ sivin qc
 $ sivin indices --season 2026
 $ cat data/derived/indices/2026.json
+$ sivin build-site                # site/data for the web portal
 ```

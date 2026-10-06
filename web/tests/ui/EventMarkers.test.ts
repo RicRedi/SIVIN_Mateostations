@@ -62,8 +62,31 @@ describe('EventMarkers', () => {
   });
 });
 
+describe('EventMarkers with advisory intervals', () => {
+  it('draws low_battery and unlogged_off_site as amber markers whose label names the end', () => {
+    const markers = new EventMarkers(new I18n({ cs, de, en }, 'en'), catalog, new TimeZone('Europe/Prague'));
+    markers.setEvents([
+      { sensorId: '77799986', event: { type: 'low_battery', t: T, t_end: T + 1800, source: 'detected', confidence: null, detail: 'low battery: 2 reading(s) below 3.3 V' } },
+      { sensorId: '77799986', event: { type: 'unlogged_off_site', t: T + 600, t_end: T + 7200, source: 'detected', confidence: 0.8, detail: null } },
+      { sensorId: '77799986', event: { type: 'step', t: T + 1200, source: 'detected', confidence: null, detail: null } },
+    ]);
+    const { plot, ctx } = fakePlot();
+    markers.attach(plot);
+    markers.drawLines(plot);
+    const buttons = [...plot.over.querySelectorAll<HTMLButtonElement>('button.event-marker')];
+    expect(buttons.map((b) => b.classList.contains('event-marker--warning'))).toEqual([true, true, false]);
+    expect(buttons[0]?.getAttribute('aria-label')).toBe(
+      'Low battery – 77799986 (VUT) · 3 Jun 2026, 10:00 – 3 Jun 2026, 10:30 · low battery: 2 reading(s) below 3.3 V',
+    );
+    expect(buttons[1]?.getAttribute('aria-label')).toBe(
+      'Possible unlogged off-site period – 77799986 (VUT) · 3 Jun 2026, 10:10 – 3 Jun 2026, 12:00 · confidence 80 %',
+    );
+    expect(ctx.moveTo.mock.calls).toHaveLength(3);
+  });
+});
+
 const HOUR = 3600;
-const offSite = (t: number, tEnd: number | null, detail: string | null = 'service: battery'): ChartEvent => ({
+const offSite = (t: number, tEnd: number | null, detail: string | null = 'service'): ChartEvent => ({
   sensorId: '77799986',
   event: { type: 'off_site', t, t_end: tEnd, source: 'log', confidence: null, detail },
 });
@@ -140,7 +163,7 @@ describe('EventMarkers with off-site bands', () => {
     const buttons = [...plot.over.querySelectorAll<HTMLButtonElement>('button.event-marker--off-site')];
     expect(buttons.map((b) => b.style.left)).toEqual(['170px', '350px']);
     expect(buttons[0]?.getAttribute('aria-label')).toBe(
-      'Not in the vineyard: service: battery – 77799986 (VUT) · 3 Jun 2026, 11:00 – 3 Jun 2026, 13:00',
+      'Not in the vineyard: service – 77799986 (VUT) · 3 Jun 2026, 11:00 – 3 Jun 2026, 13:00',
     );
     expect(buttons[1]?.dataset.tip).toBe('Not in the vineyard – 77799986 (VUT) · 3 Jun 2026, 14:00 – ongoing');
   });
@@ -148,10 +171,28 @@ describe('EventMarkers with off-site bands', () => {
   it('labels bands in Czech and German', () => {
     const czech = fakePlot();
     markersIn('cs').attach(czech.plot);
-    expect(czech.plot.over.querySelector('button')?.getAttribute('aria-label')).toMatch(/^Mimo vinici: service: battery – 77799986 \(VUT\)/);
+    expect(czech.plot.over.querySelector('button')?.getAttribute('aria-label')).toMatch(/^Mimo vinici: servis – 77799986 \(VUT\)/);
     const german = fakePlot();
     markersIn('de').attach(german.plot);
     expect(german.plot.over.querySelectorAll('button')[1]?.getAttribute('aria-label')).toMatch(/^Nicht im Weinberg – .* – bis heute$/);
+  });
+
+  it('translates the published off-site reason and shows any other text as it is', () => {
+    const cases: [string, 'cs' | 'de' | 'en', string][] = [
+      ['office', 'cs', 'Mimo vinici: v kanceláři'],
+      ['transport', 'de', 'Nicht im Weinberg: Transport'],
+      ['storage', 'en', 'Not in the vineyard: storage'],
+      ['other', 'cs', 'Mimo vinici: jiný důvod'],
+      ['service: older data with a note', 'en', 'Not in the vineyard: service: older data with a note'],
+      ['constructor', 'en', 'Not in the vineyard: constructor'],
+    ];
+    for (const [detail, language, label] of cases) {
+      const { plot } = fakePlot();
+      const markers = new EventMarkers(new I18n({ cs, de, en }, language), catalog, new TimeZone('Europe/Prague'));
+      markers.setBands(offSiteBands([offSite(T + HOUR, T + 3 * HOUR, detail)], ...window));
+      markers.attach(plot);
+      expect(plot.over.querySelector('button')?.getAttribute('aria-label')?.startsWith(`${label} – `)).toBe(true);
+    }
   });
 
   it('stacks the handles of bands at the same place so none hides another', () => {
