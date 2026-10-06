@@ -228,3 +228,63 @@ and applies to the whole client, so it is out of scope here.
   `tests/ingest/portal/**`, `docs/ingest.md`, regenerated `docs/configuration.md` for the new
   key, the hand-off note); no shared file touched. `notification_css` is honestly marked
   `[to be verified]`.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed commit b1ad46f against the round-1 findings. Not run against the real portal or a real
+Chrome.
+
+Gates observed: `make lint` → all checks passed, 301 files already formatted; `make type` → no
+issues in 182 source files; `make cov` → 2036 passed, `diagnostics.py` 100 % (163 stmts,
+22 branches), `watcher.py` 100 % (130 stmts, 42 branches), `client.py` 100 %.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | src/sivin/ingest/portal/diagnostics.py | Dead chromedriver (`MaxRetryError`) lost the whole report. | resolved |
+| minor | src/sivin/ingest/portal/diagnostics.py, watcher.py | Duplicated classification; no "too small". | resolved |
+| minor | src/sivin/ingest/portal/diagnostics.py | Uncapped notice round trips; one stale element dropped all notices. | resolved |
+| nit | docs/ingest.md:234 | `absent` vs `same as the download directory`. | resolved |
+| nit | src/sivin/ingest/portal/diagnostics.py | Unreadable directory shown as `absent`. | resolved |
+| nit | src/sivin/ingest/portal/diagnostics.py | `;params` and opaque URLs kept by `public_url`. | resolved |
+| nit | src/sivin/ingest/portal/diagnostics.py:339-341 | A non-`FileNotFoundError` from `stat()` of a single entry (e.g. `PermissionError`) still makes the whole listing `unavailable`, not just that entry. Harmless in practice (Chrome's own files in our own directory). | open |
+
+How verified:
+
+- **Dead chromedriver:** re-ran the round-1 script, which uses a real Selenium `WebDriver` with a
+  `RemoteConnection` to a closed port. The report now has all four lines, and the download-dir
+  line lists 4 entries with the correct marks (`ok.xlsx (3 B)`, `.com.google.Chrome.X (2 B, ignored)`,
+  `a.xlsx.crdownload (1 B, unfinished)` and `e.xlsx (0 B, too small)`). Title, url, readyState
+  and windows say `unavailable (MaxRetryError)`. A regular file passed as the directory gives
+  `not a directory`. The per-item `except Exception` is narrow in effect (one item each),
+  documented, and does not catch `KeyboardInterrupt`/`SystemExit`. Accepted.
+- **Watcher behaviour is unchanged.** I compared the code paths:
+  - `_is_complete(name)` is now `_name_kind(name) is COMPLETE`. That is the same boolean as
+    `not endswith(partial_suffixes) and not startswith(ignored_prefixes)` (suffix is checked
+    first; either rule makes it not complete, as before).
+  - In `_accepted`, names come only from `_new_files`, which already filters on `_is_complete`.
+    So `classify(name, size) is TOO_SMALL` holds exactly when `size < min_size_bytes`, as before.
+  - The too-small → `DownloadIncompleteError` path, the orphan handling (`_belongs_to_other_sensor`,
+    `_give_up`, `_final_name`), the snapshot exclusion and the grace poll are untouched.
+  - The existing watcher tests are unchanged (the diff only adds the import and a parametrised
+    `classify` test), and they pass.
+- **Notices:** at most `MAX_NOTICE_CANDIDATES` (20) elements are read, with one `text` read per
+  visible element. A failing element is skipped with a DEBUG log that gives only the exception
+  name.
+- **`public_url`:** checked by hand:
+
+  | Input | Output |
+  |---|---|
+  | `https://u:p@host/x;jsessionid=ABC?t=1#f` | `https://host/x` |
+  | `HTTPS://h:8080/p` | `https://h:8080/p` |
+  | `javascript:alert(1)` | `javascript:` |
+  | `data:…` | `data:` |
+  | `about:blank` | unchanged |
+  | `file:///tmp/x?y` | `file:///tmp/x` |
+
+- **Scope:** `watcher.py` is inside `src/sivin/ingest/portal/**`. `DownloadDiagnostics` now takes
+  the watcher, which is constructor injection consistent with the client. No shared file is
+  touched.
+
+No blocker or major remains.
