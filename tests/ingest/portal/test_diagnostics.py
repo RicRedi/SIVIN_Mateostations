@@ -13,27 +13,30 @@ from selenium.webdriver.common.by import By
 from tests.ingest.portal.conftest import (
     PASSWORD,
     USERNAME,
+    FakeClock,
     FakeElement,
     FakePortalDriver,
 )
+from urllib3.exceptions import MaxRetryError
 
 from sivin.ingest.portal.client import PortalClient
 from sivin.ingest.portal.diagnostics import (
     ELLIPSIS,
     JS_READY_STATE,
     MAX_LISTED_FILES,
+    MAX_NOTICE_CANDIDATES,
     MAX_NOTICES,
     MAX_TEXT_CHARS,
     DirectoryEntry,
     DirectoryListing,
     DownloadDiagnostics,
-    EntryKind,
     public_url,
 )
 from sivin.ingest.portal.errors import DownloadIncompleteError, DownloadTimeoutError
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.session import PortalSession
 from sivin.ingest.portal.settings import PortalSelectors, PortalSettings
+from sivin.ingest.portal.watcher import DownloadWatcher, FileKind
 
 FIRST_NAME = "8615620 77678271"
 NOTICE_CSS = PortalSelectors().notification_css
@@ -112,9 +115,15 @@ def home_downloads(tmp_path: Path) -> Path:
     return tmp_path / "home" / "Downloads"
 
 
+def _watcher(directory: Path) -> DownloadWatcher:
+    return DownloadWatcher(directory, timeout_s=1.0, poll_interval_s=1.0, clock=FakeClock())
+
+
 def _diagnostics(download_dir: Path, home_downloads: Path, **selectors: str) -> DownloadDiagnostics:
     settings = PortalSettings(download_dir=download_dir, selectors=PortalSelectors(**selectors))
-    return DownloadDiagnostics(settings, download_dir, default_download_dir=home_downloads)
+    return DownloadDiagnostics(
+        settings, _watcher(download_dir), default_download_dir=home_downloads
+    )
 
 
 def test_listing_marks_unfinished_ignored_and_directories_newest_first(
@@ -123,14 +132,16 @@ def test_listing_marks_unfinished_ignored_and_directories_newest_first(
     _touch(download_dir / "old.xlsx", b"12345", 1_000)
     _touch(download_dir / "new.xlsx.crdownload", b"1234567", 3_000)
     _touch(download_dir / ".com.google.Chrome.abc", b"", 2_000)
+    _touch(download_dir / "tiny.xlsx", b"", 2_000)
     (download_dir / "sub").mkdir()
     os.utime(download_dir / "sub", (500, 500))
 
     report = _diagnostics(download_dir, home_downloads).collect(StubDriver())
 
     assert report.download_dir.format() == (
-        f"{download_dir}: 4 entries: new.xlsx.crdownload (7 B, unfinished); "
-        ".com.google.Chrome.abc (0 B, ignored); old.xlsx (5 B); sub/ (directory)"
+        f"{download_dir}: 5 entries: new.xlsx.crdownload (7 B, unfinished); "
+        ".com.google.Chrome.abc (0 B, ignored); tiny.xlsx (0 B, too small); old.xlsx (5 B); "
+        "sub/ (directory)"
     )
 
 
@@ -182,7 +193,7 @@ def test_default_download_dir_falls_back_to_the_home_directory(
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     settings = PortalSettings(download_dir=download_dir)
 
-    report = DownloadDiagnostics(settings, download_dir).collect(StubDriver())
+    report = DownloadDiagnostics(settings, _watcher(download_dir)).collect(StubDriver())
 
     assert report.default_dir.format() == f"{tmp_path / 'home' / 'Downloads'}: absent"
 
@@ -196,7 +207,7 @@ def test_missing_home_directory_is_unavailable(
     monkeypatch.setattr(Path, "home", classmethod(no_home))
     settings = PortalSettings(download_dir=download_dir)
 
-    report = DownloadDiagnostics(settings, download_dir).collect(StubDriver())
+    report = DownloadDiagnostics(settings, _watcher(download_dir)).collect(StubDriver())
 
     assert report.default_dir.format() == "~/Downloads: unavailable (RuntimeError)"
 
@@ -212,6 +223,32 @@ def test_unreadable_directory_is_unavailable(
     report = _diagnostics(download_dir, home_downloads).collect(StubDriver())
 
     assert report.download_dir.format() == f"{download_dir}: unavailable (PermissionError)"
+
+
+def test_a_directory_that_cannot_be_checked_is_unavailable_not_absent(
+    download_dir: Path, home_downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_stat = Path.stat
+
+    def stat(self: Path, **kwargs: Any) -> os.stat_result:
+        if self == download_dir:
+            raise PermissionError(self)
+        return original_stat(self, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+
+    report = _diagnostics(download_dir, home_downloads).collect(StubDriver())
+
+    assert report.download_dir.format() == f"{download_dir}: unavailable (PermissionError)"
+
+
+def test_a_file_in_place_of_the_directory_is_reported(tmp_path: Path) -> None:
+    not_a_dir = tmp_path / "downloads"
+    not_a_dir.write_bytes(b"x")
+
+    report = _diagnostics(not_a_dir, tmp_path / "missing").collect(StubDriver())
+
+    assert report.download_dir.format() == f"{not_a_dir}: not a directory"
 
 
 def test_a_file_vanishing_while_listing_is_skipped(
@@ -230,7 +267,7 @@ def test_a_file_vanishing_while_listing_is_skipped(
 
     report = _diagnostics(download_dir, home_downloads).collect(StubDriver())
 
-    assert report.download_dir.entries == (DirectoryEntry("a.xlsx", 1, EntryKind.COMPLETE),)
+    assert report.download_dir.entries == (DirectoryEntry("a.xlsx", 1, FileKind.COMPLETE),)
 
 
 def test_browser_state_without_query_and_fragment(download_dir: Path, home_downloads: Path) -> None:
@@ -247,7 +284,11 @@ def test_browser_state_without_query_and_fragment(download_dir: Path, home_downl
         ("https://portal.example/Device?session=abc#tab", "https://portal.example/Device"),
         ("https://user:secret@portal.example:8443/a/b?x=1", "https://portal.example:8443/a/b"),
         ("https://portal.example/", "https://portal.example/"),
+        ("https://portal.example/x;jsessionid=ABC?y=1", "https://portal.example/x"),
         ("about:blank", "about:blank"),
+        ("data:text/html;base64,c2VjcmV0", "data:"),
+        ("javascript:alert('token')", "javascript:"),
+        ("file:///tmp/export.xlsx", "file:///tmp/export.xlsx"),
     ],
 )
 def test_public_url_strips_credentials_query_and_fragment(url: str, public: str) -> None:
@@ -313,16 +354,60 @@ def test_no_notices_and_disabled_search(download_dir: Path, home_downloads: Path
     assert driver.queries == []
 
 
-def test_a_stale_notice_element_is_unavailable(download_dir: Path, home_downloads: Path) -> None:
+def test_a_stale_notice_element_skips_only_itself(download_dir: Path, home_downloads: Path) -> None:
     class StaleElement(StubElement):
         def is_displayed(self) -> bool:
             raise StaleElementReferenceException("synthetic")
 
-    driver = StubDriver(notices=[StaleElement("gone")])
+    driver = StubDriver(notices=[StaleElement("gone"), StubElement("Server error")])
 
     report = _diagnostics(download_dir, home_downloads).collect(driver)
 
-    assert report.notices.format() == "unavailable (StaleElementReferenceException)"
+    assert report.notices.format() == "'Server error'"
+
+
+def test_only_the_first_notice_candidates_are_inspected(
+    download_dir: Path, home_downloads: Path
+) -> None:
+    inspected: list[int] = []
+
+    class CountingElement(StubElement):
+        def __init__(self, index: int) -> None:
+            super().__init__(f"n{index}", displayed=False)
+            self.index = index
+
+        def is_displayed(self) -> bool:
+            inspected.append(self.index)
+            return False
+
+    driver = StubDriver(notices=[CountingElement(i) for i in range(MAX_NOTICE_CANDIDATES + 5)])
+
+    report = _diagnostics(download_dir, home_downloads).collect(driver)
+
+    assert MAX_NOTICE_CANDIDATES == 20
+    assert inspected == list(range(MAX_NOTICE_CANDIDATES))
+    assert report.notices.format() == "none visible"
+
+
+def test_a_dead_chromedriver_keeps_the_directory_listing(
+    download_dir: Path, home_downloads: Path
+) -> None:
+    class DeadDriver(StubDriver):
+        def _check(self) -> None:
+            raise MaxRetryError(None, "/session/1/title", "synthetic: connection refused")
+
+    _touch(download_dir / "a.xlsx.crdownload", b"partial", 1_000)
+
+    report = _diagnostics(download_dir, home_downloads).collect(DeadDriver())
+
+    unavailable = "unavailable (MaxRetryError)"
+    assert report.format() == (
+        f"  download dir {download_dir}: 1 entry: a.xlsx.crdownload (7 B, unfinished)\n"
+        f"  Chrome default dir {home_downloads}: absent\n"
+        f"  browser: title {unavailable}; url {unavailable}; readyState {unavailable}; "
+        f"windows {unavailable}\n"
+        f"  portal notices: {unavailable}"
+    )
 
 
 def test_full_report_text(download_dir: Path, home_downloads: Path) -> None:
@@ -356,7 +441,7 @@ def _failed_download_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.
     [
         ("none", DownloadTimeoutError, "empty"),
         ("partial", DownloadTimeoutError, "(7 B, unfinished)"),
-        ("empty", DownloadIncompleteError, "(0 B)"),
+        ("empty", DownloadIncompleteError, "(0 B, too small)"),
     ],
 )
 def test_failed_download_logs_one_diagnostics_block_and_reraises(
@@ -449,7 +534,7 @@ def test_an_unexpected_collecting_error_does_not_mask_the_download_error(
         credentials,
         factory_for(settings, driver),
         clock=fake_clock,
-        diagnostics=ExplodingDiagnostics(settings, settings.download_dir),
+        diagnostics=ExplodingDiagnostics(settings, _watcher(settings.download_dir)),
     )
 
     with caplog.at_level(logging.WARNING), client:

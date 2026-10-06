@@ -124,6 +124,35 @@ Export of 8615620 77678271 failed (DownloadTimeoutError); diagnostics:
   of the wired `ingest.portal` section; no CLI change proposed. `config/sivin.yaml` is not
   changed (selectors are not listed there).
 
+## Changes after review round 1
+
+- **major (dead chromedriver):** every item is now collected on its own with `except Exception`
+  (documented in the `DownloadDiagnostics` docstring): urllib3's `MaxRetryError` is neither a
+  `WebDriverException` nor an `OSError`. A driver raising `MaxRetryError` on every call now gives
+  the full four-line report with the directory listing intact and the browser/notice items
+  `unavailable (MaxRetryError)` (test `test_a_dead_chromedriver_keeps_the_directory_listing`).
+  `DIAGNOSTIC_ERRORS` is removed. The client-level guard stays as a last resort.
+- **minor (duplicated classification):** new `watcher.FileKind` (`complete`, `unfinished`,
+  `ignored`, `too small`) and public `DownloadWatcher.classify(name, size_bytes)`, used by the
+  watcher itself (`_is_complete`, the too-small check) and by the diagnostics.
+  `DownloadDiagnostics` now takes the watcher instead of a directory:
+  `DownloadDiagnostics(settings, watcher, default_download_dir=None)`. `EntryKind` is gone;
+  `DirectoryEntry(name, size_bytes, kind: FileKind, is_directory=False)`. Files below
+  `min_export_size_bytes` are marked `too small`.
+- **minor (notices):** at most `MAX_NOTICE_CANDIDATES` (20) matches are inspected; each element's
+  text is read once; an element that fails (e.g. stale) is skipped alone (DEBUG log) instead of
+  dropping all notices.
+- **nits:** `docs/ingest.md` describes `same as the download directory`, `too small`,
+  `not a directory`, the candidate cap and per-item robustness. The directory is checked with
+  `stat()`: only `FileNotFoundError` means `absent`, a non-directory says `not a directory`, any
+  other error `unavailable (<ExceptionName>)`. `public_url` drops `;params` (`urlparse`), and of a
+  non-hierarchical URL returns only the scheme (`data:`, `javascript:`), except schemes in
+  `WHOLE_URL_SCHEMES` (`about`, so `about:blank` stays readable).
+- Gates after the changes: `make lint` → all checks passed, 301 files formatted; `make type` →
+  no issues in 182 source files; `make test` → 2036 passed; `make cov` → 2036 passed, total
+  99.83 %, `diagnostics.py` 100 % (163 statements, 22 branches), `watcher.py` 100 %,
+  `client.py` 100 %.
+
 ## Review
 
 Verdict: CHANGES_REQUESTED (round 1)

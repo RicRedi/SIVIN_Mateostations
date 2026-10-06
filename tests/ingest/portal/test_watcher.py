@@ -12,7 +12,7 @@ import pytest
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.clock import SystemClock
 from sivin.ingest.portal.errors import DownloadIncompleteError, DownloadTimeoutError
-from sivin.ingest.portal.watcher import DirectorySnapshot, DownloadWatcher
+from sivin.ingest.portal.watcher import DirectorySnapshot, DownloadWatcher, FileKind
 
 POLL_S = 1.0
 TIMEOUT_S = 10.0
@@ -259,3 +259,20 @@ def test_file_appearing_at_the_deadline_gets_one_confirmation_poll(
 def test_minimum_size_must_be_positive(tmp_path: Path, fake_clock: Any) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         DownloadWatcher(tmp_path, 1.0, 1.0, fake_clock, min_size_bytes=0)
+
+
+@pytest.mark.parametrize(
+    ("name", "size_bytes", "kind"),
+    [
+        ("export.xlsx", 5, FileKind.COMPLETE),
+        ("export.xlsx", 0, FileKind.TOO_SMALL),
+        ("export.xlsx.crdownload", 0, FileKind.UNFINISHED),
+        ("export.tmp", 9, FileKind.UNFINISHED),
+        (".com.google.Chrome.abc", 0, FileKind.IGNORED),
+        (".hidden.xlsx", 9, FileKind.IGNORED),
+    ],
+)
+def test_classify_applies_the_name_rules_before_the_size(
+    tmp_path: Path, fake_clock: Any, name: str, size_bytes: int, kind: FileKind
+) -> None:
+    assert _watcher(tmp_path, fake_clock).classify(name, size_bytes) is kind

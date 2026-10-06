@@ -89,7 +89,7 @@ class PortalClient:
         Download detection; built from the settings when omitted.
     diagnostics : DownloadDiagnostics, optional
         Collects the WARNING block logged when a download fails; built from the settings and
-        the watcher's directory when omitted.
+        the watcher when omitted.
 
     Raises
     ------
@@ -126,7 +126,7 @@ class PortalClient:
             ignored_prefixes=settings.ignored_download_prefixes,
             min_size_bytes=settings.min_export_size_bytes,
         )
-        self._diagnostics = diagnostics or DownloadDiagnostics(settings, self._watcher.directory)
+        self._diagnostics = diagnostics or DownloadDiagnostics(settings, self._watcher)
         self._web_driver: WebDriver | None = None
         self._devices: list[PortalDevice] = []
 

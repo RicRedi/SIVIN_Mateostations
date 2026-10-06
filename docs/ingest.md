@@ -230,13 +230,14 @@ WARNING Export of 8615620 77678271 failed (DownloadTimeoutError); diagnostics:
 
 | Line | What it shows |
 |---|---|
-| `download dir` | Every entry of `download_dir`, newest first, with its size in bytes, also the ones the watcher does not take: `unfinished` (a `partial_download_suffixes` ending, e.g. `.crdownload`) and `ignored` (an `ignored_download_prefixes` beginning, e.g. Chrome's hidden `.com.google.Chrome.*`). At most 10 entries, then `… and N more`; `empty` or `absent` otherwise. |
-| `Chrome default dir` | `~/Downloads` of the user running the browser, listed only when it exists and differs from `download_dir`; `absent` otherwise. |
-| `browser` | Page title, the current URL **without** user info, query string and fragment (they may carry tokens), `document.readyState` and the number of open windows/tabs. |
-| `portal notices` | Texts of visible elements matching `selectors.notification_css` (at most 3, each cut to 200 characters), `none visible`, or `not searched` when the selector is empty. |
+| `download dir` | Every entry of `download_dir`, newest first, with its size in bytes, also the ones the watcher does not take: `unfinished` (a `partial_download_suffixes` ending, e.g. `.crdownload`), `ignored` (an `ignored_download_prefixes` beginning, e.g. Chrome's hidden `.com.google.Chrome.*`) and `too small` (below `min_export_size_bytes`, the cause of `DownloadIncompleteError`); the marks are the download watcher's own rules. At most 10 entries, then `… and N more`; `empty`, `absent`, `not a directory` or `unavailable (<ExceptionName>)` otherwise. |
+| `Chrome default dir` | `~/Downloads` of the user running the browser, listed when it exists and differs from `download_dir`; `absent` when it does not exist, `same as the download directory` when it is `download_dir`. |
+| `browser` | Page title, the current URL **without** user info, `;params`, query string and fragment (they may carry tokens; of a `data:` or `javascript:` URL only the scheme), `document.readyState` and the number of open windows/tabs. |
+| `portal notices` | Texts of visible elements matching `selectors.notification_css` (the first 20 matches are inspected, an unreadable one is skipped; at most 3 reported, each cut to 200 characters), `none visible`, or `not searched` when the selector is empty. |
 
-Any item that cannot be read says `unavailable (<ExceptionName>)`; collecting never replaces
-the download error. Credentials, cookies, page source and input values are never logged.
+Any item that cannot be read says `unavailable (<ExceptionName>)`, each item on its own: with a
+dead chromedriver (`MaxRetryError`) the browser lines are unavailable but the directory lines
+are still there. Collecting never replaces the download error. Credentials, cookies, page source and input values are never logged.
 
 **Reading it — provider or our side?**
 
@@ -251,7 +252,7 @@ the download error. Credentials, cookies, page source and input values are never
   `download dir` — check `ChromeDriverFactory.download_preferences` and `download_dir`.
 - **Our side, export opened a tab:** `windows 2` or more, or the URL is no longer the portal page
   — the export was opened instead of downloaded.
-- **Empty export:** a complete file of `0 B` (with `DownloadIncompleteError`) — the portal
+- **Empty export:** a file marked `too small`, e.g. `0 B` (with `DownloadIncompleteError`) — the portal
   produced an empty file; usually the provider.
 - **`url` shows the login page:** the portal session ended before the export; the client does
   not log in again, so the remaining devices of the run are likely to fail as well.

@@ -6,9 +6,10 @@ collects what can be seen at that moment (the download directory, Chrome's defau
 directory, the browser state and any visible portal notice) into an immutable
 :class:`DownloadReport`, whose :meth:`DownloadReport.format` is the logged text.
 
-Collecting never raises: a browser or file system error while collecting one item turns that
-item into ``unavailable (<ExceptionName>)``. Nothing secret is collected: no cookies, no page
-source, no input values, and the URL without credentials, query string and fragment.
+Collecting never raises: any error while collecting one item turns only that item into
+``unavailable (<ExceptionName>)``, so the directory listings survive a dead browser. Nothing
+secret is collected: no cookies, no page source, no input values, and the URL without
+credentials, parameters, query string and fragment.
 """
 
 from __future__ import annotations
@@ -17,17 +18,17 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from stat import S_ISDIR
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlparse, urlunparse
 
-from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
 
 from sivin.ingest.portal.settings import PortalSettings
+from sivin.ingest.portal.watcher import DownloadWatcher, FileKind
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ MAX_LISTED_FILES: Final = 10
 
 MAX_NOTICES: Final = 3
 """Most visible portal notices reported."""
+
+MAX_NOTICE_CANDIDATES: Final = 20
+"""Most elements matching ``selectors.notification_css`` inspected (each costs WebDriver calls);
+a broad selector on a large page is cut here before visibility is checked."""
 
 MAX_TEXT_CHARS: Final = 200
 """Longest page title or notice text reported (characters); longer ones are cut with "…"."""
@@ -50,20 +55,11 @@ CHROME_DEFAULT_SUBDIR: Final = "Downloads"
 """Chrome's default download directory relative to the user's home, used when its download
 preferences are ignored."""
 
-DIAGNOSTIC_ERRORS: Final = (WebDriverException, OSError, RuntimeError, ValueError)
-"""Errors turned into "unavailable": browser and file system failures, ``Path.home()`` without a
-home directory (``RuntimeError``) and an unparsable URL (``ValueError``)."""
+WHOLE_URL_SCHEMES: Final = frozenset({"about"})
+"""Schemes of non-hierarchical URLs shown whole (``about:blank`` carries no data); of any other
+non-hierarchical URL (``data:``, ``javascript:``) only the scheme is shown."""
 
 _WHITESPACE: Final = re.compile(r"\s+")
-
-
-class EntryKind(Enum):
-    """How the download watcher treats a directory entry."""
-
-    COMPLETE = ""
-    UNFINISHED = "unfinished"
-    IGNORED = "ignored"
-    DIRECTORY = "directory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,13 +72,16 @@ class DirectoryEntry:
         File name (not a path).
     size_bytes : int
         Size (bytes); 0 for a directory.
-    kind : EntryKind
-        Whether the watcher would consider, wait for or ignore it.
+    kind : FileKind
+        How the download watcher treats it (:meth:`DownloadWatcher.classify`).
+    is_directory : bool
+        Whether it is a directory (``kind`` is then meaningless).
     """
 
     name: str
     size_bytes: int
-    kind: EntryKind = EntryKind.COMPLETE
+    kind: FileKind = FileKind.COMPLETE
+    is_directory: bool = False
 
     def format(self) -> str:
         """Return ``name (size B[, kind])``.
@@ -92,9 +91,9 @@ class DirectoryEntry:
         str
             One entry as logged.
         """
-        if self.kind is EntryKind.DIRECTORY:
+        if self.is_directory:
             return f"{self.name}/ (directory)"
-        marker = f", {self.kind.value}" if self.kind.value else ""
+        marker = "" if self.kind is FileKind.COMPLETE else f", {self.kind.value}"
         return f"{self.name} ({self.size_bytes} B{marker})"
 
 
@@ -109,8 +108,8 @@ class DirectoryListing:
     entries : tuple[DirectoryEntry, ...]
         Entries, newest first.
     status : str
-        Empty when listed; otherwise ``absent``, ``same as the download directory`` or
-        ``unavailable (<ExceptionName>)``.
+        Empty when listed; otherwise ``absent``, ``not a directory``, ``same as the download
+        directory`` or ``unavailable (<ExceptionName>)``.
     """
 
     path: Path
@@ -253,12 +252,18 @@ class DownloadReport:
 class DownloadDiagnostics:
     """Collects a :class:`DownloadReport` after a failed download.
 
+    Every item is collected on its own and any error becomes ``unavailable (<ExceptionName>)``
+    for that item only. ``Exception`` is caught on purpose: besides ``WebDriverException`` and
+    ``OSError``, a dead chromedriver raises urllib3's ``MaxRetryError`` (Selenium's transport),
+    and diagnostics must never cost the directory listing or replace the download error.
+
     Parameters
     ----------
     settings : PortalSettings
-        Partial-download suffixes, ignored prefixes and ``selectors.notification_css``.
-    directory : pathlib.Path
-        The watched download directory.
+        Provides ``selectors.notification_css``.
+    watcher : DownloadWatcher
+        The client's watcher: its directory is listed and its :meth:`DownloadWatcher.classify`
+        marks the entries, so the report uses exactly the watcher's rules.
     default_download_dir : pathlib.Path, optional
         Chrome's default download directory; ``~/Downloads`` of the process user when
         omitted (resolved when collecting, so a missing home never raises).
@@ -267,20 +272,20 @@ class DownloadDiagnostics:
     def __init__(
         self,
         settings: PortalSettings,
-        directory: Path,
+        watcher: DownloadWatcher,
         default_download_dir: Path | None = None,
     ) -> None:
         self._settings = settings
-        self._directory = directory
+        self._watcher = watcher
         self._default_download_dir = default_download_dir
 
     def collect(self, driver: WebDriver) -> DownloadReport:
-        """Collect the report; never raises for browser or file system errors.
+        """Collect the report; never raises.
 
         Parameters
         ----------
         driver : selenium.webdriver.remote.webdriver.WebDriver
-            The open browser.
+            The open (or dead) browser.
 
         Returns
         -------
@@ -288,7 +293,7 @@ class DownloadDiagnostics:
             The report; unreadable items say ``unavailable (<ExceptionName>)``.
         """
         return DownloadReport(
-            download_dir=self._listing(self._directory),
+            download_dir=self._listing(self._watcher.directory),
             default_dir=self._default_listing(),
             browser=BrowserState(
                 title=_attempt(lambda: _truncate(str(driver.title))),
@@ -302,11 +307,11 @@ class DownloadDiagnostics:
     def _default_listing(self) -> DirectoryListing:
         try:
             default_dir = self._default_download_dir or Path.home() / CHROME_DEFAULT_SUBDIR
-        except DIAGNOSTIC_ERRORS as error:
+        except Exception as error:  # see the class docstring
             return DirectoryListing(Path("~", CHROME_DEFAULT_SUBDIR), status=_unavailable(error))
         try:
-            same = default_dir.resolve() == self._directory.resolve()
-        except DIAGNOSTIC_ERRORS as error:
+            same = default_dir.resolve() == self._watcher.directory.resolve()
+        except Exception as error:  # see the class docstring
             return DirectoryListing(default_dir, status=_unavailable(error))
         if same:
             return DirectoryListing(default_dir, status="same as the download directory")
@@ -314,10 +319,12 @@ class DownloadDiagnostics:
 
     def _listing(self, directory: Path) -> DirectoryListing:
         try:
-            if not directory.is_dir():
-                return DirectoryListing(directory, status="absent")
+            if not S_ISDIR(directory.stat().st_mode):
+                return DirectoryListing(directory, status="not a directory")
             entries = [self._entry(path) for path in directory.iterdir()]
-        except DIAGNOSTIC_ERRORS as error:
+        except FileNotFoundError:
+            return DirectoryListing(directory, status="absent")
+        except Exception as error:  # see the class docstring
             return DirectoryListing(directory, status=_unavailable(error))
         found = sorted(
             (entry for entry in entries if entry is not None),
@@ -332,33 +339,36 @@ class DownloadDiagnostics:
         except FileNotFoundError:
             return None
         if S_ISDIR(stat.st_mode):
-            return stat.st_mtime, DirectoryEntry(path.name, 0, EntryKind.DIRECTORY)
-        return stat.st_mtime, DirectoryEntry(path.name, stat.st_size, self._kind(path.name))
-
-    def _kind(self, name: str) -> EntryKind:
-        if name.endswith(self._settings.partial_download_suffixes):
-            return EntryKind.UNFINISHED
-        if name.startswith(self._settings.ignored_download_prefixes):
-            return EntryKind.IGNORED
-        return EntryKind.COMPLETE
+            return stat.st_mtime, DirectoryEntry(path.name, 0, is_directory=True)
+        kind = self._watcher.classify(path.name, stat.st_size)
+        return stat.st_mtime, DirectoryEntry(path.name, stat.st_size, kind)
 
     def _notices(self, driver: WebDriver) -> PortalNotices:
         css = self._settings.selectors.notification_css
         if not css:
             return PortalNotices(status="not searched (no selector)")
         try:
-            texts = [
-                _truncate(element.text)
-                for element in driver.find_elements(By.CSS_SELECTOR, css)
-                if element.is_displayed() and element.text.strip()
-            ]
-        except DIAGNOSTIC_ERRORS as error:
+            candidates = driver.find_elements(By.CSS_SELECTOR, css)[:MAX_NOTICE_CANDIDATES]
+        except Exception as error:  # see the class docstring
             return PortalNotices(status=_unavailable(error))
+        texts = [text for text in map(_visible_text, candidates) if text]
         return PortalNotices(tuple(texts[:MAX_NOTICES]), hidden_count=len(texts[MAX_NOTICES:]))
 
 
+def _visible_text(element: WebElement) -> str:
+    """Return the element's text when it is visible, else ``""``; a stale element gives ``""``."""
+    try:
+        return _truncate(element.text) if element.is_displayed() else ""
+    except Exception as error:  # one stale element must not drop the other notices
+        logger.debug("Skipping a notice element: %s", type(error).__name__)
+        return ""
+
+
 def public_url(url: str) -> str:
-    """Return ``url`` without user info, query string and fragment (they may carry tokens).
+    """Return ``url`` without user info, ``;params``, query string and fragment.
+
+    These parts may carry tokens. Of a non-hierarchical URL (``data:``, ``javascript:``) only
+    the scheme is returned, unless the scheme is in :data:`WHOLE_URL_SCHEMES`.
 
     Parameters
     ----------
@@ -375,10 +385,12 @@ def public_url(url: str) -> str:
     ValueError
         If the port is not a number.
     """
-    parts = urlsplit(url)
+    parts = urlparse(url)
+    if parts.scheme and not url[len(parts.scheme) + 1 :].startswith("//"):
+        return url if parts.scheme in WHOLE_URL_SCHEMES else f"{parts.scheme}:"
     host = parts.hostname or ""
     netloc = f"{host}:{parts.port}" if parts.port is not None else host
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    return urlunparse((parts.scheme, netloc, parts.path, "", "", ""))
 
 
 def _truncate(text: str) -> str:
@@ -393,7 +405,7 @@ def _attempt(read: Callable[[], str]) -> str:
     """Return ``read()``, or ``unavailable (<ExceptionName>)`` when it fails."""
     try:
         return read()
-    except DIAGNOSTIC_ERRORS as error:
+    except Exception as error:  # see DownloadDiagnostics: one item never costs the others
         return _unavailable(error)
 
 
