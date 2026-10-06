@@ -126,7 +126,76 @@ Export of 8615620 77678271 failed (DownloadTimeoutError); diagnostics:
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, 2026-10-06. Reviewed `git diff origin/main...HEAD` (commits
+bf9dfd2, 83759d3, 8a8032c) against the WP-1.3.1 brief. Not run against the real portal or a
+real Chrome.
+
+### Gates observed
+
+- `make lint` → ruff: all checks passed; 301 files already formatted.
+- `make type` → mypy --strict: no issues found in 182 source files.
+- `make test` → 2022 passed.
+- `make cov` → `diagnostics.py` 100 % (159 stmts, 24 branches), `client.py` 100 %, `settings.py`
+  100 %.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | src/sivin/ingest/portal/diagnostics.py:53, :290-300 | A dead chromedriver makes `collect()` raise `urllib3.exceptions.MaxRetryError`, which is not in `DIAGNOSTIC_ERRORS`; the whole report, including the already collected directory listings, is replaced by `diagnostics unavailable (MaxRetryError)`. | open |
+| minor | src/sivin/ingest/portal/diagnostics.py:338-343 | Entry classification duplicates `DownloadWatcher._is_complete`/suffix-prefix logic instead of reusing it; "too small" (< `min_export_size_bytes`, the cause of `DownloadIncompleteError`) is not marked. | open |
+| minor | src/sivin/ingest/portal/diagnostics.py:349-354 | Notice search makes up to three WebDriver round trips per matching element (`is_displayed`, `text` twice) with no cap before filtering; a broad selector such as `[role='status']` on a large page costs many calls, and one stale element discards all notices. | open |
+| nit | docs/ingest.md:234 | Says `absent` when the default dir equals `download_dir`; the code prints `same as the download directory` (the deviation is fine, the doc is out of date). | open |
+| nit | src/sivin/ingest/portal/diagnostics.py:317 | `Path.is_dir()` returns `False` on `PermissionError` of a parent, so an unreadable path is reported as `absent`, not `unavailable (PermissionError)`. | open |
+| nit | src/sivin/ingest/portal/diagnostics.py:378-381 | `public_url` keeps `;params` in the path (e.g. `/x;jsessionid=ABC`) and the whole of non-hierarchical URLs (`data:…`). Unlikely for this DotVVM portal; mention or strip `;…` too. | open |
+
+**major — dead chromedriver.** Verified with a throwaway script: a `WebDriver` whose
+`RemoteConnection` points to a closed port (`http://127.0.0.1:9`) raises
+`urllib3.exceptions.MaxRetryError` (MRO: `RequestError → PoolError → HTTPError → Exception`, not
+`OSError`, not `WebDriverException`) from `driver.title` within 5 ms. `DownloadDiagnostics.collect`
+then raises it; with a `.crdownload` file in the download directory the listing is lost. The
+client's `except Exception` guard keeps the original `DownloadTimeoutError` (good), but the log
+shows only `diagnostics unavailable (MaxRetryError)`, i.e. exactly the evidence the WP exists
+for (download directory) is missing when chromedriver died, and the class docstring ("never
+raises for browser … errors") is wrong for that case. A crashed Chrome with a living
+chromedriver gives a `WebDriverException` and is handled correctly.
+Fix: add `urllib3.exceptions.HTTPError` to `DIAGNOSTIC_ERRORS` (urllib3 is Selenium's transport;
+or catch `Exception` inside `_attempt`/`_notices` and document why), and add a test with a
+driver raising it that asserts the directory line is still present.
+
+**minor — duplicated classification.** `_kind` re-implements the watcher's
+`endswith(partial_suffixes)` / `startswith(ignored_prefixes)` rules; if the watcher's rules
+change, the diagnostics will silently mark files differently from what the watcher did.
+Suggest a public `DownloadWatcher.classify(name, size_bytes)` (or a small shared classifier)
+used by both, which can also return `too small` for `DownloadIncompleteError`.
+
+**minor — notice cost.** Suggest `find_elements` → slice to a named cap (e.g.
+`MAX_NOTICE_CANDIDATES`) before `is_displayed`, read `element.text` once, and catch the stale
+error per element so one stale element does not drop the others.
+
+Not a finding (checked): bare `raise` inside the `except` re-raises the original exception
+object with its traceback; the session test confirms 2 attempts and the same failure reason.
+URL user info, query and fragment are stripped (`https://u:p@host/x?t=1#f` → `https://host/x`).
+Notice and title texts are arbitrary page text, but log records already pass the global
+`RedactingFilter` (`SIVIN_USER`/`SIVIN_PASSWORD`), so a page echoing the login is masked.
+Logged file names are export names (public sensor ids) and `~/Downloads` entries of the runner.
+Report is four lines, entries capped at 10, notices at 3, texts at 200 characters. No hung-driver
+timeout exists in `driver.py` (Selenium's default socket timeout is `None`); that is pre-existing
+and applies to the whole client, so it is out of scope here.
+
+### Deviations assessment
+
+- `except Exception` around `collect()` in the client: accepted — it is the last guard that the
+  download error is never replaced, the name of the failure is logged, and the test shows no
+  chained context. It does not replace fixing the major above (the guard keeps the error but
+  loses the report).
+- URL user info stripped, title truncated, directories listed as `name/ (directory)`: accepted,
+  all in the spirit of the brief.
+- `same as the download directory` instead of `absent`: accepted (more accurate); update
+  `docs/ingest.md:234`.
+- Scope: only files in the brief's scope changed (`src/sivin/ingest/portal/**`,
+  `tests/ingest/portal/**`, `docs/ingest.md`, regenerated `docs/configuration.md` for the new
+  key, the hand-off note); no shared file touched. `notification_css` is honestly marked
+  `[to be verified]`.
