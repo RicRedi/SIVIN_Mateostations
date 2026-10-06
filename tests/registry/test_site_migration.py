@@ -144,13 +144,18 @@ class TestFile:
         with pytest.raises(RegistryFormatError, match="Invalid sensor registry inline"):
             store.loads(b"{}", "inline")
 
-    def test_committed_registry_has_null_municipality_and_track(self) -> None:
-        """The owner fills them in; nothing is guessed from the coordinates."""
+    def test_committed_registry_has_the_owner_supplied_municipality_and_track(self) -> None:
+        """Values supplied by the owner on 2026-10-06; nothing is guessed from the coordinates."""
         properties = [
             feature["properties"]
             for feature in json.loads(COMMITTED_REGISTRY.read_text(encoding="utf-8"))["features"]
         ]
-        assert all(p["municipality"] is None and p["track"] is None for p in properties)
+        assert {p["id"]: (p["municipality"], p["track"]) for p in properties} == {
+            "77678271": ("Dolní Věstonice", "Nad Silnicí"),
+            "77680921": ("Dolní Věstonice", "Nad Silnicí"),
+            "77800065": ("Dolní Věstonice", "Nad Silnicí"),
+            "77799986": ("Dolní Věstonice", "U Kapličky"),
+        }
         assert all("site" not in p for p in properties)
 
 

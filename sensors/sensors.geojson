@@ -14,8 +14,8 @@
         "id": "77678271",
         "portal_name": "8615620 77678271",
         "label": "77678271 (VUT)",
-        "municipality": null,
-        "track": null,
+        "municipality": "Dolní Věstonice",
+        "track": "Nad Silnicí",
         "variety": null,
         "status": "active",
         "placements": [
@@ -44,8 +44,8 @@
         "id": "77680921",
         "portal_name": "8615620 77680921",
         "label": "77680921 (VUT)",
-        "municipality": null,
-        "track": null,
+        "municipality": "Dolní Věstonice",
+        "track": "Nad Silnicí",
         "variety": null,
         "status": "active",
         "placements": [
@@ -74,8 +74,8 @@
         "id": "77800065",
         "portal_name": "8615620 77800065",
         "label": "77800065 (VUT)",
-        "municipality": null,
-        "track": null,
+        "municipality": "Dolní Věstonice",
+        "track": "Nad Silnicí",
         "variety": null,
         "status": "active",
         "placements": [
@@ -104,8 +104,8 @@
         "id": "77799986",
         "portal_name": "8615620 77799986",
         "label": "77799986 (VUT)",
-        "municipality": null,
-        "track": null,
+        "municipality": "Dolní Věstonice",
+        "track": "U Kapličky",
         "variety": null,
         "status": "active",
         "placements": [
