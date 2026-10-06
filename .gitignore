@@ -1,0 +1,5 @@
+# Written by .github/workflows/pipeline.yml; the workflow also enforces these rules.
+/data/downloads/
+/data/quarantine/
+*.tmp
+.env
