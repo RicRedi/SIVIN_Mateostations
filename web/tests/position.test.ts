@@ -19,6 +19,6 @@ describe('formatPosition', () => {
   });
 
   it('does not depend on the locale (no decimal comma)', () => {
-    expect(formatPosition(48.5, 16.25)).not.toContain(',5');
+    expect(formatPosition(48.5, 16.25)).toBe('48.500000, 16.250000');
   });
 });

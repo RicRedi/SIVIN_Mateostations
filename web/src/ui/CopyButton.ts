@@ -28,8 +28,9 @@ export interface CopyButtonLabels {
  *
  * On success the button shows `labels.copied` for `feedbackMs`; when the clipboard is unavailable
  * or refuses, it selects the text of `source` so the user can copy it by hand and shows
- * `labels.selected` for the same time. A repeated click restarts the timer. The result is also
- * written to a polite live region for screen readers. Copying never throws.
+ * `labels.selected` for the same time. A repeated click restarts the timer. While the result is
+ * shown, it is also the button's accessible name, and it is written to a polite live region for
+ * screen readers. Copying never throws.
  */
 export class CopyButton {
   readonly button: HTMLButtonElement;
@@ -85,11 +86,13 @@ export class CopyButton {
   private showFeedback(message: string): void {
     this.dispose();
     this.button.textContent = message;
+    this.button.setAttribute('aria-label', message);
     this.announcer.textContent = message;
     this.timer = setTimeout(() => {
       this.timer = null;
       if (this.button.isConnected) {
         this.button.textContent = this.labels.idle;
+        this.button.setAttribute('aria-label', this.labels.action);
         this.announcer.textContent = '';
       }
     }, this.feedbackMs);

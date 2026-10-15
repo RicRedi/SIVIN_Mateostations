@@ -100,6 +100,31 @@ Run in `/home/user/wt/wp-3.6/web`:
 - Placement of the row (see *Deviations*): last metadata row (as built) or directly below the
   track?
 
+## Follow-up after review
+
+Changes after review round 1 (APPROVE, `5b75004`):
+
+- `CopyButton.ts` (minor, accessible name): while the result is shown, the button's `aria-label`
+  is set to the shown text (*Zkopírováno* / *Označeno – zkopírujte ručně*), so the accessible name
+  matches the visible text; after the 2 s it returns to *Kopírovat polohu do schránky*. The
+  live-region announcement is kept. Tests assert the label in the success, reset and fallback
+  states.
+- `styles.css` (minor): the button border uses `--line-strong` like the other controls; hover
+  darkens it to `--ink-muted` (it was `--line-strong` before, which is now the resting colour).
+- `position.test.ts` (nit): the locale test asserts the exact string `48.500000, 16.250000`.
+- Card jump at 320 px with the fallback text (nit): **not changed**. Tried `white-space: nowrap` +
+  `text-overflow: ellipsis` with `max-width: 100%` (which also needs `min-width: 0` on the metadata
+  `dd`). It removed the jump, but at 320 px the button then read *Označeno – zko…*. That hides the
+  instruction, which is worse than the 13 px jump, so it was reverted. Making the text shorter
+  would drop "copy manually". At 390 px the fallback text fits on one line and the card height
+  does not change (checked with Playwright: 227 px before and after).
+- Late-timer nit left as is, as asked.
+
+Gates after the follow-up (in `web/`): `npm run lint` → no findings; `npm run typecheck` → no
+errors; `npm test` → 22 files, 234 tests passed, all files 99.62 % lines; `domain/position.ts` and
+`ui/CopyButton.ts` 100 % lines and branches, `ui/SensorPanel.ts` 100 % lines / 88.88 % branches
+(unchanged); `npm run build` → built, no warnings.
+
 ## Review
 
 Verdict: APPROVE (round 1)

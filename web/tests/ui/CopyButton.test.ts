@@ -46,11 +46,13 @@ describe('CopyButton', () => {
     expect(writeText).toHaveBeenCalledWith(TEXT);
     expect(copy.button.textContent).toBe('Zkopírováno');
     expect(copy.announcer.textContent).toBe('Zkopírováno');
+    expect(copy.button.getAttribute('aria-label')).toBe('Zkopírováno');
     await vi.advanceTimersByTimeAsync(COPY_FEEDBACK_MS - 1);
     expect(copy.button.textContent).toBe('Zkopírováno');
     await vi.advanceTimersByTimeAsync(1);
     expect(copy.button.textContent).toBe('Kopírovat');
     expect(copy.announcer.textContent).toBe('');
+    expect(copy.button.getAttribute('aria-label')).toBe('Kopírovat polohu do schránky');
     expect(copy.button.disabled).toBe(false);
   });
 
@@ -71,6 +73,7 @@ describe('CopyButton', () => {
     await click(copy);
     expect(document.getSelection()?.toString()).toBe(TEXT);
     expect(copy.button.textContent).toBe('Označeno');
+    expect(copy.button.getAttribute('aria-label')).toBe('Označeno');
     await vi.advanceTimersByTimeAsync(COPY_FEEDBACK_MS);
     expect(copy.button.textContent).toBe('Kopírovat');
   });

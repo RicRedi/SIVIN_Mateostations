@@ -548,7 +548,7 @@ input {
 .copy-button {
   min-height: 1.75rem;
   padding: 0.1rem 0.55rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: #ffffff;
   color: var(--ink-secondary);
@@ -557,7 +557,7 @@ input {
 }
 
 .copy-button:hover {
-  border-color: var(--line-strong);
+  border-color: var(--ink-muted);
   color: var(--ink);
 }
 
