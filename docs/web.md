@@ -179,6 +179,18 @@ STUCK | PRE_DEPLOYMENT | MANUAL_EXCLUDE:
 - STEP, NEIGHBOR_OUTLIER and TIMESTAMP_SUSPECT are informative and do not hide data.
 - Daily values are taken from `daily.json` as delivered by the pipeline.
 
+### Copying a sensor position
+
+Each sensor card has a *Poloha* row with the current position as selectable text,
+`"<lat>, <lon>"` with six decimals and a decimal point in every UI language (`formatPosition` in
+`domain/position.ts`), so the text can be pasted into navigation apps. The *Kopírovat* button
+(`ui/CopyButton`) writes exactly that text with `navigator.clipboard.writeText` and shows
+*Zkopírováno* for 2 s (`COPY_FEEDBACK_MS`); where the Clipboard API is missing (non-secure
+context, injected as `null` by `main.ts`) or the write is refused, it selects the text for a manual
+copy and shows *Označeno – zkopírujte ručně* instead. The result is also announced through a polite
+live region. Every card has its own button and timer; `SensorPanel` cancels the timers of the
+cards it replaces on re-render.
+
 ### Colours
 
 - Map: classed diverging scale with 9 classes, edges −5 … 30 °C in 5 °C steps. Below 10 °C (the
