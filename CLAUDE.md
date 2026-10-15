@@ -73,6 +73,10 @@ Role jsou definované v `MIGRATION_PLAN.md` §0.1, životní cyklus WP v §0.2.
 - Definition of Done z `MIGRATION_PLAN.md` §1.8: akceptační kritéria, zelené gates ve worktree
   WP, pokrytí změněného kódu ≥ 85 %, nic mimo scope, dokumentace, hand-off note, review.
 - Co se nepodařilo ověřit, je v hand-off note. Neověřená změna se nevydává za hotovou.
+- **README.md je aktuální s každým PR.** Mění-li PR něco, co README popisuje (funkce, příkazy,
+  instalace, provoz, struktura repozitáře, stav „hotovo / zbývá“), upraví README ve stejném PR.
+  README je proto v `Files` scope každého WP (jen dotčené části). Orchestrátor to před otevřením
+  PR zkontroluje a v popisu PR uvede, co se v README změnilo, nebo že změna není potřeba.
 
 ## Styl kódu (zkráceně, plné znění v plánu §1.2)
 
