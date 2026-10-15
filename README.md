@@ -37,11 +37,7 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
 - **Sensor registry:** `sensors/sensors.geojson` with position history, municipality and vineyard
   track (two-level grouping), variety and status (`active` / `retired`).
 - **Alignment:** pairing of series from several sensors with different clocks for comparison.
-- **Climate indices** (each with a mathematical description and literature in
-  [docs/indices/](docs/indices/)): growing degree-days / Winkler, Huglin, BEDD, growing-season
-  temperature, Cool Night Index, diurnal range during ripening, heat hours, tropical days and
-  nights, frost, winter freeze, budburst, GFV and GSR phenology models, dew point, VPD, botrytis
-  (Broome) and powdery mildew (Gubler-Thomas) risk.
+- **Climate indices:** 17 viticultural indices per sensor and season (see below).
 - **Map portal:** map of the sensors (OpenStreetMap, clustering of nearby markers), sensor picker
   with search grouped by municipality → vineyard track, comparison of up to 8 sensors in one
   temperature/humidity chart, sensor card with latest values and a button that copies the GPS
@@ -50,6 +46,22 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
 Not yet done (see [MIGRATION_PLAN.md](MIGRATION_PLAN.md) §4): indices on the web portal
 (WP-3.4), admin mode for editing the registry and the off-site log on the web (WP-3.3),
 publication plots and animations (WP-5.1) and removal of the legacy scripts (WP-5.2).
+
+## Climate indices
+
+Computed per sensor and season from the quality-checked data (`sivin indices`). Each index has a
+page with its formula, period, interpretation, limitations and literature; the overview with a
+short explanation of every index is [docs/indices/README.md](docs/indices/README.md).
+
+| Group | Indices |
+|---|---|
+| Heat of the season | growing degree-days / Winkler regions, Huglin index, BEDD, growing season temperature |
+| Phenology (orientational) | budburst, flowering and véraison (GFV), sugar ripeness (GSR) |
+| Ripening conditions | Cool Night Index, diurnal range during ripening, hours in temperature bands |
+| Frost and extremes | frost hours and nights, winter freeze, tropical days and nights |
+| Humidity and disease risk | dew point, vapour pressure deficit, grey mould (Broome), powdery mildew (Gubler-Thomas) |
+
+Downy mildew is not implemented yet (needs rain and leaf-wetness data; planned in WP-2.5).
 
 ## Quick start
 
@@ -118,7 +130,7 @@ docs/             architecture, data formats, operations, indices and literature
 | Sensor registry and off-site log | [docs/sensors.md](docs/sensors.md) |
 | Quality control | [docs/quality-control.md](docs/quality-control.md) |
 | Pairing of sensors | [docs/alignment.md](docs/alignment.md) |
-| Climate indices and literature | [docs/indices/](docs/indices/), [docs/literature-verification.md](docs/literature-verification.md) |
+| Climate indices and literature | [docs/indices/README.md](docs/indices/README.md), [docs/literature-verification.md](docs/literature-verification.md) |
 | Static site data and web portal | [docs/site.md](docs/site.md), [docs/web.md](docs/web.md) |
 
 ## Legacy scripts
