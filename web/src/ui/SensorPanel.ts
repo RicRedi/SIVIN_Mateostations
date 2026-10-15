@@ -1,7 +1,9 @@
 import type { SensorInfo } from '../app/SensorCatalog';
+import { formatPosition } from '../domain/position';
 import { MS_PER_SECOND } from '../domain/units';
 import type { MessageKey } from '../i18n/cs';
 import type { I18n } from '../i18n/I18n';
+import { CopyButton, type TextClipboard } from './CopyButton';
 import { el } from './dom';
 import type { SensorColors } from './SensorColors';
 
@@ -27,6 +29,7 @@ export class SensorPanel {
   private readonly hint = el('p', { class: 'panel__hint' });
   private readonly details = el('div', { class: 'panel__details' });
   private expanded = true;
+  private copyButtons: CopyButton[] = [];
 
   /**
    * @param root - The panel element.
@@ -34,6 +37,7 @@ export class SensorPanel {
    * @param timeZone - Display time zone.
    * @param colors - Line colours of the compared sensors.
    * @param onToggle - Called after the panel was expanded or collapsed (map must resize).
+   * @param clipboard - Clipboard for copying a sensor position, `null` where the API is missing.
    */
   constructor(
     root: HTMLElement,
@@ -41,6 +45,7 @@ export class SensorPanel {
     private readonly timeZone: string,
     private readonly colors: SensorColors,
     onToggle: () => void,
+    private readonly clipboard: TextClipboard | null,
   ) {
     this.toggle.addEventListener('click', () => {
       this.expanded = !this.expanded;
@@ -63,6 +68,10 @@ export class SensorPanel {
     this.hint.hidden = hasSelection;
     this.windowSlot.hidden = !hasSelection;
     this.chartSlot.hidden = !hasSelection;
+    for (const button of this.copyButtons) {
+      button.dispose();
+    }
+    this.copyButtons = [];
     this.details.replaceChildren(...selected.map((sensor) => this.card(sensor)));
   }
 
@@ -74,22 +83,37 @@ export class SensorPanel {
   private card(sensor: SensorInfo): HTMLElement {
     const swatch = el('span', { class: 'swatch', 'aria-hidden': 'true' });
     swatch.style.background = this.colors.colorFor(sensor.id) ?? 'transparent';
-    const rows: [MessageKey, string | null][] = [
+    const rows: [MessageKey, string | Node | null][] = [
       ['sensorId', sensor.id],
       ['elevation', sensor.elevation_m === null ? null : `${this.i18n.formatNumber(sensor.elevation_m, ELEVATION_DECIMALS)} m`],
       ['placedSince', sensor.placedSince === null ? null : this.formatIsoDate(sensor.placedSince)],
       ['municipality', sensor.municipality],
       ['track', sensor.track],
       ['variety', sensor.variety],
+      ['position', this.position(sensor)],
     ];
     const definitions = rows
-      .filter((row): row is [MessageKey, string] => row[1] !== null)
+      .filter((row): row is [MessageKey, string | Node] => row[1] !== null)
       .flatMap(([key, value]) => [el('dt', {}, [this.i18n.t(key)]), el('dd', {}, [value])]);
     return el('article', { class: 'sensor-card' }, [
       el('h3', { class: 'sensor-card__title' }, [swatch, sensor.label]),
       el('dl', { class: 'sensor-card__meta' }, definitions),
       this.latest(sensor),
     ]);
+  }
+
+  /** Current position as selectable text with its own copy button. */
+  private position(sensor: SensorInfo): HTMLElement {
+    const text = formatPosition(sensor.lat, sensor.lon);
+    const coordinates = el('span', { class: 'sensor-card__coords' }, [text]);
+    const copy = new CopyButton(text, coordinates, this.clipboard, {
+      idle: this.i18n.t('copyPosition'),
+      action: this.i18n.t('copyPositionLabel'),
+      copied: this.i18n.t('positionCopied'),
+      selected: this.i18n.t('positionSelected'),
+    });
+    this.copyButtons.push(copy);
+    return el('span', { class: 'sensor-card__position' }, [coordinates, copy.button, copy.announcer]);
   }
 
   private latest(sensor: SensorInfo): HTMLElement {

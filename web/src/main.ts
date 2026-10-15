@@ -19,6 +19,7 @@ import { DEFAULT_APP_STATE, type AppState } from './state/AppState';
 import { HashStateCodec } from './state/HashStateCodec';
 import { Store } from './state/Store';
 import { App } from './ui/App';
+import type { TextClipboard } from './ui/CopyButton';
 import { HashSync } from './ui/HashSync';
 import { HeaderView } from './ui/HeaderView';
 import { MapView } from './ui/MapView';
@@ -44,6 +45,14 @@ function requireElement(id: string): HTMLElement {
     throw new Error(`index.html is missing #${id}`);
   }
   return element;
+}
+
+/**
+ * The asynchronous Clipboard API, or `null` where the browser does not offer it (it exists only in
+ * secure contexts, so e.g. not on a plain-HTTP preview from another device).
+ */
+function clipboardOrNull(): TextClipboard | null {
+  return 'clipboard' in navigator ? navigator.clipboard : null;
 }
 
 /** End of the available data: the latest `last_t` of any sensor, else `generated_at`. */
@@ -78,7 +87,7 @@ async function start(): Promise<void> {
   const colors = new SensorColors();
   const panel = new SensorPanel(requireElement('panel'), i18n, zone.name, colors, () => {
     map.invalidateSize();
-  });
+  }, clipboardOrNull());
   const chart = new SeriesChart(panel.chartSlot, i18n, catalog, colors, manifest.variables, zone);
   const loader = new ChartDataLoader(client, new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK)), zone, console);
   const presenter = new ChartPresenter(loader, factory, i18n, chart, dataEndT(manifest));
