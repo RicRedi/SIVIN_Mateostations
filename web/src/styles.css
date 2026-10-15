@@ -532,6 +532,35 @@ input {
   margin: 0;
 }
 
+.sensor-card__position {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.5rem;
+  min-width: 0;
+}
+
+.sensor-card__coords {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.copy-button {
+  min-height: 1.75rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #ffffff;
+  color: var(--ink-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.copy-button:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
 .sensor-card__latest h4 {
   margin: 0;
   font-size: 0.75rem;
