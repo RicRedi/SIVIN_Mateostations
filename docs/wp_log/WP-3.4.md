@@ -174,5 +174,121 @@ merged).
    URL hash? It is independent at the moment.
 
 ## Review
-Verdict: (pending)
+
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, 2026-11-26, worktree `/home/user/wt/wp-3.4` at `3bb2312`.
+
+### Gates (run by the reviewer)
+
+- `make lint` → ruff clean, "311 files already formatted"; `make type` → mypy strict "Success: no
+  issues found in 186 source files"; `make test` → 2164 passed.
+- `make cov` → 2164 passed, TOTAL 99 %; changed modules 100 % except `disease/botrytis.py` 99 %
+  (missed lines 384-385 are older code).
+- `web/`: `npm run lint`, `npm run typecheck` clean; `npm test` → 33 files, 341 tests passed;
+  `npm run build` OK.
+
+### Independent checks
+
+- **Seasonal values unchanged.** A SYNTHETIC season export (1 Mar - 30 Nov 2026, irregular
+  1810-1867 s steps, both DST switches, a 5-day gap 10-15 Jul, frost in spring/autumn, humid
+  nights) run through `sivin run --skip-fetch` with `origin/main` and with this branch: every
+  index entry is identical once `daily` is removed; all `series/` and `events/` files are
+  byte-identical; only `manifest.json` (`min_daily_coverage`) and `indices/2026.json` differ.
+- **Daily levels.** Gap days are `null` (PM, Botrytis) or absent (frost) and so grey; partial
+  gap-edge days without an event are `null`; with configured `risk_bands` (low 0 / elevated 0.3
+  / high 0.6) Botrytis levels follow the bands (covered day without a period = lowest band).
+  Levels come only from `RiskClass`, the frost thresholds and the configured bands; nothing new.
+  The web validator rejects a level outside `levels`, so an unknown label cannot fall to rank
+  -1 (= green).
+- **Incremental build / STATE_FORMAT.** A project built with `origin/main` (state format 2),
+  rebuilt with this branch: "state of format 2 ignored", full rebuild, only 2 files written
+  (manifest, indices), result byte-identical to a fresh full build; the next run reuses the
+  sensor (0 files written) and stays identical.
+- **Contract.** Additive, `schema_version` 1, `daily` and `min_daily_coverage` optional in the
+  validators; the Python fixture and `pythonSite.test.ts` are updated. MIGRATION_PLAN §2.6 (only
+  hunk at line 477) agrees with `docs/site.md`.
+- **Browser** (vite preview, Chromium 1243, demo data): no horizontal page scroll at 1280 px and
+  390 px (scrollWidth = viewport); the index table scrolls in its own box at 390 px; phenology
+  rows carry "orientační" and the note; "Jak se počítá" links build from one base URL. A strip
+  has 214 day cells of 2.1 px (1280) / 1.7 px (390).
+- Security: no credentials, portal URLs or account data in the diff; screenshots show demo data
+  only.
+
+### Findings
+
 | Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | `web/src/ui/RecordsView.ts:84-88`, `web/src/domain/SensorRecords.ts:68-79` | "No frost" claimed for an unobserved half of the season | open |
+| minor | `web/src/styles.css:1163-1177` | Risk tones differ almost only in hue; hatching vanishes on 1.7-2 px cells | open |
+| minor | `web/src/ui/RecordsView.ts:68`, `cs.ts:151` | Days note counts rows of `daily.json`, not days of the season | open |
+| minor | `src/sivin/site/state.py:35` | STATE_FORMAT bump drops the failure fallback in the first build | open |
+| minor | `web/src/ui/IndexCardsView.ts:69` | GFV card shows one date without saying it is véraison | open |
+| nit | `web/src/domain/SensorRecords.ts:117` | Max daily precipitation uses temp/RH coverage, ignores `precip_n_samples` | open |
+| nit | `web/scripts/screenshot-analytics.mjs:17` | Default `CHROMIUM_PATH` does not exist here | open |
+| nit | `web/public/data/**` | Regenerated demo data are outside the listed Files scope | open |
+
+**1 (major) - "no frost" without data.** Input: the demo sensor 77678271, data 1 Jun - 1 Oct
+2026, season 2026. Behaviour (seen in the browser): "Poslední jarní mráz: žádný" and "První
+podzimní mráz: žádný", although January-May and October-December have no data at all.
+`RecordsView.frost` prints `recordNoFrost` whenever the season has any complete day. The same
+happens with real data: a sensor installed in summer, or the current season before December,
+"has no autumn frost". This is a statement that the data do not support, and it looks safe, so
+it breaks the WP's own rule ("never green/safe without data") and the CLAUDE.md data rule. No
+test covers `recordNoFrost`. Fix: in `RecordsCalculator.season` return, per half, whether it
+was observed (e.g. complete days cover the half, or at least the frost-relevant months); show
+"žádný" only then, otherwise "– (bez dat)" or "zatím žádný (data do D. M.)"; add tests for a
+summer-only season and a season in progress.
+
+**2 (minor) - colour as the only cue per day.** Relative luminance of the tones is 0.157
+(green), 0.176 (amber), 0.142 (red): contrast between them 1.07-1.17, so in greyscale or for
+red-green colour blindness they differ only by the hatching. The hatching (2-5 px period) is
+visible on runs of days at DPR 2 but not on a single day of 1.7-2.1 px. The text summary gives
+counts and the last day, the per-day `title` is not reachable by touch or keyboard. Fix:
+separate the tones by lightness as well (e.g. light green, mid amber, dark red, at least ~1.5:1
+between neighbours while keeping 3:1 to white for the darker ones), or give cells a minimum
+width with sideways scroll, or mark elevated/high days with a top/bottom tick.
+
+**3 (minor) - partial season not visible in the records.** "Sezóna 2026: použito 121 z 123
+dní" counts rows of `daily.json` in the year, so a June-September sensor looks almost fully
+covered; the season minimum 5.3 °C reads as a season record. Fix: show the first and last day
+used (or "x of 365 days") next to the counts.
+
+**4 (minor) - state format bump.** Verified that the upgrade build is a correct full rebuild.
+But `docs/site.md` promises that a failing sensor keeps its last files "even when the shared
+inputs changed or `--full` is given"; with an ignored format-2 state that promise is broken once
+(the sensor leaves the manifest). Bumping `SITE_OUTPUT_FORMAT` in `src/sivin/app/site.py:33`
+instead would force the same full rebuild and keep the fallback (with an old entry without
+`daily`, which the web tolerates). That file is outside the scope; the orchestrator or owner
+should decide. At minimum the owner should know before the first production run after merge.
+
+**5 (minor) - GFV label.** The row is "Model kvetení a zaměkání (GFV)" and the cell shows one
+date (the published value is véraison). Once the model is configured, readers can take it for
+flowering. Fix: a row suffix or a cell note "zaměkání" (+ de/en).
+
+**6 (nit).** `docs/site.md` says the precipitation sum does not follow temperature/humidity
+coverage. The records select days by `coverage` only, so a day with full temperature but few
+precipitation samples can still be the "max", and a day with a full rain gauge but a
+temperature gap is dropped. Not a false record (a partial sum is too low), but worth a note in
+the UI text or a `precip_n_samples` filter.
+
+**7 (nit).** `CHROMIUM_PATH` defaults to `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`;
+the installed one is `chromium-1243/chrome-linux64/chrome`. The note should give the command
+that was actually used.
+
+**8 (nit).** `web/public/data/{README.md,manifest.json,indices/2026.json}` are generator output.
+The brief implies regenerating them and the hand-off note lists them, but the Files scope does
+not; the orchestrator should confirm.
+
+### Deviations
+
+- `src/sivin/app/factory.py` (manifest wiring): approved by the orchestrator, minimal, covered by
+  `test_manifest_carries_the_configured_complete_day_rule`. OK.
+- Daily block in `indices/<season>.json` rather than a new file: justified and documented; sizes
+  are plausible. OK.
+- Botrytis without bands shown as `no_wetness`/`wetness` (green/amber, never red): consistent
+  with "no invented thresholds"; open question 1 to the owner is the right way. OK.
+- Strip not aligned under the chart axis: allowed ("optional if simple"). OK.
+- STATE_FORMAT instead of SITE_OUTPUT_FORMAT: see finding 4.
+- Season = calendar year, frost halves Jan-Jun / Jul-Dec: documented and consistent; the
+  presentation of unobserved halves is finding 1.
