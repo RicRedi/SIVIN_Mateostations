@@ -43,7 +43,7 @@ def test_defaults_are_the_legacy_values() -> None:
     assert settings.selectors.viewmodel_id == "__dot_viewmodel_root"
     assert "mdi-file-excel" in settings.selectors.excel_button_xpath
     assert settings.timeouts.element_wait_s == 15.0
-    assert settings.timeouts.download_wait_s == 30.0
+    assert settings.timeouts.download_wait_s == 120.0
     assert settings.timeouts.device_settle_s == 3.0
     assert settings.timeouts.tab_settle_s == 2.0
     assert settings.export_section_name == "Historie meteorologických dat"

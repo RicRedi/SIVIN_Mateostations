@@ -12,7 +12,7 @@ import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -35,6 +35,97 @@ CHROMEDRIVER_EXECUTABLE: Final = "chromedriver"
 
 ALLOW: Final = 1
 """Chrome content-setting value 'allow'."""
+
+BROWSER_DOWNLOAD_COMMAND: Final = "Browser.setDownloadBehavior"
+"""Chrome DevTools Protocol command that allows downloads for the whole browser."""
+
+PAGE_DOWNLOAD_COMMAND: Final = "Page.setDownloadBehavior"
+"""Older, page-scoped CDP command; the fallback when the Browser domain call fails."""
+
+ALLOW_DOWNLOADS: Final = "allow"
+"""CDP download behaviour that saves downloads into ``downloadPath`` without asking."""
+
+
+@runtime_checkable
+class CdpDriver(Protocol):
+    """A driver that can send Chrome DevTools Protocol commands (Chrome and Chromium drivers)."""
+
+    def execute_cdp_cmd(self, cmd: str, cmd_args: dict[str, Any]) -> Any:
+        """Send one CDP command and return its result."""
+
+
+class CdpDownloadPermission:
+    """Allows downloads into a directory through the Chrome DevTools Protocol.
+
+    Headless Chrome may ignore the download preferences of the profile and drop a download
+    silently. The CDP command ``Browser.setDownloadBehavior`` allows downloads explicitly; when
+    it fails, the older ``Page.setDownloadBehavior`` is tried. Granting never raises: when CDP is
+    unavailable or a command fails with any exception, a WARNING is logged and the browser keeps
+    only the profile preferences.
+
+    Parameters
+    ----------
+    download_dir : pathlib.Path
+        Absolute directory the browser saves downloads into.
+    """
+
+    __slots__ = ("_download_dir",)
+
+    def __init__(self, download_dir: Path) -> None:
+        self._download_dir = download_dir
+
+    def commands(self) -> tuple[tuple[str, dict[str, Any]], ...]:
+        """Return the CDP commands to try, in order.
+
+        Returns
+        -------
+        tuple of (str, dict)
+            Command name and parameters; the first that succeeds is enough.
+        """
+        path = str(self._download_dir)
+        return (
+            (
+                BROWSER_DOWNLOAD_COMMAND,
+                {"behavior": ALLOW_DOWNLOADS, "downloadPath": path, "eventsEnabled": False},
+            ),
+            (PAGE_DOWNLOAD_COMMAND, {"behavior": ALLOW_DOWNLOADS, "downloadPath": path}),
+        )
+
+    def grant(self, driver: object) -> str | None:
+        """Allow downloads in the running browser.
+
+        Parameters
+        ----------
+        driver : object
+            The running driver; only one with ``execute_cdp_cmd`` (:class:`CdpDriver`) can
+            be configured.
+
+        Returns
+        -------
+        str or None
+            The CDP command that succeeded, ``None`` if none did (a WARNING is logged).
+        """
+        if not isinstance(driver, CdpDriver):
+            logger.warning(
+                "The browser driver cannot send CDP commands; downloads rely on the profile "
+                "preferences only."
+            )
+            return None
+        errors: list[str] = []
+        for command, parameters in self.commands():
+            try:
+                driver.execute_cdp_cmd(command, parameters)
+            except Exception as error:  # granting must never stop the run
+                errors.append(f"{command}: {type(error).__name__}")
+                continue
+            logger.info("Downloads allowed into %s via %s.", self._download_dir, command)
+            return command
+        logger.warning(
+            "Could not allow downloads via CDP (%s); downloads rely on the profile "
+            "preferences only.",
+            "; ".join(errors),
+        )
+        return None
 
 
 class WebDriverFactory(ABC):
@@ -165,6 +256,8 @@ class ChromeDriverFactory(WebDriverFactory):
         when omitted.
     driver_class : callable, optional
         Constructor of the driver, ``selenium.webdriver.Chrome`` by default (tests pass a fake).
+    permission : CdpDownloadPermission, optional
+        Allows downloads in the started browser; by default one for ``settings.download_dir``.
     """
 
     name: ClassVar[str] = "chrome"
@@ -174,13 +267,21 @@ class ChromeDriverFactory(WebDriverFactory):
         settings: PortalSettings,
         environ: Mapping[str, str] | None = None,
         driver_class: Callable[..., WebDriver] = webdriver.Chrome,
+        permission: CdpDownloadPermission | None = None,
     ) -> None:
         super().__init__(settings)
         self._environ = os.environ if environ is None else environ
         self._driver_class = driver_class
+        self._permission = (
+            CdpDownloadPermission(settings.download_dir) if permission is None else permission
+        )
 
     def create(self) -> WebDriver:
         """Start Chrome.
+
+        The profile preferences and, once the browser runs, the CDP download permission
+        (:class:`CdpDownloadPermission`) both allow downloads into ``settings.download_dir``,
+        in headless and in windowed mode.
 
         Returns
         -------
@@ -199,7 +300,9 @@ class ChromeDriverFactory(WebDriverFactory):
             self._settings.headless,
             self._settings.download_dir,
         )
-        return self._driver_class(service=service, options=options)
+        driver = self._driver_class(service=service, options=options)
+        self._permission.grant(driver)
+        return driver
 
     def options(self) -> ChromeOptions:
         """Build the Chrome options.

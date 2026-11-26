@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.service import Service
 
 from sivin.ingest.portal.driver import (
+    BROWSER_DOWNLOAD_COMMAND,
     HEADLESS_ARGUMENT,
+    PAGE_DOWNLOAD_COMMAND,
+    CdpDownloadPermission,
     ChromeDriverFactory,
     WebDriverFactory,
     WebDriverFactoryRegistry,
@@ -27,6 +32,30 @@ class _Recorder:
     def __call__(self, **kwargs: Any) -> str:
         self.calls.append(kwargs)
         return "driver"
+
+
+class _CdpDriver:
+    """Fake Chrome driver recording CDP commands; ``failing`` commands raise."""
+
+    def __init__(self, failing: tuple[str, ...] = ()) -> None:
+        self.failing = failing
+        self.commands: list[tuple[str, dict[str, Any]]] = []
+
+    def execute_cdp_cmd(self, cmd: str, cmd_args: dict[str, Any]) -> dict[str, Any]:
+        self.commands.append((cmd, cmd_args))
+        if cmd in self.failing:
+            raise WebDriverException(f"unknown command {cmd}")
+        return {}
+
+
+class _CdpRecorder(_Recorder):
+    def __init__(self, driver: _CdpDriver) -> None:
+        super().__init__()
+        self.driver = driver
+
+    def __call__(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        return self.driver
 
 
 def _settings(tmp_path: Path, **kwargs: Any) -> PortalSettings:
@@ -167,3 +196,134 @@ def test_missing_runner_chromedriver_falls_back_to_path(
     factory = ChromeDriverFactory(_settings(tmp_path), {"CHROMEWEBDRIVER": str(tmp_path / "x")})
 
     assert factory.chromedriver_path() == Path("/usr/bin/chromedriver")
+
+
+class TestCdpDownloadPermission:
+    def test_browser_domain_allows_downloads(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        driver = _CdpDriver()
+        caplog.set_level(logging.INFO, logger="sivin.ingest.portal.driver")
+
+        assert CdpDownloadPermission(tmp_path).grant(driver) == "Browser.setDownloadBehavior"
+
+        assert driver.commands == [
+            (
+                "Browser.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": str(tmp_path), "eventsEnabled": False},
+            )
+        ]
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_falls_back_to_the_page_domain(self, tmp_path: Path) -> None:
+        driver = _CdpDriver(failing=(BROWSER_DOWNLOAD_COMMAND,))
+
+        assert CdpDownloadPermission(tmp_path).grant(driver) == "Page.setDownloadBehavior"
+
+        assert [command for command, _ in driver.commands] == [
+            "Browser.setDownloadBehavior",
+            "Page.setDownloadBehavior",
+        ]
+        assert driver.commands[1][1] == {"behavior": "allow", "downloadPath": str(tmp_path)}
+
+    def test_both_failing_logs_a_warning_and_does_not_raise(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        driver = _CdpDriver(failing=(BROWSER_DOWNLOAD_COMMAND, PAGE_DOWNLOAD_COMMAND))
+
+        assert CdpDownloadPermission(tmp_path).grant(driver) is None
+
+        (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warning.getMessage() == (
+            "Could not allow downloads via CDP (Browser.setDownloadBehavior: "
+            "WebDriverException; Page.setDownloadBehavior: WebDriverException); downloads "
+            "rely on the profile preferences only."
+        )
+
+    def test_any_other_error_is_logged_and_does_not_raise(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class BrokenDriver(_CdpDriver):
+            def execute_cdp_cmd(self, cmd: str, cmd_args: dict[str, Any]) -> dict[str, Any]:
+                self.commands.append((cmd, cmd_args))
+                raise RuntimeError("synthetic: connection to chromedriver lost")
+
+        driver = BrokenDriver()
+
+        assert CdpDownloadPermission(tmp_path).grant(driver) is None
+
+        assert len(driver.commands) == 2
+        (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warning.getMessage() == (
+            "Could not allow downloads via CDP (Browser.setDownloadBehavior: RuntimeError; "
+            "Page.setDownloadBehavior: RuntimeError); downloads rely on the profile "
+            "preferences only."
+        )
+
+    def test_driver_without_cdp_logs_a_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        assert CdpDownloadPermission(tmp_path).grant(object()) is None
+
+        (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert "cannot send CDP commands" in warning.getMessage()
+
+
+@pytest.mark.parametrize("headless", [True, False], ids=["headless", "headed"])
+def test_create_allows_downloads_via_cdp(tmp_path: Path, headless: bool) -> None:
+    driver = _CdpDriver()
+    recorder = _CdpRecorder(driver)
+    factory = ChromeDriverFactory(
+        _settings(tmp_path, headless=headless, chromedriver_path=Path("/x/chromedriver")),
+        {},
+        driver_class=recorder,
+    )
+
+    assert factory.create() is driver
+
+    assert driver.commands == [
+        (
+            "Browser.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": str(tmp_path), "eventsEnabled": False},
+        )
+    ]
+    prefs = recorder.calls[0]["options"].experimental_options["prefs"]
+    assert prefs["download.default_directory"] == str(tmp_path)
+
+
+def test_create_survives_a_driver_without_cdp(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    factory = ChromeDriverFactory(
+        _settings(tmp_path, chromedriver_path=Path("/x/chromedriver")),
+        {},
+        driver_class=_Recorder(),
+    )
+
+    assert factory.create() == "driver"
+    assert any("cannot send CDP commands" in r.getMessage() for r in caplog.records)
+
+
+def test_create_uses_an_injected_permission(tmp_path: Path) -> None:
+    class Permission(CdpDownloadPermission):
+        def __init__(self) -> None:
+            super().__init__(tmp_path / "elsewhere")
+            self.granted: list[object] = []
+
+        def grant(self, driver: object) -> str | None:
+            self.granted.append(driver)
+            return None
+
+    permission = Permission()
+    driver = _CdpDriver()
+    factory = ChromeDriverFactory(
+        _settings(tmp_path, chromedriver_path=Path("/x/chromedriver")),
+        {},
+        driver_class=_CdpRecorder(driver),
+        permission=permission,
+    )
+
+    factory.create()
+
+    assert permission.granted == [driver]
+    assert driver.commands == []

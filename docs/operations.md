@@ -44,6 +44,9 @@ never starts anything, it only downloads the JSON files of the last deployment.
    sivin --log-level INFO run [--skip-fetch]
    ```
 
+   (with the manual input `headed`: `xvfb-run -a sivin --log-level INFO run --headed`, see
+   [Running it by hand](#running-it-by-hand))
+
    with `SIVIN_USER` and `SIVIN_PASSWORD` from the repository secrets. Chrome and chromedriver
    come from the runner image (`$CHROMEWEBDRIVER`, [ingest.md](ingest.md)). `sivin run` fetches,
    ingests, checks, computes the indices of the current season and builds `site/data`
@@ -53,7 +56,12 @@ never starts anything, it only downloads the JSON files of the last deployment.
    <code>` writes the summary of this run to the job page (see [below](#reading-the-job-summary)).
    It runs whatever happened before; with `--since` it never shows yesterday's record for a
    run that wrote none.
-4. **Exit code.** 0 and 1 continue; 4 (portal unavailable) continues with the stored data and
+4. **Exit code.** On exit code 1 a step first counts the `fetch <device>: …` failures in this
+   run's record (`data/runs/*.jsonl`, the newest record started after the run step began) and,
+   if there are any, writes the annotation
+   `::warning::No export was downloaded for N device(s); the run stays green but those devices
+   got no new data. …`, so a green run without new data is visible on the run page. If the
+   record cannot be read, a generic *Partial failure* warning says so. 0 and 1 continue; 4 (portal unavailable) continues with the stored data and
    marks the run with a warning; anything else (3, 5, 130, …) fails the job **after** the
    summary was written, and nothing is committed or deployed.
 5. **Commit.** The changed files are copied back into `.data-branch/` and committed as
@@ -180,6 +188,7 @@ Actions → **pipeline** → *Run workflow* (branch: the default branch), or wit
 $ gh workflow run pipeline.yml                          # like the daily run
 $ gh workflow run pipeline.yml -f skip_fetch=true       # no portal: re-process and redeploy
 $ gh workflow run pipeline.yml -f full_site_build=true  # rebuild all site data
+$ gh workflow run pipeline.yml -f headed=true           # browser with a window (virtual display)
 $ gh run watch                                          # follow it
 ```
 
@@ -189,6 +198,13 @@ $ gh run watch                                          # follow it
 - **full_site_build** runs `sivin run --skip-site` and then `sivin build-site --full`: every
   sensor is rebuilt, ignoring the build state (the result is byte-identical to an incremental
   build; use it if the site data look inconsistent).
+- **headed** runs `sivin run --headed` under `xvfb-run -a`: Chrome runs with a window on a
+  virtual X display instead of `--headless=new`. Use it to tell whether a download problem is
+  specific to headless Chrome (every scheduled run since October 2026 ended in
+  `DownloadTimeoutError` with an empty download directory, WP-1.3.2). Scheduled runs are always
+  headless. `xvfb-run` is expected on the `ubuntu-latest` image; this is **not verified** —
+  without it the step stops with `::error::Input 'headed' needs xvfb-run, …` and nothing is
+  committed. A headed run fetches and publishes like a normal run.
 
 The checkouts use the triggering ref: a scheduled run always uses the default branch (`main`);
 a manual run uses the branch chosen in *Run workflow* (keep it on `main`; the `github-pages`
@@ -222,7 +238,7 @@ or `--format json` (counts only, for scripts);
 | Code | Job | Meaning | What to do |
 |---|---|---|---|
 | 0 `OK` | green | everything worked | nothing |
-| 1 `PARTIAL_FAILURE` | green, warning | a file rejected, a device not downloaded, a sensor or index failed; everything else was processed and published | read *Rejected files* / *Failures*; one-off failures (a timeout) fix themselves on the next run |
+| 1 `PARTIAL_FAILURE` | green, warning | a file rejected, a device not downloaded, a sensor or index failed; everything else was processed and published | read *Rejected files* / *Failures*; one-off failures (a timeout) fix themselves on the next run. The annotation `No export was downloaded for N device(s)` means those devices got no new data; if it repeats daily, read the download diagnostics in the log ([ingest.md](ingest.md#when-a-download-fails)) and try a run with `headed` |
 | 4 `DATA_SOURCE_UNAVAILABLE` | green, warning | the portal could not be used (secrets missing, login failed, portal or browser unreachable); the stored data were processed and published again | check the secrets; if the portal changed, see below; the data are safe |
 | 3 `SETUP_ERROR` | **red** | invalid `config/sivin.yaml`, sensor registry or off-site log: nothing processed, nothing committed, the site stays as it was | the job log names the file, entry, line and field; fix it on `main` (`sivin sensors check` locally) and run the workflow |
 | 5 `INTERNAL_ERROR` | **red** | a bug (the traceback is in the job log, credentials redacted) | report it; nothing was committed |
@@ -317,6 +333,11 @@ there is always a change), which may well keep the repository active, but do not
 - **Actions minutes:** standard GitHub-hosted runners are free for public repositories. A run
   takes a few minutes (installing Python and Node dependencies dominates while there are few
   sensors); the job timeouts are 5 (gate), 45 (collect), 20 (build-site) and 10 (deploy) minutes.
+  A device whose download never arrives costs `attempts_per_device` × `download_wait_s`
+  (2 × 120 s = 4 min) plus the page waits, settle pauses and reloads of both attempts, about
+  4.5–5 min in total, so 4 failing devices add about 18–20 min to `collect`. The 45 min
+  `collect` timeout is reached at roughly 8–9 devices failing in the same run; a total time
+  budget for the fetch is a possible follow-up, not implemented.
 - **Schedule:** scheduled runs can start late when GitHub is under load (the full hour is the
   busiest time), and under very high load a scheduled run can be dropped. The gate tolerates
   delays; a dropped run is simply missing for that day, and the next one catches up as long as
