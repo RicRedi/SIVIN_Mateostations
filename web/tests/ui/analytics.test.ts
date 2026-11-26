@@ -7,6 +7,7 @@ import { IndexDocs } from '../../src/app/IndexDocs';
 import { SensorCatalog } from '../../src/app/SensorCatalog';
 import { parseDailyFile, parseIndicesFile, parseLatestFile, parseManifest, parseSensorsGeoJSON, type DailyFile, type IndexValue } from '../../src/contract';
 import { DataClient } from '../../src/data/DataClient';
+import { dateRange } from '../../src/domain/isoDates';
 import { RecordsCalculator } from '../../src/domain/SensorRecords';
 import { AnalyticsTerms } from '../../src/i18n/analyticsTerms';
 import { cs } from '../../src/i18n/cs';
@@ -221,7 +222,18 @@ describe('AnalyticsSection', () => {
     const records = root.querySelectorAll('.records__table');
     expect(records).toHaveLength(2);
     expect(text(records[0]?.querySelector('thead') ?? null)).toBe('Sezóna 2026 Všechna data');
-    expect(text(root.querySelector('.records .analytics__note'))).toContain('pod 90 %');
+    expect(text(root.querySelector('.records .analytics__note'))).toBe(
+      'Sezóna 2026: 1. 1. 2026 – 31. 12. 2026: 121 úplných dní z 365, první 1. 6. 2026, poslední 30. 9. 2026.',
+    );
+    const frostRows = [...(records[0]?.querySelectorAll('tbody tr') ?? [])].slice(5).map(text);
+    // Demo data cover only Jun-Sep: neither half of the season is observed, so no "žádný".
+    expect(frostRows).toEqual([
+      'Poslední jarní mráz žádný v úplných dnech 1. 6. 2026 – 30. 6. 2026 (30 z 181 dní) –',
+      'První podzimní mráz žádný v úplných dnech 1. 7. 2026 – 30. 9. 2026 (91 z 184 dní) –',
+    ]);
+    expect(text(root.querySelector('.analytics__block:last-child > .analytics__note'))).toContain('pod 90 %');
+    // GFV is labelled as the véraison date.
+    expect(text(gfvRow?.querySelector('th') ?? null)).toContain('zaměkání');
 
     i18n.setLanguage('en');
     section.render([A, B]);
@@ -281,6 +293,31 @@ describe('IndexCardsView, RiskStripView and RecordsView on synthetic entries', (
     expect(view.render(mildew, data([], 'down'), columns)).toBeNull();
   });
 
+  it('qualifies frost findings and names a period without complete days', () => {
+    const view = new RecordsView(i18n, format, new RecordsCalculator(0.9));
+    const dates = dateRange('2026-01-01', '2026-12-31');
+    const year: DailyFile = {
+      sensor_id: A, date: dates, temp_min: dates.map((date) => (date === '2026-03-03' ? -2 : 4)), temp_mean: dates.map(() => 8),
+      temp_max: dates.map(() => 12), rh_min: dates.map(() => null), rh_mean: dates.map(() => null), rh_max: dates.map(() => null),
+      coverage: dates.map((date) => (date < '2026-02-01' ? 0.5 : 1)),
+    };
+    const node = view.render(data([{ sensorId: A, indices: null, daily: year, dailyError: null }]), columns.slice(0, 1));
+    const rows = [...node.querySelectorAll('.records__table tbody tr')].map(text);
+    // January incomplete: spring 150 of 181 days (83 %) -> the frost is qualified; autumn observed, no frost.
+    expect(rows[5]).toBe('Last spring frost 3 Mar 2026 (complete days only 1 Feb 2026 – 30 Jun 2026) –');
+    expect(rows[6]).toBe('First autumn frost none –');
+    const empty = view.render(data([{ sensorId: A, indices: null, daily: { ...year, coverage: dates.map(() => 0) }, dailyError: null }]), columns.slice(0, 1));
+    expect(text(empty.querySelector('.records > .analytics__note'))).toBe('Season 2026: 1 Jan 2026 – 31 Dec 2026: no complete day of 365.');
+  });
+
+  it('labels the GFV date as véraison', () => {
+    const view = new IndexCardsView(i18n, terms, format, docs);
+    const gfv = analytics.cards.filter((card) => card.spec.id === 'gfv');
+    const entry: IndexValue = { value: 213, unit: 'DOY', coverage: 1, complete: true, class: null };
+    const node = view.render(gfv, data([{ sensorId: A, indices: { gfv: entry }, daily: null, dailyError: null }]), columns.slice(0, 1));
+    expect(text(node.querySelector('td'))).toBe('véraison 1 Aug 2026 coverage 100 %');
+  });
+
   it('reports a failed daily file and a season without frost', () => {
     const view = new RecordsView(i18n, format, new RecordsCalculator(0.9));
     const warm: DailyFile = {
@@ -293,7 +330,13 @@ describe('IndexCardsView, RiskStripView and RecordsView on synthetic entries', (
     const rows = [...node.querySelectorAll('.records__table tbody tr')].map(text);
     expect(rows[0]).toBe('Lowest temperature 12.0 °C (1 Jun 2026) 12.0 °C (1 Jun 2026)');
     expect(rows[4]).toBe('Highest daily precipitation – –');
-    expect(rows[5]).toBe('Last spring frost none –');
+    expect(rows[5]).toBe('Last spring frost none on the complete days 1 Jun 2026 – 1 Jun 2026 (1 of 181 days) –');
+    expect(rows[6]).toBe('First autumn frost no data –');
+    const notes = [...node.querySelectorAll('.records > .analytics__note')].map(text);
+    expect(notes).toEqual([
+      'Season 2026: 1 Jan 2026 – 31 Dec 2026: 1 complete of 365 days, first 1 Jun 2026, last 1 Jun 2026.',
+      'All data: 1 Jun 2026 – 1 Jun 2026: 1 complete of 1 days, first 1 Jun 2026, last 1 Jun 2026.',
+    ]);
     expect(text(node.querySelector('[role="alert"]'))).toContain('HTTP 404');
   });
 });

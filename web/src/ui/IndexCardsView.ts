@@ -3,9 +3,16 @@ import type { AnalyticsData } from '../app/AnalyticsLoader';
 import type { IndexDocs } from '../app/IndexDocs';
 import type { IndexValue } from '../contract';
 import type { AnalyticsTerms } from '../i18n/analyticsTerms';
+import type { MessageKey } from '../i18n/cs';
 import type { I18n } from '../i18n/I18n';
 import { el } from './dom';
 import type { IndexFormat } from './IndexFormat';
+
+/**
+ * The stage whose date a phenology card shows, for models with several stages: GFV publishes
+ * only the véraison date (its value), not the flowering date.
+ */
+const SHOWN_STAGE: Readonly<Record<string, MessageKey>> = { gfv: 'indexGfvStage' };
 
 /** A selected sensor as a column of the comparison: its label and line colour. */
 export interface SensorColumn {
@@ -66,9 +73,16 @@ export class IndexCardsView {
     const { spec } = indicator;
     return el('th', { scope: 'row' }, [
       el('span', { class: 'index-table__label' }, [this.i18n.label(spec.label, spec.id)]),
+      this.stage(spec.id),
       indicator.kind === 'phenology' ? el('span', { class: 'badge badge--orientational' }, [this.i18n.t('indexOrientational')]) : null,
       el('a', { class: 'index-table__doc', href: this.docs.url(spec.doc), target: '_blank', rel: 'noopener' }, [this.i18n.t('howComputed')]),
     ]);
+  }
+
+  /** "zaměkání" for GFV: the date shown is véraison. */
+  private stage(indexId: string): HTMLElement | null {
+    const key = SHOWN_STAGE[indexId];
+    return key === undefined ? null : el('span', { class: 'index-table__stage' }, [this.i18n.t(key)]);
   }
 
   private cell(indicator: Indicator, entry: IndexValue | undefined, season: number, sensorInFile: boolean): (Node | string)[] {
@@ -84,6 +98,12 @@ export class IndexCardsView {
         ? el('span', { class: 'index-table__empty' }, [this.i18n.t('indexNoEstimate')])
         : el('strong', { class: 'index-table__value' }, [value]),
     ];
+    if (value !== null) {
+      const stage = this.stage(indicator.spec.id);
+      if (stage !== null) {
+        parts.unshift(stage);
+      }
+    }
     if (entry.class !== null) {
       parts.push(el('span', { class: 'index-table__class' }, [this.i18n.t('indexClass', { label: this.terms.label(indicator.spec.id, entry.class) })]));
     } else if (!entry.complete && value !== null && indicator.kind !== 'phenology') {

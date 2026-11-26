@@ -237,10 +237,12 @@ these seasons; indices files of other seasons are removed.
 
 ## Incremental build
 
-**One-time full rebuild after WP-3.4:** the build state format is 3 (the index entries carry the
-daily risk block), so the first build after the update ignores a state of format 2 and rebuilds
-every sensor. A sensor that fails in exactly that build has no earlier state to fall back on and
-is left out until it builds again.
+**One-time full rebuild after WP-3.4:** `SITE_OUTPUT_FORMAT` is 2 (the index entries of the
+risk indices carry the daily block). It is part of the shared fingerprint, so the first build
+after the update rebuilds every sensor. The state itself is still read: a sensor that fails in
+that build keeps the files, summary and index entries of its last successful build (an entry
+from before WP-3.4 has no `daily` block, which the web tolerates)
+(`tests/site/test_service.py::test_output_format_change_keeps_the_files_of_a_failing_sensor`).
 
 The build state `<paths.derived_dir>/site-build-state.json` (outside the published directory)
 holds a fingerprint of the shared inputs, the seasons,
@@ -299,8 +301,7 @@ fixed to 2026-10-05T04:00:00Z.
   checks the values.
 
 Regenerate after a change of the output (and bump `SITE_OUTPUT_FORMAT` in
-`src/sivin/app/site.py`, or `STATE_FORMAT` in `src/sivin/site/state.py` when the state entries
-change, so existing sites are rebuilt in full; WP-3.4 bumped `STATE_FORMAT` to 3 for the daily
+`src/sivin/app/site.py` so existing sites are rebuilt in full; WP-3.4 raised it to 2 for the daily
 risk block):
 
 ```bash

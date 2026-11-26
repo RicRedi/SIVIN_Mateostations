@@ -35,7 +35,8 @@ define; seasonal values are unchanged.
 - Python, site:
   - `src/sivin/site/indices.py`: `daily_block` and the `daily` key.
   - `site_files.py`: manifest `min_daily_coverage`.
-  - `state.py`: `STATE_FORMAT` 3.
+  - `src/sivin/app/site.py`: `SITE_OUTPUT_FORMAT` 2 (after review round 1; the `STATE_FORMAT`
+    bump was reverted).
 - Python, app (scope extended by the orchestrator for this one change): `src/sivin/app/factory.py`
   passes `analytics.min_daily_coverage` to `default_site_writers`, so the manifest carries the
   configured value; test `tests/site/test_service.py::test_manifest_carries_the_configured_complete_day_rule`
@@ -87,12 +88,11 @@ define; seasonal values are unchanged.
   changes.
 - **No new thresholds.** A day without a level has `value: null` too. Daily levels are published
   for incomplete seasons, because they describe single days; the seasonal `class` stays `null`.
-- **Full rebuild.** `STATE_FORMAT` was bumped 2 → 3 in `src/sivin/site/state.py`, so the first
-  build after the update rebuilds everything. Otherwise reused sensors would keep entries
-  without `daily`, and an incremental build would differ from a full one. `SITE_OUTPUT_FORMAT`
-  is in `src/sivin/app/site.py`, which is outside the scope, so the state format was used
-  instead. Side effect: the failure fallback of a sensor that fails in that first build is lost
-  once, because the old state is ignored.
+- **Full rebuild.** `SITE_OUTPUT_FORMAT` was raised 1 → 2 in `src/sivin/app/site.py` (scope
+  extended in review round 1), so the first build after the update rebuilds everything;
+  otherwise reused sensors would keep entries without `daily`. Unlike the first version (a
+  `STATE_FORMAT` bump), the old state is still read, so a sensor failing in that build keeps
+  its last files (tested).
 - **Records.**
   - Season = calendar year, the same as the manifest's seasons. Frost means `T_min ≤ 0 °C`, as
     the brief says; this is consistent with the frost hours, `T ≤ 0`.
@@ -172,6 +172,54 @@ merged).
    optional `stages` map in the entry, and applies only once GFV parameters are configured.
 3. **Season selector.** Should it follow the chart's "Sezóna" window, and should it go into the
    URL hash? It is independent at the moment.
+
+## Changes after review round 1
+
+1. **Frost findings (major).** `RecordsCalculator.season` returns a `FrostFinding` per half
+   season (`found` with `observed`, `none`, `noneInData`, `noData`). A half (Jan 1 – Jun 30,
+   Jul 1 – Dec 31) is observed when complete days cover ≥ 90 % of its days
+   (`HALF_OBSERVED_SHARE`, the default `analytics.min_season_coverage`). "žádný" is shown only
+   then. Otherwise the UI shows "žádný v úplných dnech <od> – <do> (x z y dní)", "bez dat", or
+   the date with "(úplné dny jen <od> – <do>)". Tests cover: data only Jun–Oct, only Jan–May
+   (season in progress), the full year, frost present (observed and not), the 90 % boundary
+   (Dec 13 vs Dec 12), and the UI texts. Documented in `docs/web.md`.
+2. **Lightness of the risk tones (minor).** The tones are now green `#3d9a50`, amber `#a5550a`
+   and red `#7a1b1b`, with no data `#f0efea` striped:
+   - green to no-data 3.07:1, green to white 3.54:1;
+   - amber to green 1.52:1, red to amber 1.95:1.
+
+   Raised days get a black tick above the strip (2 px elevated, 4 px high). The tick is visible
+   on the 1.7 px days at 390 px (screenshot `WP-3.4-risk-mobile.png`). The hatching was
+   dropped. The grey note explains the ticks.
+3. **Period of the days note (minor).** Each sensor's note now names the period and gives the
+   complete days of it with the first and last one, e.g. "Sezóna 2026: 1. 1. 2026 – 31. 12.
+   2026: 121 úplných dní z 365, první 1. 6. 2026, poslední 30. 9. 2026". For all data the
+   period runs from the first to the last day of `daily.json`.
+4. **Output format instead of state format (minor).** `STATE_FORMAT` was reverted to 2 and
+   `SITE_OUTPUT_FORMAT` raised to 2. New test
+   `tests/site/test_service.py::test_output_format_change_keeps_the_files_of_a_failing_sensor`:
+   build, then a new output format with one sensor failing. The build is full, the sensor's
+   `series/` and `events/` files are byte-identical to before, the manifest marks it
+   `data_status: "error"`, and its index entry (with `daily`) is kept. `docs/site.md` is updated.
+5. **GFV label (minor).** The GFV row and its value cell carry "zaměkání" / "Véraison" /
+   "véraison".
+6. **Precipitation record (nit).** A day counts for the precipitation record only when
+   `precip_n_samples` × 1830 s ≥ `min_daily_coverage` × 86 400 s, independent of the
+   temperature coverage. Data without `precip_n_samples` give no precipitation record. The note
+   under the records states the rule.
+7. **Chromium path (nit).** `scripts/screenshot-analytics.mjs` uses `CHROMIUM_PATH`, else the
+   newest `chromium-<rev>/chrome-linux*/chrome` under `PLAYWRIGHT_BROWSERS_PATH` (default
+   `/opt/pw-browsers`), else Playwright's `executablePath()`. It was run with no variables set
+   (it found chromium-1243).
+8. **Demo data:** accepted by the orchestrator. They are still labelled synthetic and were not
+   regenerated in this round.
+
+**Gates after round 1:**
+- Python: `make lint` clean. `make type`: no issues in 186 files.
+- `make cov`: 2165 passed, TOTAL 99 %. `app/site.py`, `app/factory.py`, `site/*` and
+  `analytics/*` are 100 %, except `botrytis.py` 99 % (lines 384-385 are earlier code).
+- Web: lint and typecheck clean. `npm test`: 33 files, 344 tests, 99.4 % lines. Build OK.
+- Screenshots were regenerated; `scrollWidth` equals the viewport at 1280 px and 390 px.
 
 ## Review
 

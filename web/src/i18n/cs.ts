@@ -128,7 +128,7 @@ export const cs = {
   riskNoDays: 'V období nejsou dny s daty.',
   riskStripLabel: '{index}, {sensor}, {start} – {end}: {summary}',
   riskBandsHeading: 'Pásma a vstupy',
-  riskGreyNote: 'Šedá = den bez dostatku dat (nikdy zelená). Barvu doplňuje šrafování a textový souhrn.',
+  riskGreyNote: 'Šedá = den bez dostatku dat (nikdy zelená). Barvy se liší i světlostí; zvýšené dny mají nad pruhem černou značku (vyšší značka = vysoké). Textový souhrn pod pruhem uvádí počty dní.',
   riskEstimatedInput: 'Vstup je odhad: ovlhčení listů a bobulí čidla neměří, odhaduje se z vlhkosti vzduchu.',
   riskBands_botrytis_broome: 'Literatura neuvádí meze tříd, proto bez nastavených pásem: zelená = den s daty bez odhadnutého ovlhčení, oranžová = den, kdy skončilo odhadnuté ovlhčení. Hodnota dne je pravděpodobnost infekce Y (0–1) podle Broome et al. (1995).',
   riskInputs_botrytis_broome: 'Vstupy: teplota a relativní vlhkost; ovlhčení = vlhkost ≥ 90 % (výchozí práh projektu). Den se počítá, má-li teplota i vlhkost dostatečné pokrytí.',
@@ -148,8 +148,14 @@ export const cs = {
   recordFirstAutumnFrost: 'První podzimní mráz',
   recordNone: '–',
   recordNoFrost: 'žádný',
-  recordsDaysUsed: 'použito {used} z {total} dní; dny s pokrytím pod {coverage} % se nepočítají.',
-  recordsFrostNote: 'Mráz = denní minimum ≤ 0 °C. Poslední jarní mráz: poslední takový den 1. 1. – 30. 6., první podzimní: první takový den 1. 7. – 31. 12. sezóny.',
+  indexGfvStage: 'zaměkání',
+  recordFrostPartial: '{date} (úplné dny jen {first} – {last})',
+  recordNoFrostInData: 'žádný v úplných dnech {first} – {last} ({used} z {period} dní)',
+  recordFrostNoData: 'bez dat',
+  recordsCoverageRule: 'Dny s pokrytím pod {coverage} % se nepočítají; srážky jen ze dnů, kdy srážkoměr pokryl aspoň {coverage} % dne.',
+  recordsNoDaysUsed: '{start} – {end}: žádný úplný den z {period}.',
+  recordsDaysUsed: '{start} – {end}: {used} úplných dní z {period}, první {first}, poslední {last}.',
+  recordsFrostNote: 'Mráz = denní minimum ≤ 0 °C. Poslední jarní mráz: poslední takový den 1. 1. – 30. 6., první podzimní: první takový den 1. 7. – 31. 12. sezóny. „Žádný“ se uvádí, jen když úplné dny pokrývají aspoň {share} % pololetí; mráz v chybějícím dni může uniknout.',
 } as const;
 
 /** Message key of the UI dictionaries. */

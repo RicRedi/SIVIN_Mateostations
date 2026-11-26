@@ -1,5 +1,5 @@
 import type { AnalyticsData, SensorAnalytics } from '../app/AnalyticsLoader';
-import type { RecordsCalculator, RecordsSummary, DatedValue } from '../domain/SensorRecords';
+import { HALF_OBSERVED_SHARE, type DatedValue, type DaySpan, type FrostFinding, type RecordsCalculator, type RecordsSummary } from '../domain/SensorRecords';
 import type { MessageKey } from '../i18n/cs';
 import type { I18n } from '../i18n/I18n';
 import { el } from './dom';
@@ -7,7 +7,7 @@ import { sensorSwatch, type SensorColumn } from './IndexCardsView';
 import type { IndexFormat } from './IndexFormat';
 
 type DatedRow = readonly [MessageKey, (summary: RecordsSummary) => DatedValue | null, string];
-type DateRow = readonly [MessageKey, (summary: RecordsSummary) => string | null];
+type FrostRow = readonly [MessageKey, (summary: RecordsSummary) => FrostFinding | null];
 
 const DATED_ROWS: readonly DatedRow[] = [
   ['recordTempMin', (summary) => summary.tempMin, '°C'],
@@ -16,7 +16,7 @@ const DATED_ROWS: readonly DatedRow[] = [
   ['recordLowestMean', (summary) => summary.lowestMean, '°C'],
   ['recordMaxPrecip', (summary) => summary.maxPrecip, 'mm'],
 ];
-const FROST_ROWS: readonly DateRow[] = [
+const FROST_ROWS: readonly FrostRow[] = [
   ['recordLastSpringFrost', (summary) => summary.lastSpringFrost],
   ['recordFirstAutumnFrost', (summary) => summary.firstAutumnFrost],
 ];
@@ -25,8 +25,9 @@ const PERCENT = 100;
 
 /**
  * Records and extremes per selected sensor, for the season and for all its data, computed in
- * the browser from `daily.json` ({@link RecordsCalculator}); a note says how many days were used
- * and that incomplete days do not count.
+ * the browser from `daily.json` ({@link RecordsCalculator}); a note names the period, how many of
+ * its days were complete and used, and that incomplete days do not count. "No frost" is said only
+ * for an observed half season.
  */
 export class RecordsView {
   constructor(
@@ -39,7 +40,11 @@ export class RecordsView {
     return el('div', { class: 'analytics__block' }, [
       el('h4', {}, [this.i18n.t('recordsHeading')]),
       ...data.sensors.map((sensor, i) => this.sensorRecords(sensor, sensors[i], data.season)),
-      el('p', { class: 'analytics__note' }, [this.i18n.t('recordsFrostNote')]),
+      el('p', { class: 'analytics__note' }, [
+        this.i18n.t('recordsCoverageRule', { coverage: this.percent(this.calculator.minDailyCoverage) }),
+        ' ',
+        this.i18n.t('recordsFrostNote', { share: this.percent(HALF_OBSERVED_SHARE) }),
+      ]),
     ]);
   }
 
@@ -55,7 +60,7 @@ export class RecordsView {
     const allHead = this.i18n.t('recordsAll');
     const rows = [
       ...DATED_ROWS.map(([key, pick, unit]) => this.row(key, this.dated(pick(inSeason), unit), this.dated(pick(all), unit))),
-      ...FROST_ROWS.map(([key, pick]) => this.row(key, this.frost(pick(inSeason), inSeason), this.i18n.t('recordNone'))),
+      ...FROST_ROWS.map(([key, pick]) => this.row(key, this.frost(pick(inSeason)), this.i18n.t('recordNone'))),
     ];
     return el('div', { class: 'records' }, [
       title,
@@ -65,7 +70,8 @@ export class RecordsView {
           el('tbody', {}, rows),
         ]),
       ]),
-      el('p', { class: 'analytics__note' }, [`${seasonHead}: ${this.daysUsed(inSeason)} ${allHead}: ${this.daysUsed(all)}`]),
+      el('p', { class: 'analytics__note' }, [`${seasonHead}: ${this.daysUsed(inSeason.span)}`]),
+      el('p', { class: 'analytics__note' }, [`${allHead}: ${this.daysUsed(all.span)}`]),
     ]);
   }
 
@@ -80,19 +86,50 @@ export class RecordsView {
     return `${this.i18n.formatNumber(value.value, TEMPERATURE_DECIMALS)} ${unit} (${this.format.date(value.date)})`;
   }
 
-  /** A frost date; "none" when the season had complete days but no frost, "–" without days. */
-  private frost(date: string | null, summary: RecordsSummary): string {
-    if (date !== null) {
-      return this.format.date(date);
+  /** A frost finding; "none" only for an observed half (see {@link FrostFinding}). */
+  private frost(finding: FrostFinding | null): string {
+    if (finding === null) {
+      return this.i18n.t('recordNone');
     }
-    return this.i18n.t(summary.daysUsed > 0 ? 'recordNoFrost' : 'recordNone');
+    const { span } = finding;
+    const range = {
+      first: span.firstUsed === null ? '' : this.format.date(span.firstUsed),
+      last: span.lastUsed === null ? '' : this.format.date(span.lastUsed),
+      used: span.daysUsed,
+      period: span.periodDays,
+    };
+    switch (finding.kind) {
+      case 'found':
+        return finding.observed
+          ? this.format.date(finding.date)
+          : this.i18n.t('recordFrostPartial', { ...range, date: this.format.date(finding.date) });
+      case 'none':
+        return this.i18n.t('recordNoFrost');
+      case 'noneInData':
+        return this.i18n.t('recordNoFrostInData', range);
+      case 'noData':
+        return this.i18n.t('recordFrostNoData');
+    }
   }
 
-  private daysUsed(summary: RecordsSummary): string {
+  private daysUsed(span: DaySpan): string {
+    const period = {
+      start: span.start === '' ? '' : this.format.date(span.start),
+      end: span.end === '' ? '' : this.format.date(span.end),
+      period: span.periodDays,
+    };
+    if (span.firstUsed === null || span.lastUsed === null) {
+      return this.i18n.t('recordsNoDaysUsed', period);
+    }
     return this.i18n.t('recordsDaysUsed', {
-      used: summary.daysUsed,
-      total: summary.daysTotal,
-      coverage: this.i18n.formatNumber(this.calculator.minDailyCoverage * PERCENT, 0),
+      ...period,
+      used: span.daysUsed,
+      first: this.format.date(span.firstUsed),
+      last: this.format.date(span.lastUsed),
     });
+  }
+
+  private percent(share: number): string {
+    return this.i18n.formatNumber(share * PERCENT, 0);
   }
 }

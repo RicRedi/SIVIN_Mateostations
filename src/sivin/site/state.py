@@ -32,11 +32,8 @@ STATE_FILE: Final = "site-build-state.json"
 OUTPUT_KEY_DIGITS: Final = 12
 """Hex digits of the SHA-256 of an output path that name the state of another output."""
 
-STATE_FORMAT: Final = 3
-"""Version of the state layout; a state of another version is ignored (full build).
-
-3 (WP-3.4): the index entries carry the optional ``daily`` risk block, so the entries of a
-state of format 2 would publish the indices without it."""
+STATE_FORMAT: Final = 2
+"""Version of the state layout; a state of another version is ignored (full build)."""
 
 
 def fingerprint(parts: Iterable[bytes]) -> str:

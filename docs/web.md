@@ -458,15 +458,19 @@ class only when the pipeline published one (it does so only for a complete seaso
 "odhad" for an index based on a proxy. `status: no_data` shows "bez dat"; a sensor missing from
 the file "v sezóně bez dat"; a phenology model without a date "bez odhadu" (not configured or
 stage not reached). Each row links "Jak se počítá" to `docs/indices/<id>.md` on GitHub. The
-flowering date of GFV is not shown (the site publishes only the véraison value).
+flowering date of GFV is not shown (the site publishes only the véraison value); the GFV row
+and value are labelled "zaměkání" (véraison).
 
 **Daily risk strip** — per risk index (grey mould / Broome, powdery mildew / Gubler-Thomas,
 frost) and sensor, one cell per day of the index period from the optional `daily` block of
 `indices/<season>.json` ([site.md](site.md#indicesseasonjson)). Colour by the level's rank:
-lowest **green** `#1a7f37`, highest of three or more **red** `#c62f2f` (cross-hatched), others
-**amber** `#b06000` (hatched); a day without data — not listed or `level: null` — is **grey**
-(striped), never green. All three colours have ≥ 3:1 contrast against white. Colour is not the
-only cue: below each strip a text summary (days per level, last day with data), which is also
+lowest **green** `#3d9a50`, highest of three or more **red** `#7a1b1b`, others **amber**
+`#a5550a`; a day without data — not listed or `level: null` — is light **grey** `#f0efea`
+(striped), never green. The tones also differ in **lightness**, so they stay apart in
+greyscale and for red-green colour blindness: green 3.1:1 against the grey and 3.5:1 against
+white, amber 1.5:1 darker than green, red 2.0:1 darker than amber. A raised day also has a
+black **tick above the strip** (2 px elevated, 4 px high), visible on a 2 px wide day at
+390 px. Colour is not the only cue: below each strip a text summary (days per level, last day with data), which is also
 the strip's accessible name (`role="img"`); every day has a tooltip (date, level, daily value);
 a legend lists the levels; month ticks mark the time axis. "Pásma a vstupy" explains the bands
 and inputs of the index (texts from `docs/indices/*`), the grey rule, and for an index marked
@@ -480,11 +484,22 @@ computed in the browser from `daily.json` (`RecordsCalculator`): lowest daily mi
 daily maximum, highest and lowest daily mean, highest daily precipitation sum (each with its
 date, the earliest on ties), last spring frost (last day with `T_min ≤ 0 °C` from Jan 1 to
 Jun 30) and first autumn frost (first such day from Jul 1 to Dec 31; season only). Only
-**complete days** count — coverage ≥ the manifest's `min_daily_coverage` (0.9 when absent) —
-and the section says how many days were used ("použito 110 z 120 dní; dny s pokrytím pod 90 %
-se nepočítají"). "žádný" = complete days but no frost; "–" = no value. The daily precipitation
-sum does not follow the temperature coverage (WP-1.9), but a day must still be complete to set
-the record.
+**complete days** count for temperatures — coverage ≥ the manifest's `min_daily_coverage`
+(0.9 when absent). Per sensor a note names the **period** and how many of its days were
+complete, with the first and last of them ("Sezóna 2026: 1. 1. 2026 – 31. 12. 2026: 121 úplných
+dní z 365, první 1. 6. 2026, poslední 30. 9. 2026"; all data: first to last day of `daily.json`),
+so a sensor with a partial season is visible as such. The daily precipitation sum does not
+follow the temperature coverage (WP-1.9): a day counts for the precipitation record when its
+`precip_n_samples` × 1830 s reach `min_daily_coverage` × 86 400 s (≥ 43 values at 0.9); data
+without `precip_n_samples` give no precipitation record.
+
+The frost dates distinguish what the data support (`FrostFinding`): a half season (spring
+Jan 1 – Jun 30, autumn Jul 1 – Dec 31) is **observed** when complete days cover at least 90 %
+of its days (`HALF_OBSERVED_SHARE`, the default `analytics.min_season_coverage`). Only then
+does the UI say "žádný" (no frost). Otherwise it says "žádný v úplných dnech 1. 6. – 30. 6.
+(30 z 181 dní)", "bez dat" without any complete day, or the frost date with "(úplné dny jen
+… – …)" when the half was not observed and an earlier or later frost may be missing. A frost on
+a missing day of an observed half can still be missed; the note under the records says so.
 
 ## Data loading (contract §2.6)
 
