@@ -10,7 +10,7 @@ table newest to older at `incremental_page_size` (500) rows per page and stops a
 that reaches that measurement; with nothing stored it reads every page at
 `full_history_page_size` (5000). Only rows newer than the store are written, as a file in the
 exact layout of the portal's CSV export
-(`MeteoData_<device> (table)_<YYYYMMDD>_<HHMMSS>.csv`) into the download directory, so parsing,
+(`MeteoData_<number> <serial> (table)_<YYYYMMDD>_<HHMMSS>.csv`, the device label such as `(VUT)` replaced by `(table)`) into the download directory, so parsing,
 validation, quarantine, the store and the run record handle it unchanged. Locators and texts
 were taken from the page the owner saved; nothing was run in a live browser.
 
