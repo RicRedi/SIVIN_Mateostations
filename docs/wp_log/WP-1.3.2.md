@@ -109,7 +109,89 @@ neither the download mechanics nor the workflow inputs; no change needed.
 
 ## Review
 
-Verdict: _pending_
+Verdict: APPROVE (round 1)
+
+Reviewer: independent reviewer agent, 2026-11-26, worktree `../wt/wp-1.3.2`, commit `145ee5c`.
+
+### Gates (run by the reviewer)
+
+- `make lint` → ruff check: all checks passed; ruff format: 301 files already formatted.
+- `make type` → mypy --strict: no issues found in 182 source files.
+- `make test` → 2055 passed, 130 warnings (pre-existing pandas deprecation warnings in
+  `tests/quality`).
+- `make cov` → total 99.83 % (required 85 %); `driver.py` 100 % (129 statements, 26 branches),
+  `settings.py` 100 %.
+- `actionlint -shellcheck <shellcheck> .github/workflows/*.yml` → exit 0, no findings (this closes
+  the worker's "actionlint not run" gap).
+- `git status` clean; diff touches only files in the brief's scope (`client.py`, `session.py`,
+  `src/sivin/app/**` untouched); `config/sivin.yaml` does not set `download_wait_s`, so leaving it
+  unchanged is correct; `docs/configuration.md` matches the generator (the docs test passes).
+
+### Checked beyond the worker's tests
+
+- CDP parameters: `Browser.setDownloadBehavior {behavior: "allow", downloadPath: <abs dir>,
+  eventsEnabled: false}`, fallback `Page.setDownloadBehavior {behavior: "allow", downloadPath}`,
+  match the brief. `downloadPath` is absolute because `options()` raises on a relative
+  `download_dir` before the driver starts. Only the directory is logged; no credentials.
+- Warning step executed outside the repo (`/tmp/claude-0/review-1.3.2/`) with bash and jq against
+  hand-written synthetic records: `failures` as a string, numeric `started_at`, non-string
+  failure items, a JSON array line, a newer record in another day's file, empty `STARTED`, no
+  `data/runs/` at all, and `jq` missing from `PATH`. Every case exits 0 with either the count
+  warning or the generic warning; none can fail the step, so the `Judge the exit code` step
+  (default `success()` condition) and the publish decision are unaffected. Exit-code semantics
+  unchanged.
+- Run records are written only by `sivin run` and `sivin ingest`; `build-site --full` (the
+  `full_site_build` path) writes none, so it cannot shadow the run's record.
+- Headed/scheduled logic: scheduled runs get an empty `HEADED` → plain `sivin` (headless);
+  `xvfb-run -a sivin … run --headed` passes the child's exit code; `--headed` is an option of
+  `sivin run` (`src/sivin/cli/commands/pipeline.py`). Quoting: all expansions quoted, args via a
+  bash array; shellcheck clean.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| minor | `.github/workflows/pipeline.yml:86` (`timeout-minutes: 45`), `docs/operations.md:337` | Job timeout vs. growing sensor count. | open |
+| minor | `src/sivin/ingest/portal/driver.py:118` | `grant()` catches only `WebDriverException`. | open |
+| nit | `.github/workflows/pipeline.yml:226` | `sort_by(.started_at)` sorts strings. | open |
+| nit | `.github/workflows/pipeline.yml:231` | Duplicate generic warning. | open |
+
+1. **Timeout scaling (minor).** Input: every device fails to download (today's situation). Per
+   device: 2 attempts × (120 s download wait + 3 s + 2 s settle + navigation/element waits up to
+   15 s each) ≈ 4.5–5 min, not the 4 min used in `docs/operations.md` ("about 16 min" for 4
+   devices is an underestimate; ≈ 18–20 min is realistic). With checkout/install/QC/site
+   (~5 min) the 45 min `collect` timeout is reached at roughly 8–9 simultaneously failing
+   devices. Wrong behaviour then: the job is cancelled inside *Run the pipeline*, `code` is never
+   written, Judge skips publishing, and the data of devices that *did* download are lost for that
+   day (red run, no record). Fine for today's 4 sensors, but it does not scale with the planned
+   growth. Suggested fix (follow-up, not blocking): a total fetch time budget in the client
+   (stop retrying when it is exhausted) or derive `timeout-minutes` from the device count; at
+   minimum correct the estimate in `docs/operations.md` to include the page waits and state the
+   device count at which the timeout must be raised.
+2. **Narrow exception (minor).** Input: `execute_cdp_cmd` raising something other than
+   `WebDriverException` (e.g. a `urllib3`/`ConnectionError` from a dying chromedriver, or a
+   `KeyError` from an unusual response). Wrong behaviour: the exception escapes `create()`, the
+   just-started Chrome is never quit (leaked process), contrary to "never raise". Unlikely in
+   practice because `isinstance(driver, CdpDriver)` covers the "no CDP" case. Suggested fix:
+   catch `Exception` in `grant()` (logging the type, as now), or quit the driver in `create()`
+   if `grant()` raises.
+3. **String sort (nit).** Input: two records in the same second, `…:05Z` and `…:05.5Z`. `'.' <
+   'Z'`, so the fractional one sorts first and `last` picks the other (verified). Practically
+   unreachable (two runs in one second). Suggested fix: `sort_by(.started_at | utc)` or sort on
+   the parsed value. Related: the step parses the whole `data/runs/` history every run (one file
+   per day); harmless now, could be limited to today's/yesterday's file.
+4. **Duplicate warning (nit).** When the run record cannot be read, the new step prints
+   "Partial failure (exit code 1) …" and Judge prints its own "Partial failure (exit code 1): see
+   the job summary." Two near-identical annotations; cosmetic.
+
+### Deviations assessment
+
+- `CdpDriver` as a runtime-checkable `Protocol` plus a separate `CdpDownloadPermission` injected
+  into `ChromeDriverFactory`: reasonable, testable, matches §1.2 (dependency via constructor,
+  named constants). Accepted.
+- The warning says "N device(s)", not "N of M", because the record does not hold the configured
+  device count; acceptable within the scope restriction (`src/sivin/app/**` belongs to WP-1.10),
+  and the out-of-scope note proposes the proper fix.
+- Not verified on the real portal or on GitHub Actions (CDP acceptance by chromedriver,
+  `xvfb-run` on `ubuntu-latest`); this is stated openly in the hand-off note and cannot be checked
+  here. The reviewer did not connect to the portal.
