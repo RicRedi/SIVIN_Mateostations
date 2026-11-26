@@ -45,3 +45,12 @@ export class QcMask {
     return (qc & this.excludeBits) !== 0;
   }
 }
+
+/**
+ * Mask for the auxiliary variables precipitation and battery voltage: only flags saying the row
+ * is not a vineyard measurement at all (sensor off site, or excluded by the owner). Mirrors
+ * `DEFAULT_AUXILIARY_EXCLUDE` (288) of the pipeline (`src/sivin/core/daily.py`, WP-1.9 review):
+ * by owner decision Q9 the row validity rule concerns temperature and humidity only, so rain
+ * recorded in a row whose humidity is missing is still rain.
+ */
+export const AUXILIARY_DISPLAY_EXCLUDE_MASK = QcFlag.PRE_DEPLOYMENT | QcFlag.MANUAL_EXCLUDE;

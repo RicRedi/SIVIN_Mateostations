@@ -30,6 +30,16 @@ describe('TimeWindow', () => {
   });
 });
 
+describe('TimeWindow.equals', () => {
+  it('compares bounds and resolution, not identity (the chart keeps its zoom only for an equal window)', () => {
+    const window = new TimeWindow(0, 3600, 'raw');
+    expect(window.equals(new TimeWindow(0, 3600, 'raw'))).toBe(true);
+    expect(window.equals(new TimeWindow(0, 3600, 'hourly'))).toBe(false);
+    expect(window.equals(new TimeWindow(0, 7200, 'raw'))).toBe(false);
+    expect(window.equals(new TimeWindow(60, 3600, 'raw'))).toBe(false);
+  });
+});
+
 describe('TimeWindowFactory presets', () => {
   it('24 h is exactly 86 400 s ending at the next full hour after the data', () => {
     const window = factory.create({ kind: '24h' }, ANCHOR, 'auto');

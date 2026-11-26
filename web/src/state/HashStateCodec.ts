@@ -1,7 +1,9 @@
 import { RESOLUTIONS, type Resolution } from '../domain/TimeWindow';
 import { RELATIVE_PRESETS, type RelativePreset, type ResolutionChoice, type WindowSpec } from '../domain/WindowSpec';
+import { DEFAULT_QUANTITIES } from '../domain/quantities';
 import { isLanguage } from '../i18n/languages';
 import type { AppState } from './AppState';
+import { normalizeQuantities, sameQuantities } from './QuantitySelection';
 
 const SENSOR_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -35,7 +37,9 @@ const AUTO: ResolutionChoice = 'auto';
 /**
  * Converts the shareable part of {@link AppState} to and from the URL hash, e.g.
  * `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026` or
- * `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution.
+ * `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution, `q` (the
+ * shown chart quantities, e.g. `q=temp_c,dew_point_c,vpd_kpa`; `q=` for none) for the default
+ * temperature and humidity.
  * Dates must be real calendar dates and years must lie in {@link MIN_URL_YEAR}–{@link MAX_URL_YEAR}.
  */
 export class HashStateCodec {
@@ -48,6 +52,9 @@ export class HashStateCodec {
     if (state.resolution !== AUTO) {
       parts.push(`r=${state.resolution}`);
     }
+    if (!sameQuantities(state.quantities, DEFAULT_QUANTITIES)) {
+      parts.push(`q=${state.quantities.join(',')}`);
+    }
     parts.push(`lang=${state.language}`);
     return `#${parts.join('&')}`;
   }
@@ -55,6 +62,7 @@ export class HashStateCodec {
   /**
    * Read state fields from a hash. Missing or invalid fields are left out, so the caller can
    * merge the result over defaults. Repeated sensor ids are kept once, at their first position.
+   * Unknown quantities are dropped and only the first extra-axis quantity is kept.
    */
   decode(hash: string): Partial<AppState> {
     const params = new URLSearchParams(hash.replace(/^#/, ''));
@@ -71,6 +79,10 @@ export class HashStateCodec {
     const resolution = params.get('r');
     if (resolution === AUTO || RESOLUTIONS.includes(resolution as Resolution)) {
       result.resolution = resolution as ResolutionChoice;
+    }
+    const quantities = params.get('q');
+    if (quantities !== null) {
+      result.quantities = normalizeQuantities(quantities.split(','));
     }
     const language = params.get('lang');
     if (isLanguage(language)) {

@@ -2,6 +2,9 @@ import type { DailyFile, DailyValueColumn } from '../contract';
 import { TimeSeries } from './TimeSeries';
 import type { TimeZone } from './TimeZone';
 
+/** Optional daily columns (WP-1.9) that can be drawn; a file without one reads as `null`. */
+export type OptionalDailyColumn = 'precip_sum_mm' | 'battery_min_v';
+
 /** Local hour at which a daily value is drawn: noon, the centre of the day (like hourly means). */
 export const DAILY_STAMP_HOUR = 12;
 
@@ -11,14 +14,14 @@ export const DAILY_STAMP_HOUR = 12;
  * `[startT, endT)`.
  *
  * @param daily - Validated daily file.
- * @param column - Column to extract, e.g. `temp_mean`.
+ * @param column - Column to extract, e.g. `temp_mean`; a missing optional column gives `null`s.
  * @param zone - Display time zone the `date` column refers to.
  * @param startT - Window start, Unix seconds UTC.
  * @param endT - Window end (exclusive), Unix seconds UTC.
  */
 export function dailyColumnSeries(
   daily: DailyFile,
-  column: DailyValueColumn,
+  column: DailyValueColumn | OptionalDailyColumn,
   zone: TimeZone,
   startT: number,
   endT: number,
@@ -29,7 +32,7 @@ export function dailyColumnSeries(
     const dayStartT = zone.startOfDate(date);
     if (dayStartT >= startT && dayStartT < endT) {
       t.push(zone.toUtc({ ...zone.toLocal(dayStartT), hour: DAILY_STAMP_HOUR }));
-      values.push(daily[column][i] ?? null);
+      values.push(daily[column]?.[i] ?? null);
     }
   });
   return TimeSeries.of(t, values);

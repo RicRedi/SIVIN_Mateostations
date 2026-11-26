@@ -37,13 +37,16 @@ main.ts  (composition root: builds every object, injects collaborators through c
   │
   ├─ data/      DataClient ── fetch + cache + validate ──► contract/ (types + validators)
   ├─ domain/    TimeSeries, RawSeries, Resampler, QcMask, TimeZone,
-  │             TimeWindow, WindowSpec, TimeWindowFactory, ResolutionPolicy, alignSeries
+  │             TimeWindow, WindowSpec, TimeWindowFactory, ResolutionPolicy, alignSeries,
+  │             psychrometry, derivedSeries, quantities, ViewRange
   ├─ app/       SensorCatalog, SensorGrouping, SensorQuery,
-  │             ChartDataLoader, ChartPresenter                       (no DOM)
-  ├─ state/     Store<T>, AppState, GroupSelection, HashStateCodec    (no DOM)
+  │             ChartDataLoader, ChartPresenter, ChartQuantities, CsvWriter   (no DOM)
+  ├─ state/     Store<T>, AppState, GroupSelection, QuantitySelection, HashStateCodec (no DOM)
   ├─ i18n/      I18n, LanguagePreference, cs/de/en dictionaries
   └─ ui/        App, HeaderView, MapView, ClusterIcon, SensorPanel, TimeWindowControl,
-                SeriesChart, EventMarkers, SensorColors, HashSync, palette, dom
+                SeriesChart, ChartModel, ZoomPanPlugin, WetnessBands, EventMarkers,
+                ChartToolbar, ChartDialog, QuantityControl, QuantityLabels, ChartCsv,
+                FileDownload, SensorColors, HashSync, palette, dom
                 picker/  SensorPicker, PickerTree, SensorChips
 ```
 
@@ -59,7 +62,11 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `domain/RawSeries` | Columnar raw samples of one sensor, merged from monthly files, sorted by `t`, one sample per time. |
 | `domain/TimeSeries` | Immutable value object of one variable (`t[]`, `values[]`, `null` = no valid value). `withGapBreaks` inserts `null` where samples are too far apart so charts draw gaps. |
 | `domain/QcFlags` | `QcFlag` bits, `DEFAULT_EXCLUDE_MASK` = MISSING \| OUT_OF_RANGE \| SPIKE \| STUCK \| PRE_DEPLOYMENT \| MANUAL_EXCLUDE (§2.7) and the web's `DISPLAY_EXCLUDE_MASK` (equal to it, see below); `QcMask` decides exclusion. |
-| `domain/Resampler` | Raw → chart series: QC-masked raw values (gap threshold 3 × 1830 s, `NOMINAL_STEP_S`), or hourly means over UTC hours, stamped at the **centre** of the hour (`h + 1800`) so they line up with raw samples; an hour without valid values is `null`. Daily values are not computed in the browser; they come from `daily.json` and are drawn at local noon, the centre of the day. |
+| `domain/Resampler` | Raw → chart series: QC-masked raw values (gap threshold 3 × 1830 s, `NOMINAL_STEP_S`), or hourly means (hourly **sums** for precipitation) over UTC hours, stamped at the **centre** of the hour (`h + 1800`) so they line up with raw samples; an hour without valid values is `null`. Temperature and humidity use the display mask, precipitation and battery voltage `AUXILIARY_DISPLAY_EXCLUDE_MASK` (below). Daily values are not computed in the browser; they come from `daily.json` and are drawn at local noon, the centre of the day. |
+| `domain/psychrometry` | Pure formulas of the derived quantities: dew point (Magnus, Alduchov & Eskridge 1996), saturation and actual vapour pressure and VPD (FAO-56), absolute humidity (ideal-gas law), the leaf-wetness proxy `RH >= 90 %`. Same constants as the Python indices; `RH <= 0` gives `null`. |
+| `domain/derivedSeries` | `combineSeries` (a quantity from temperature and humidity at the same times; `null` stays `null`), `leafWetnessIndicator` (1/0/`null`), `wetIntervals` (bands of wet points). |
+| `domain/quantities` | Ids of the chart quantities, which of them need an extra axis, the default (temperature and humidity). |
+| `domain/ViewRange` | The visible part of the time axis and the zoom/pan arithmetic (zoom around an anchor, pan, clamp to the loaded window, minimum span = 4 point spacings of the resolution, wheel factor). |
 | `domain/TimeZone` | Unix seconds ↔ wall-clock time of an IANA zone via `Intl` (DST-aware): local midnights, shifting by local days. |
 | `domain/WindowSpec`, `TimeWindow`, `TimeWindowFactory`, `ResolutionPolicy` | What the user asked for (`24h` / `7d` / `30d` / `season` / `custom`) → a concrete `[startT, endT)` with a resolution. Details below. |
 | `domain/alignSeries` | Puts several series on one union time axis for uPlot (`undefined` = no sample, skipped; `null` = gap). |
@@ -68,19 +75,29 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `app/SensorQuery` | The picker's search: every word of the query must occur in id, label, municipality, track or variety; case and diacritics are ignored (`foldText`: NFD, combining marks removed, lower case). |
 | `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and the group checkbox within the comparison limit: a group with **any** selected sensor is cleared (so a partly selected group can always be cleared, also at the limit); a group without one is added in group order up to 8 and the rest is reported (`groupNotice`: "only n added", or the plain limit message when nothing fit). |
 | `app/ChartDataLoader` | Loads raw / hourly / daily series and in-window events **per sensor** (`Promise.allSettled`): a sensor whose series fail becomes a failure entry shown as a per-sensor error above the chart, the other sensors still render. A missing or invalid events file degrades to "no events" with a `console.warn`. |
+| `app/ChartQuantities` | `ChartQuantity` (abstract: id, unit, axis, line style, decimals, label key per resolution, `series(sensor)`) with `MeasuredQuantity`, `PsychrometricQuantity`, `LeafWetnessQuantity`, and the `QuantityRegistry` filled by `createQuantityRegistry`. A new quantity is a new registered instance. |
+| `app/CsvWriter` | CSV text: UTF-8 BOM, `;`, CRLF, RFC 4180 quoting, numbers with fixed decimals and a decimal comma. |
 | `app/ChartPresenter` | Resolves the window from the state (falling back to the default window if a spec cannot be resolved), shows "loading", the data or an error; drops responses of superseded requests. |
-| `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`. `r` is omitted for automatic resolution. Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
+| `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, shown chart quantities, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`, `#…&q=temp_c,dew_point_c,vpd_kpa`. `r` is omitted for automatic resolution, `q` for the default temperature + humidity (`q=` = nothing shown). Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
 | `i18n/I18n`, `LanguagePreference` | UI strings cs (default) / de / en, manifest labels, number/date formatting. Lookup: language → Czech → key. The language is stored in `localStorage` (every access in `try/catch`). Priority at start: URL hash → stored preference → Czech. |
 | `ui/MapView` | Leaflet map, OSM tiles (layer switch to OpenTopoMap), fit to sensors, circle markers coloured by latest temperature, grey with dashed outline when `stale` or missing, tooltip (label, value, local time), legend as a `<details>` element (collapsed by default below 600 px). Click selects one sensor, ctrl/⌘-click toggles it in the comparison. Markers are keyboard controls: `role="button"`, in the tab order, accessible name "label: value", `aria-pressed` for the selection; Enter/Space selects, Ctrl/⌘ + Enter/Space compares. **Clustering** (`leaflet.markercluster`, see *Clustering* below): markers closer than `CLUSTER_RADIUS_PX` (42 px) on screen merge into a badge with the count, coloured by the **mean latest temperature** of its members on the marker scale; a click on a badge, or Enter on a focused one, zooms in to its sensors (at the highest zoom it spreads them). A badge that hides a selected sensor has a blue ring. Leaflet re-creates a marker's element when it leaves a cluster, so the keyboard attributes are re-applied on every `add`. |
 | `ui/ClusterIcon` | Content of a cluster badge: the count, an accessible name ("Skupina čidel: 5 – přiblížit"), the colour (below) and the selection ring. |
-| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor picker, metadata (incl. municipality and track) and latest values of the selected sensors, time-window controls, chart. |
+| `state/QuantitySelection` | Normalising (known ids, canonical order, at most one extra-axis quantity) and toggling the shown quantities. |
+| `ui/SensorPanel` | Right-hand panel (bottom sheet ≤ 760 px, collapsible): sensor picker, metadata (incl. municipality and track) and latest values of the selected sensors, time-window controls, chart quantities, chart. |
 | `ui/picker/SensorPicker` | Sensor selection that scales to larger networks (WP-3.5), details below. |
 | `ui/picker/PickerTree` | The grouped checkbox list (composite of group nodes and sensor rows). The DOM is built once; `update` only shows, hides and checks, so focus stays where it is while typing or toggling. |
 | `ui/picker/ModalSheet` | Makes the open panel modal in the phone layout: `role="dialog"`, `aria-modal="true"`, every other part of the page `inert`, Tab / Shift+Tab wrap inside the sheet; all undone on close. |
 | `ui/ClusterIcon` (colours) | `appearance(tempsC, selectedCount)`: mean of the members' current temperatures (stale or missing ones ignored) on `TemperatureScale`; grey `STALE_COLOR` with a dashed ring only when no member has a value; text dark or white, whichever has the higher WCAG contrast (`inkFor`). |
 | `ui/picker/SensorChips` | The selected sensors as removable chips in their line colour, in selection order; they double as the chart legend. |
 | `ui/TimeWindowControl` | Preset buttons (`aria-pressed`), season year, custom from–to form, resolution selector whose "automatic" entry names the resolution it picks, and a line with the concrete window and resolution actually shown ("Zobrazeno 24. 9. 2026 0:00 – 30. 9. 2026 23:59 · Surová data"; the end shown is the last minute inside the half-open window). |
-| `ui/SeriesChart` | uPlot chart: temperature (left axis, °C, solid) and relative humidity (right axis, %, dashed), one colour per compared sensor, x axis in the display time zone, resizes with its container, per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
+| `ui/SeriesChart` | uPlot chart of the shown quantities: temperature and dew point on the left axis (°C), relative humidity on the right axis (%), at most one more quantity on a third axis, leaf wetness as bands; one colour per compared sensor, one line style per quantity; x axis in the display time zone, resizes with its container (fills the dialog), per-sensor load errors above it. Only the canvas has `role="img"` and a name; the legend table and event buttons stay in the accessibility tree. |
+| `ui/ChartModel` | What the chart draws and the CSV writes: one aligned time axis, a column per sensor × quantity (blanked in off-site periods), off-site and wetness bands, the rows inside a view. |
+| `ui/ZoomPanPlugin` | uPlot plugin: wheel zoom (once per animation frame), drag pan, Shift + drag selection, double-click reset, pinch zoom; owns the x range. |
+| `ui/WetnessBands` | Draws the leaf-wetness lanes (`drawClear` hook). |
+| `ui/ChartToolbar`, `ChartExport` | Buttons "⤢" (maximise), "Celé okno" (reset zoom), "Stáhnout CSV" and the zoom hint; the export action. |
+| `ui/ChartDialog` | The maximised chart: moves the chart and its controls into a modal dialog and back. |
+| `ui/QuantityControl`, `QuantityLabels` | Check boxes and third-axis radio buttons for the quantities; their labels (manifest labels for temperature and humidity). |
+| `ui/ChartCsv`, `FileDownload` | The CSV of the visible data and its file name; saving it as a Blob download. |
 | `ui/EventMarkers` | Sensor events on the chart: dashed vertical lines plus one focusable button per event with an accessible name and a tooltip (type, sensor, time, confidence, detail); amber buttons for the advisory intervals `low_battery` and `unlogged_off_site` (the latter only if the pipeline is configured to publish it), grey bands for `off_site` (below). |
 | `ui/SensorColors` | Line colours of the compared sensors, assigned in selection order; a sensor keeps its colour while selected, a new one takes the first free colour, so the (at most 8) compared sensors never share a colour. |
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
@@ -265,6 +282,155 @@ vineyard"; open end "dosud" / "bis heute" / "ongoing"). The logic is in
 
 ![Off-site band in the chart](wp_log/img/WP-1.8-offsite-band-chart.png)
 
+## Chart explorer (WP-3.7)
+
+Owner request of 2026-11-26: a larger chart, mouse interaction, derived quantities and an
+export. Screenshots (synthetic demo data): `docs/wp_log/img/WP-3.7-*.png`.
+
+![Maximised chart with its controls](wp_log/img/WP-3.7-dialog-1280.png)
+
+### Maximised chart
+
+The **⤢** button above the chart (accessible name "Zvětšit graf" / "Diagramm vergrößern" /
+"Enlarge chart") opens a centred modal dialog of 90 vw × 85 vh, full screen at ≤ 760 px.
+`ChartDialog` **moves** the existing elements into it — the sensor picker with its chips, the
+time-window control, the quantity control and the chart section — and puts them back when it
+closes. There is therefore one chart, one set of controls and one `AppStore`: everything changed
+in the dialog is changed in the small chart, the zoom included, and nothing is duplicated. The
+controls sit in a `<details>` "Nastavení grafu" beside the chart (open by default; collapsed on
+phones, where the chart needs the room). The dialog has `role="dialog"`, `aria-modal="true"` and a
+title; the rest of the page is `inert` and Tab is trapped (the picker's `ModalSheet` is reused);
+✕ and Escape close it (an Escape the open sensor picker handles only closes the picker) and the
+focus returns to the ⤢ button. In the dialog the plot takes the remaining height (the legend
+scrolls above 8.5 rem). Whether the dialog is open is not part of the URL. If the last sensor is
+removed inside the dialog, the chart area says that no sensor is selected and points to the
+sensor picker in the settings.
+
+### Zoom and pan
+
+`ZoomPanPlugin` (a uPlot plugin; the arithmetic is `domain/ViewRange`), in the small and the
+maximised chart:
+
+| Input | Effect |
+|---|---|
+| mouse wheel over the plot | zoom in/out on the time axis around the time under the cursor; the span is multiplied by `exp(0.0015 × Δpx)` (one 100 px notch ≈ ×1.16), applied once per animation frame |
+| drag with the left button | pan |
+| **Shift** + drag | uPlot's range selection, then zoom to it |
+| double-click, or the **Celé okno** button | back to the loaded window |
+| touch: two fingers / one finger | pinch zoom around the midpoint / pan (`touch-action: pan-y`, so vertical page scrolling stays native) |
+
+Zoom and pan stay inside the loaded window (no data are fetched) and stop at 4 point spacings of
+the resolution (4 × 1830 s raw, 4 h hourly, 4 days daily). The plain drag used to be uPlot's
+selection zoom; by owner request **pan wins**, the selection now needs Shift. The zoom is kept
+when quantities or the language change and reset when new data are loaded (another window,
+resolution or selection). Event markers outside the visible range are hidden, and bands and lines
+are clipped to the plot. A wheel that zooms is not passed on to the page; a wheel that cannot
+zoom (zooming out of the whole window, or in at the minimum span) is left alone, so the side
+panel scrolls as usual. Touch was checked with
+Chromium's touch emulation (CDP), not on a real phone.
+
+**Performance** (headless Chromium 1243 without GPU in the agent sandbox, 1280 px dialog,
+8 sensors × 30 days raw ≈ 8 × 1420 samples, time from one wheel event to the second animation
+frame after it, i.e. at least 33 ms): median 63–76 ms (p90 84–89 ms) with temperature +
+humidity and 109–132 ms (p90 137–152 ms) with five quantities (40 series); the numbers vary
+between runs and machines. It grows with the number of shown quantities and sensors. A zoom
+step only rescales the x axis and redraws; derived series are computed once per data load or
+quantity change, not per zoom step. A CPU profile shows about 13 ms of JavaScript per step;
+the rest is Chromium's software rasterisation of the canvas (the trace's "Commit"), so a
+desktop browser with GPU canvas should be much faster — not measured. Wheel events are combined
+per animation frame, so fast wheeling skips frames instead of queueing them.
+
+### Quantities
+
+The quantity control (check boxes and radio buttons, panel section under the time window) shows
+per sensor:
+
+| Quantity | Unit | Axis / style | Source |
+|---|---|---|---|
+| Temperature | °C | left, solid | measured |
+| Relative humidity | % | right, dashed | measured |
+| Dew point | °C | left, dotted | derived |
+| Leaf wetness – estimate | 0/1 | band along the bottom, one lane per sensor; raw and hourly only | derived |
+| VPD | kPa | third axis, dash-dot | derived |
+| Absolute humidity | g/m³ | third axis, dash-dot | derived |
+| Precipitation | mm per interval (raw), per complete hour (sum, below), per day (`precip_sum_mm`) | third axis, bars | measured |
+| Battery voltage | V (raw, hourly mean, daily minimum `battery_min_v`) | third axis, dash-dot | measured |
+
+Derived quantities are off by default. **At most one quantity with an axis of its own** is shown
+at a time (radio buttons "Třetí osa"), so the chart never has more than the °C axis, the % axis
+and one more; the y range of the third axis follows the visible data (precipitation from 0).
+The colour always identifies the sensor (at most 8, as before), the line style the quantity.
+
+Formulas (`domain/psychrometry.ts`), the same as the Python indices:
+
+- **Dew point**, Magnus form with $a = 17.625$, $b = 243.04$ °C (Alduchov & Eskridge 1996,
+  [dew_point.md](indices/dew_point.md)): $\gamma = \ln(RH/100) + aT/(b+T)$,
+  $T_d = b\gamma/(a-\gamma)$.
+- **VPD**, FAO-56 eq. 11 (Allen et al. 1998, [vpd.md](indices/vpd.md)):
+  $e_s = 0.6108\,\exp(17.27\,T/(T+237.3))$ kPa, $e_a = e_s\,RH/100$, $VPD = e_s - e_a$.
+- **Absolute humidity**, ideal-gas law for water vapour:
+  $\rho_v = e_a / (R_v\,(T + 273.15))$ with $e_a$ as for the VPD (in Pa) and
+  $R_v = 461.5$ J kg⁻¹ K⁻¹ (standard value, e.g. Wallace & Hobbs, *Atmospheric Science*, 2nd
+  ed., 2006, 461.51 [source not verified]), in g/m³. At 20 °C / 50 % this gives 8.64 g/m³.
+- **Leaf wetness (estimate)**: $RH \ge 90$ %, the default `wet_rh_threshold_pct` of the
+  botrytis index ([botrytis_broome.md](indices/botrytis_broome.md); a proxy, not a measured
+  wetness). A wet point's band reaches half the point spacing to each side. **Not at daily
+  resolution** (owner decision 2026-11-26): a daily mean humidity says nothing about hours of
+  wet leaves, so the check box is disabled there with the note "jen pro surová data a hodinové
+  průměry", no band is drawn and no column exported; the selection is kept and applies again at
+  raw or hourly resolution.
+
+`RH <= 0 %` (a sensor artefact) gives no derived value, like the Python `NaN`. Derived values
+are computed from the temperature and humidity **as shown**: at raw resolution per sample, at
+hourly and daily resolution from the means (hourly means, `temp_mean`/`rh_mean` of `daily.json`).
+Because the formulas are non-linear, e.g. the dew point of mean values differs slightly from the
+mean of per-sample dew points; for daily values use raw or hourly resolution where possible. QC-masked rows have no temperature or humidity and so no derived value;
+in an off-site period every series of that sensor is blanked.
+
+Precipitation and battery voltage are masked with `AUXILIARY_DISPLAY_EXCLUDE_MASK` =
+PRE_DEPLOYMENT | MANUAL_EXCLUDE (288), the pipeline's `DEFAULT_AUXILIARY_EXCLUDE`: by owner
+decision Q9 the row validity rule concerns temperature and humidity only, so rain in a row whose
+humidity is missing is still shown. The demo fixture has no precipitation or battery columns, so
+these show no values there.
+
+**Hourly precipitation** (`Resampler.hourlyPrecipitation`): a sample's `precip_mm` is the rain
+since the previous sample, i.e. of the interval `(t_prev, t]`, so it is counted in the hour that
+contains the interval's midpoint (the first loaded sample is assumed to cover one nominal step).
+An hour is shown only if it is complete: every sample counted in it has a valid value (not
+`null`, not masked by PRE_DEPLOYMENT / MANUAL_EXCLUDE) and covers at most 1.5 nominal steps
+(2745 s; a longer interval means a missed sample), and the counted intervals cover the hour up
+to half that tolerance (1372.5 s) at its start and end. Otherwise the hour is `null` (a gap): an
+hour where a data gap starts or ends, the running last hour of the data, or an hour with a
+masked sample. So a partial sum is not shown as a complete one; the price is that an hour at
+the edge of the data is left empty even if part of its rain is known. Daily sums come from `precip_sum_mm` as published
+(`precip_n_samples` tells how complete a day is; not shown).
+
+### CSV export
+
+**Stáhnout CSV** saves exactly what the chart shows: the rows inside the visible (zoomed) range,
+at the loaded resolution, for the selected sensors and shown quantities, derived ones included
+(`ChartCsv`, built from the same `ChartModel` as the chart). The file is created in the browser
+(Blob download, no server):
+
+- name `sivin_<sensor ids joined by ->_<from>_<to>.csv`, the visible range in local time,
+  `YYYYMMDDTHHMM`, end exclusive, e.g. `sivin_77678271-77799986_20260924T0200_20261001T0200.csv`;
+- UTF-8 **with BOM** (Excel otherwise guesses a legacy code page), CRLF, separator `;`;
+- **decimal comma in every UI language** (owner decision 2026-11-26; what Excel in Czech and
+  German locales expects together with `;`); no thousands separator;
+- columns: `Místní čas (Europe/Prague)` as `YYYY-MM-DD HH:MM:SS` in the display zone, `Čas UTC
+  (ISO 8601)` as `YYYY-MM-DDTHH:MM:SSZ`, then one column per sensor and quantity, header
+  `<sensor> – <quantity> (<unit>)`;
+- one row per time on the chart's union time axis: sensors with different sampling phases are
+  on different rows; an empty field is a missing, masked or off-site value; rows with no value at
+  all (the chart's gap breaks) are left out. Hourly values are stamped at hh:30, daily at local
+  noon, as drawn;
+- decimals: measured values 0.01 (the published precision), dew point and absolute humidity
+  0.01, VPD 0.001, leaf wetness 0/1;
+- **formula injection** (OWASP "CSV injection"): a text field that starts with `=`, `+`, `-`,
+  `@`, tab or carriage return — e.g. a sensor label `=HYPERLINK(…)` or `-5 m` in the header —
+  is prefixed with `'`, so Excel shows it as text instead of running it; plain numbers such as
+  `-0,25` stay numbers.
+
 ## Data loading (contract §2.6)
 
 On start the app loads `manifest.json`, `sensors.geojson` and `latest.json` in parallel. Each
@@ -317,9 +483,10 @@ What the real data look like to the portal:
 
 - Raw months hold **every** sample, flagged ones included; the display mask hides excluded
   rows (e.g. off-site samples, `PRE_DEPLOYMENT`). `precip_mm`/`battery_v` are present only for
-  months with such values; they are read but not drawn yet (WP-3.4).
+  months with such values; they can be shown on the chart's third axis (WP-3.7, below).
 - `daily.json` may carry `precip_sum_mm`, `precip_n_samples` (values in the sum) and
-  `battery_min_v` (optional, not drawn yet).
+  `battery_min_v` (optional; the daily sum and minimum are shown at daily resolution,
+  `precip_n_samples` is not used).
 - `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
   optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
   history); a sensor whose last pipeline build failed has `data_status: "error"` and
@@ -371,16 +538,19 @@ The contract fixes the raw columns to `temp_c` and `rh_pct` and the daily column
    `DailyFile` and validate it (same length as `t` / `date`).
 2. `domain/RawSeries.ts`: add the column and extend `RawVariable`.
 3. `app/ChartDataLoader.ts`: load it and map it to its daily column in `DAILY_COLUMN`.
-4. `ui/SeriesChart.ts`: give it a scale and an axis (or a separate chart if its unit differs
-   from °C and %).
-5. Label and unit come from `manifest.variables`; add tests for validation and loading.
+4. `app/ChartQuantities.ts`: register a `MeasuredQuantity` for it (unit, axis — `extra` for a
+   unit other than °C and %, line style), add its id to `domain/quantities.ts` and a label to
+   the dictionaries; `QuantityControl`, the chart and the CSV export pick it up.
+5. Add tests for validation, loading and the quantity.
 
 ## Tests and coverage
 
 `npm test` runs Vitest with V8 coverage over `src/**` and fails below 85 % of lines. Excluded
 from coverage, because they are thin glue over Leaflet, uPlot/canvas or the page bootstrap and
 are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts` (including the
-clustering glue), `src/ui/SeriesChart.ts`. The picker logic (`SensorGrouping`, `SensorQuery`,
+clustering glue), `src/ui/SeriesChart.ts`. The chart's logic lives in tested classes
+(`ChartModel`, `ZoomPanPlugin` with a fake uPlot, `ViewRange`, `ChartCsv`, `WetnessBands`,
+`ChartDialog`, `ChartToolbar`, `QuantityControl`). The picker logic (`SensorGrouping`, `SensorQuery`,
 `GroupSelection`) has unit tests; `SensorPicker`, `PickerTree`, `SensorChips` and `ClusterIcon`
 are tested under jsdom on the 20-sensor fixture. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
 other DOM components are tested under jsdom.

@@ -157,6 +157,7 @@ export class EventMarkers {
     const { ctx } = plot;
     const { top, height } = plot.bbox;
     ctx.save();
+    EventMarkers.clipToPlot(plot);
     ctx.fillStyle = OFF_SITE_BAND_COLOR;
     for (const band of this.bands) {
       const x0 = plot.valToPos(band.startT, 'x', true);
@@ -171,6 +172,7 @@ export class EventMarkers {
     const { ctx } = plot;
     const { top, height } = plot.bbox;
     ctx.save();
+    EventMarkers.clipToPlot(plot);
     ctx.setLineDash(EVENT_LINE_DASH_PX.map((px) => px * uPlot.pxRatio));
     ctx.strokeStyle = EVENT_LINE_COLOR;
     ctx.lineWidth = uPlot.pxRatio;
@@ -184,7 +186,10 @@ export class EventMarkers {
     ctx.restore();
   }
 
-  /** Position the buttons; also the uPlot `setSize` hook. */
+  /**
+   * Position the buttons; also the uPlot `setSize` hook and, for zooming, the `setScale` hook of
+   * the x scale. Buttons outside the visible range are hidden.
+   */
   place(plot: uPlot): void {
     const markers = this.points.map(({ event, sensorId }) => {
       const button = this.button(this.describePoint(event, sensorId), plot.valToPos(event.t, 'x'));
@@ -206,7 +211,20 @@ export class EventMarkers {
       placed.push(leftPx);
       return button;
     });
+    const widthPx = plot.bbox.width / uPlot.pxRatio;
+    for (const button of [...handles, ...markers]) {
+      const leftPx = Number.parseFloat(button.style.left);
+      button.hidden = Number.isFinite(widthPx) && (leftPx < 0 || leftPx > widthPx);
+    }
     this.element.replaceChildren(...handles, ...markers);
+  }
+
+  /** Clip canvas drawing to the plotting area, so a zoomed chart draws nothing over the axes. */
+  private static clipToPlot(plot: uPlot): void {
+    const { left, top, width, height } = plot.bbox;
+    plot.ctx.beginPath();
+    plot.ctx.rect(left, top, width, height);
+    plot.ctx.clip();
   }
 
   private button(text: string, leftPx: number): HTMLButtonElement {

@@ -46,7 +46,10 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
 - **Map portal:** map of the sensors (OpenStreetMap, clustering of nearby markers), sensor picker
   with search grouped by municipality → vineyard track, comparison of up to 8 sensors in one
   temperature/humidity chart, sensor card with latest values and a button that copies the GPS
-  position for navigation.
+  position for navigation. The chart can be maximised into a dialog with all its controls,
+  zoomed with the mouse wheel and panned by dragging (pinch and swipe on touch screens), show
+  derived quantities on demand (dew point, VPD, absolute humidity, estimated leaf wetness) as
+  well as precipitation and battery voltage, and export exactly what it shows as CSV for Excel.
 
 Not yet done (see [MIGRATION_PLAN.md](MIGRATION_PLAN.md) §4): indices on the web portal
 (WP-3.4), admin mode for editing the registry and the off-site log on the web (WP-3.3),

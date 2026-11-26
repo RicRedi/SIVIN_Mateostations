@@ -1,9 +1,12 @@
 import type { ChartController } from '../app/ChartPresenter';
 import type { SensorCatalog, SensorInfo } from '../app/SensorCatalog';
+import type { QuantityId } from '../domain/quantities';
 import type { I18n } from '../i18n/I18n';
 import type { LanguagePreference } from '../i18n/LanguagePreference';
 import { selectOnly, toggleInSelection, type AppState, type AppStore } from '../state/AppState';
 import { groupNotice, toggleGroupInSelection, type LimitNotice } from '../state/GroupSelection';
+import { sameQuantities } from '../state/QuantitySelection';
+import type { QuantityControlState } from './QuantityControl';
 import type { SensorColors } from './SensorColors';
 import type { WindowChange, WindowControlState } from './TimeWindowControl';
 
@@ -14,12 +17,15 @@ export interface AppViews {
   readonly panel: { render(selected: readonly SensorInfo[]): void };
   readonly picker: { render(selectedIds: readonly string[], notice: LimitNotice | null): void };
   readonly windowControl: { render(state: WindowControlState): void };
-  readonly chart: { render(): void };
+  readonly quantityControl: { render(state: QuantityControlState): void };
+  /** `render` redraws in the current language; `setQuantities` shows other quantities (no reload). */
+  readonly chart: { render(): void; setQuantities(quantities: readonly QuantityId[]): void };
 }
 
 /**
  * Coordinates state and views: user actions update the store, store changes re-render the views
- * and reload the chart when the selection, window or resolution changed.
+ * and reload the chart when the selection, window or resolution changed; a change of the shown
+ * quantities only redraws the chart (all quantities are computed from the loaded data).
  */
 export class App {
   /** Set when the last selection change hit the comparison limit; shown by the next render. */
@@ -42,6 +48,7 @@ export class App {
   /** Render everything once and load the chart for the initial state. */
   start(): void {
     this.colors.update(this.store.state.selectedSensorIds);
+    this.views.chart.setQuantities(this.store.state.quantities);
     this.renderAll(this.store.state);
     this.views.map.invalidateSize();
     this.views.map.fitToSensors();
@@ -70,6 +77,13 @@ export class App {
 
   readonly onWindowChange = (change: WindowChange): void => {
     this.store.update(change);
+  };
+
+  /** Quantity check boxes and the third-axis radio buttons of the chart. */
+  readonly onQuantitiesChange = (quantities: readonly QuantityId[]): void => {
+    if (!sameQuantities(quantities, this.store.state.quantities)) {
+      this.store.update({ quantities });
+    }
   };
 
   readonly onLanguage = (language: AppState['language']): void => {
@@ -106,6 +120,9 @@ export class App {
       this.views.header.render();
       this.views.chart.render();
     }
+    if (state.quantities !== previous.quantities) {
+      this.views.chart.setQuantities(state.quantities);
+    }
     this.renderAll(state);
     const reload =
       state.selectedSensorIds !== previous.selectedSensorIds ||
@@ -123,11 +140,9 @@ export class App {
     this.views.map.render(state.selectedSensorIds);
     this.views.picker.render(state.selectedSensorIds, this.notice);
     this.views.panel.render(selected);
-    this.views.windowControl.render({
-      spec: state.window,
-      resolution: state.resolution,
-      window: this.presenter.windowFor(state),
-    });
+    const window = this.presenter.windowFor(state);
+    this.views.windowControl.render({ spec: state.window, resolution: state.resolution, window });
+    this.views.quantityControl.render({ quantities: state.quantities, resolution: window.resolution });
     this.notice = null;
   }
 }

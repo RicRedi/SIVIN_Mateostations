@@ -1,64 +1,96 @@
-import uPlot, { type AlignedData, type Options, type Series } from 'uplot';
+import uPlot, { type AlignedData, type Options } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import type { ChartData, SensorChartData } from '../app/ChartDataLoader';
+import type { ChartData } from '../app/ChartDataLoader';
 import type { ChartView } from '../app/ChartPresenter';
+import type { QuantityRegistry } from '../app/ChartQuantities';
 import type { SensorCatalog } from '../app/SensorCatalog';
-import type { VariableSpec } from '../contract';
-import { alignSeries } from '../domain/alignSeries';
+import { DEFAULT_QUANTITIES, type QuantityId } from '../domain/quantities';
+import type { TimeWindow } from '../domain/TimeWindow';
 import type { TimeZone } from '../domain/TimeZone';
 import { MS_PER_SECOND, SECONDS_PER_DAY } from '../domain/units';
+import { minViewSpanS } from '../domain/ViewRange';
 import type { I18n } from '../i18n/I18n';
+import { ChartModel } from './ChartModel';
+import { ChartSeriesFactory } from './ChartSeriesFactory';
+import type { ChartSnapshot } from './ChartToolbar';
 import { el } from './dom';
-import { EventMarkers, offSiteBands, withoutBands } from './EventMarkers';
+import { EventMarkers } from './EventMarkers';
+import type { QuantityLabels } from './QuantityLabels';
 import type { SensorColors } from './SensorColors';
+import { WetnessBands } from './WetnessBands';
+import { ZoomPanPlugin, type FrameScheduler } from './ZoomPanPlugin';
 
 /** Chart height in px on wide and on narrow containers. */
 const CHART_HEIGHT_PX = 300;
 const CHART_HEIGHT_NARROW_PX = 220;
-/** Containers narrower than this get the shorter chart (phones). */
+/** Smallest plot height in the maximised dialog, px. */
+const MIN_FILL_HEIGHT_PX = 200;
+/** Containers narrower than this get the shorter chart and narrower axes (phones). */
 const NARROW_WIDTH_PX = 500;
-/** Relative humidity axis range, %. */
-const RH_RANGE_PCT: [number, number] = [0, 100];
-const TEMP_LINE_WIDTH_PX = 2;
-const RH_LINE_WIDTH_PX = 1.5;
-const RH_DASH_PX = [6, 4];
-const VALUE_DECIMALS = 1;
+/** The maximised dialog; inside it the chart fills the available height. */
+const DIALOG_SELECTOR = '.chart-dialog';
 const FALLBACK_COLOR = '#52514e';
-/** `uPlot.Axis.Side.Right`; the ambient const enum cannot be referenced under `isolatedModules`. */
-// eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment -- numeric value of Side.Right
-const AXIS_SIDE_RIGHT = 1 as uPlot.Axis.Side;
+
+/** Toolbar-relevant state of the chart. */
+export interface ChartViewState {
+  readonly zoomed: boolean;
+  readonly exportable: boolean;
+}
 
 /**
- * uPlot chart of temperature (left axis, °C) and relative humidity (right axis, %) for one or
- * more sensors, with sensor events as markers and `off_site` periods as grey bands in which the
- * sensor's lines are not drawn. Times are shown in the display time zone; `null` values are drawn
- * as gaps. Sensors that failed to load are listed with their error.
+ * uPlot chart of the shown quantities for one or more sensors: temperature and dew point on the
+ * left axis (°C), relative humidity on the right axis (%), at most one more quantity on a third
+ * axis (right), leaf wetness as bands; one colour per sensor, one line style per quantity. Sensor
+ * events are markers, `off_site` periods grey bands in which the sensor's series are not drawn.
+ * Times are shown in the display time zone; `null` values are drawn as gaps.
+ *
+ * Wheel zoom, drag pan and double-click reset are the {@link ZoomPanPlugin}; the zoom is kept
+ * when the chart is redrawn (language, quantities) and reset when new data arrive. Inside the
+ * maximised dialog the plot fills the available height. Data shaping is {@link ChartModel}.
  */
 export class SeriesChart implements ChartView {
   private readonly message = el('p', { class: 'chart__message', role: 'status' });
   private readonly failures = el('ul', { class: 'chart__failures' });
   private readonly plotHost = el('div', { class: 'chart__plot' });
   private readonly markers: EventMarkers;
+  private readonly wetness: WetnessBands;
+  private readonly zoomPan: ZoomPanPlugin;
+  private readonly factory: ChartSeriesFactory;
   private plot: uPlot | null = null;
   private data: ChartData | null = null;
+  private model: ChartModel | null = null;
+  private quantities: readonly QuantityId[] = DEFAULT_QUANTITIES;
+  /** The window whose zoom {@link zoomPan} holds; another window (bounds or resolution) resets the zoom. */
+  private zoomedWindow: TimeWindow | null = null;
 
   /**
    * @param root - Container element; the chart follows its width.
    * @param i18n - Translations and number formatting.
    * @param catalog - Sensor labels.
    * @param colors - Line colours of the compared sensors.
-   * @param variables - Variable specs from the manifest (labels and units).
+   * @param registry - The chart quantities.
+   * @param labels - Quantity labels.
    * @param zone - Display time zone (from the manifest).
+   * @param frames - Animation frames for smooth wheel zoom.
+   * @param onState - Called when zoom or exportability change (for the toolbar).
    */
   constructor(
     private readonly root: HTMLElement,
     private readonly i18n: I18n,
     private readonly catalog: SensorCatalog,
     private readonly colors: SensorColors,
-    private readonly variables: readonly VariableSpec[],
+    private readonly registry: QuantityRegistry,
+    labels: QuantityLabels,
     private readonly zone: TimeZone,
+    frames: FrameScheduler,
+    private readonly onState: (state: ChartViewState) => void,
   ) {
     this.markers = new EventMarkers(i18n, catalog, zone);
+    this.wetness = new WetnessBands((id) => this.color(id));
+    this.factory = new ChartSeriesFactory(i18n, catalog, registry, labels, (id) => this.color(id));
+    this.zoomPan = new ZoomPanPlugin(() => {
+      this.notify();
+    }, frames);
     root.append(this.message, this.failures, this.plotHost);
     new ResizeObserver(() => {
       this.resize();
@@ -75,6 +107,7 @@ export class SeriesChart implements ChartView {
     this.destroyPlot();
     this.failures.replaceChildren();
     this.showMessage(text);
+    this.notify();
   }
 
   showData(data: ChartData): void {
@@ -82,35 +115,55 @@ export class SeriesChart implements ChartView {
     this.render();
   }
 
-  /** Redraw with the current language. */
+  /** Show other quantities (keeps the zoom). */
+  setQuantities(quantities: readonly QuantityId[]): void {
+    this.quantities = quantities;
+    this.render();
+  }
+
+  /** What is shown now, for the CSV export; `null` without a chart. */
+  snapshot(): ChartSnapshot | null {
+    return this.model === null || this.plot === null ? null : { model: this.model, view: this.zoomPan.view };
+  }
+
+  /** Show the whole loaded window. */
+  resetZoom(): void {
+    this.zoomPan.reset();
+  }
+
+  /** Redraw with the current language and quantities. */
   render(): void {
     this.destroyPlot();
     const data = this.data;
     if (data === null) {
+      this.notify();
       return;
     }
     this.renderFailures(data);
-    const hasValues = data.sensors.some((s) => s.temp_c.validCount + s.rh_pct.validCount > 0);
-    this.message.textContent = hasValues ? '' : this.i18n.t('noData');
-    this.message.hidden = hasValues || data.sensors.length === 0;
-    if (data.sensors.length === 0) {
-      return;
+    const model = ChartModel.build(data, this.registry.select(this.quantities));
+    this.message.textContent = model.hasValues ? '' : this.i18n.t('noData');
+    this.message.hidden = model.hasValues || data.sensors.length === 0;
+    if (data.sensors.length > 0) {
+      const keep = this.zoomedWindow?.equals(data.window) === true ? this.zoomPan.view : undefined;
+      this.zoomPan.configure(model.bounds, minViewSpanS(data.window.resolution), keep);
+      this.zoomedWindow = data.window;
+      this.markers.setEvents(model.events);
+      this.markers.setBands(model.offSiteBands);
+      this.wetness.setLanes(model.wetLanes);
+      const plotData = [model.t, ...model.columns.map((column) => column.values)] as unknown as AlignedData;
+      this.plot = new uPlot(this.options(model), plotData, this.plotHost);
+      this.plot.ctx.canvas.setAttribute('role', 'img');
+      this.plot.ctx.canvas.setAttribute('aria-label', this.i18n.t('chartLabel'));
+      this.markers.attach(this.plot);
+      this.model = model;
+      this.resize();
     }
-    const events = data.sensors.flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId })));
-    const bands = offSiteBands(events, data.window.startT, data.window.endT);
-    const aligned = alignSeries(
-      data.sensors.flatMap((s) => {
-        const own = bands.filter((band) => band.sensorId === s.sensorId);
-        return [withoutBands(s.temp_c, own), withoutBands(s.rh_pct, own)];
-      }),
-    );
-    const plotData = [aligned.t, ...aligned.columns] as unknown as AlignedData;
-    this.markers.setEvents(events);
-    this.markers.setBands(bands);
-    this.plot = new uPlot(this.options(data), plotData, this.plotHost);
-    this.plot.ctx.canvas.setAttribute('role', 'img');
-    this.plot.ctx.canvas.setAttribute('aria-label', this.i18n.t('chartLabel'));
-    this.markers.attach(this.plot);
+    this.notify();
+  }
+
+  private notify(): void {
+    const snapshot = this.snapshot();
+    this.onState({ zoomed: snapshot !== null && this.zoomPan.isZoomed, exportable: snapshot?.model.hasValues === true });
   }
 
   private renderFailures(data: ChartData): void {
@@ -126,33 +179,31 @@ export class SeriesChart implements ChartView {
     );
   }
 
-  private options(data: ChartData): Options {
-    const tempUnit = this.unit('temp_c', '°C');
-    const rhUnit = this.unit('rh_pct', '%');
+  private options(model: ChartModel): Options {
+    const narrow = this.root.clientWidth < NARROW_WIDTH_PX;
     return {
       width: this.width(),
       height: this.height(),
       tzDate: (ts) => uPlot.tzDate(new Date(ts * MS_PER_SECOND), this.zone.name),
-      scales: {
-        x: { time: true, range: [data.window.startT, data.window.endT] },
-        rh: { range: RH_RANGE_PCT },
-      },
+      scales: { x: { time: true, range: this.zoomPan.xRange }, ...this.factory.scales(model) },
       series: [
         {
           label: this.i18n.t('time'),
           value: (_, t: number | null) => (t === null ? '–' : this.i18n.formatDateTime(t, this.zone.name)),
         },
-        ...data.sensors.flatMap((sensor) => this.sensorSeries(sensor, tempUnit, rhUnit)),
+        ...model.columns.map((column) => this.factory.series(column, model.window.resolution)),
       ],
       axes: [
         { values: (_, ticks, _axis, _space, incrS) => ticks.map((t) => this.timeTick(t, incrS)) },
-        { scale: 'temp', label: tempUnit, values: (_, ticks) => ticks.map((v) => this.i18n.formatNumber(v, VALUE_DECIMALS, 0)) },
-        { scale: 'rh', side: AXIS_SIDE_RIGHT, label: rhUnit, grid: { show: false } },
+        ...this.factory.axes(model, narrow),
       ],
+      cursor: { bind: this.zoomPan.cursorBindings(), drag: { x: true, y: false, setScale: false } },
+      plugins: [this.zoomPan.plugin()],
       hooks: {
         drawClear: [
           (u) => {
             this.markers.drawBands(u);
+            this.wetness.draw(u);
           },
         ],
         draw: [
@@ -165,20 +216,20 @@ export class SeriesChart implements ChartView {
             this.markers.place(u);
           },
         ],
+        setScale: [
+          (u, key) => {
+            if (key === 'x') {
+              this.markers.place(u);
+            }
+          },
+        ],
       },
       legend: { live: true },
     };
   }
 
-  private sensorSeries(sensor: SensorChartData, tempUnit: string, rhUnit: string): Series[] {
-    const name = this.catalog.get(sensor.sensorId)?.label ?? sensor.sensorId;
-    const color = this.colors.colorFor(sensor.sensorId) ?? FALLBACK_COLOR;
-    const value = (unit: string) => (_: uPlot, v: number | null) =>
-      v === null ? '–' : `${this.i18n.formatNumber(v, VALUE_DECIMALS)} ${unit}`;
-    return [
-      { label: `${name} · ${this.variableLabel('temp_c')}`, scale: 'temp', stroke: color, width: TEMP_LINE_WIDTH_PX, spanGaps: false, value: value(tempUnit) },
-      { label: `${name} · ${this.variableLabel('rh_pct')}`, scale: 'rh', stroke: color, width: RH_LINE_WIDTH_PX, dash: RH_DASH_PX, spanGaps: false, value: value(rhUnit) },
-    ];
+  private color(sensorId: string): string {
+    return this.colors.colorFor(sensorId) ?? FALLBACK_COLOR;
   }
 
   /** Day and month at local midnight or for steps of a day and more, otherwise HH:MM. */
@@ -190,18 +241,10 @@ export class SeriesChart implements ChartView {
       : this.i18n.formatTime(t, this.zone.name);
   }
 
-  private variableLabel(id: string): string {
-    const variable = this.variables.find((v) => v.id === id);
-    return variable ? this.i18n.label(variable.label, id) : id;
-  }
-
-  private unit(id: string, fallback: string): string {
-    return this.variables.find((v) => v.id === id)?.unit ?? fallback;
-  }
-
   private destroyPlot(): void {
     this.plot?.destroy();
     this.plot = null;
+    this.model = null;
   }
 
   private width(): number {
@@ -209,10 +252,26 @@ export class SeriesChart implements ChartView {
   }
 
   private height(): number {
+    if (this.root.closest(DIALOG_SELECTOR) !== null) {
+      const legendPx = this.plot?.root.querySelector<HTMLElement>('.u-legend')?.offsetHeight ?? 0;
+      return Math.max(MIN_FILL_HEIGHT_PX, this.plotHost.clientHeight - legendPx);
+    }
     return this.root.clientWidth < NARROW_WIDTH_PX ? CHART_HEIGHT_NARROW_PX : CHART_HEIGHT_PX;
   }
 
+  /**
+   * Fit the plot to its container. In the dialog the height depends on the legend, whose height
+   * depends on the width, so the size is applied a second time if the legend changed.
+   */
   private resize(): void {
-    this.plot?.setSize({ width: this.width(), height: this.height() });
+    const plot = this.plot;
+    if (plot === null) {
+      return;
+    }
+    plot.setSize({ width: this.width(), height: this.height() });
+    const height = this.height();
+    if (height !== plot.height) {
+      plot.setSize({ width: this.width(), height });
+    }
   }
 }

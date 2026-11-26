@@ -26,6 +26,11 @@ export class TimeWindow {
     return t >= this.startT && t < this.endT;
   }
 
+  /** True if both windows have the same bounds and resolution. */
+  equals(other: TimeWindow): boolean {
+    return this.startT === other.startT && this.endT === other.endT && this.resolution === other.resolution;
+  }
+
   withResolution(resolution: Resolution): TimeWindow {
     return new TimeWindow(this.startT, this.endT, resolution);
   }

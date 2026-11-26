@@ -78,7 +78,7 @@ export interface LatestFile {
  *
  * `precip_mm` (precipitation since the previous sample, mm) and `battery_v` (battery voltage, V)
  * are optional (WP-1.9): files written before them, or for devices without them, omit the
- * fields. They are read when present and not displayed yet (WP-3.4).
+ * fields. They are read when present and can be shown on the chart's third axis (WP-3.7).
  */
 export interface RawMonthFile {
   readonly sensor_id: string;
