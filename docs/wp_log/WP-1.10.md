@@ -269,3 +269,64 @@ while the export is broken.
 - `diagnostics.py` notes that a dead chromedriver raises urllib3 `MaxRetryError`, which is
   not in `session.DEVICE_ERRORS` or in `FetchService`'s catch. With a dead browser the run
   stops before the table fallback is tried. Worth a look in WP-1.3.x.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Re-reviewed commit dad6708. The round-1 probes were re-run, and new probes were added in
+`/tmp/claude-0/review-1.10/` (`probe_r2.py`, `probe_real.py`). The real table rows came from
+the owner's saved page, extracted with `python3 -I` into a file outside the repository.
+
+Gates (run by the reviewer): `make lint` clean (311 files), `make type` with no issues in 186
+files, `make cov` 2152 passed with a total of 99.81 %. `table.py` is at 99 %, `table_page.py`
+at 97 %, and the other changed modules at 100 %.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | `table_file.py` (`file_name`) | Round 1 no. 1, device name with `(VUT)` | resolved |
+| major | `table.py` (`rows_after`, `_anchor_end`) | Round 1 no. 2, autumn hour lost | resolved |
+| major | `table.py:314-323` | Round 1 no. 3, all rows malformed reported as "up to date" | resolved |
+| minor | `table.py` (`_check_order`) | Round 1 no. 4, sort order not checked | resolved |
+| nit | `table.py` (`_overlap`) | Round 1 no. 5, de-duplication by cell texts | resolved |
+| nit | `session.py` (`_fetch`) | Round 1 no. 6, when the fallback starts | open: owner question 2 |
+| nit | `session.py:11`, `app/fetch.py:16` | `urllib3` is imported directly but is only a transitive dependency (via `selenium`) and is not declared in `pyproject.toml` | open |
+| nit | `docs/wp_log/WP-1.10.md` (Summary) | The Summary still gives the old name `MeteoData_<device> (table)_…`; the section *Changes after review round 1* and `docs/ingest.md` have the new name | open |
+
+What was verified:
+
+1. **File names.** `8615620 77799986 (VUT)` gives `MeteoData_8615620 77799986 (table)_20261126_130000.csv`.
+   `8615620 77678271  (VUT)` (double space) gives `MeteoData_8615620 77678271 (table)_…`.
+   The real device name `8615620 77680921 (VUT)`, the name without a label and the bare serial
+   also give valid names, and so does the ` (n)` copy suffix. For each, `SensorId.parse`
+   returns the right serial. `ExportSourceIds.of` returns `20261126T130000`, the same form as
+   for an export, and `is_identifier` is true. `PortalCsvParser` reads all 5000 real rows of
+   the saved page written as one full-history file.
+2. **Autumn change.** `probe_dst.py` (six cases, among them the round-1 failure with the last
+   stored row at 01:40 CEST) misses no new row. A new sweep with SYNTHETIC data used 30-minute
+   rows across 25.10.2026, 5 rows per page and several pages. It took every position of the
+   last stored row from 05:40Z back to 18:10Z the day before. Every new row reached UTC
+   through `PortalCsvParser`.
+3. **Unreadable page.** The round-1 input (ISO timestamps) now raises
+   `TableReadError: None of the 5 rows of table page 1 could be read …`, so the device fails
+   instead of being reported as up to date. On the real table this error does not fire falsely:
+   all 5000 rows of the saved page parse at page sizes 37, 500 and 5000, with 0 malformed rows.
+   An empty table is not rendered at all (`ko if: MeteoData()?.length`), so it still ends in
+   the "no rows" wait error, not in this one.
+4. **Sort order.** Rows sorted oldest first now raise `The table is not sorted newest first: …`.
+   On the real rows this check does not fire falsely. The 5000 real rows include the spring
+   change of 29.03.2026 (01:49 CET → 03:19 CEST); the saved page has no autumn change (a gap
+   from 28.06 to 16.11.2026). The SYNTHETIC autumn sweep above passes the check too.
+5. **Stop-rule probes from round 1, still correct.** A store newer than the table gives 1 page
+   and no rows. A store older than the whole table gives every page and all rows. With an equal
+   timestamp but a different value, only the newer row is kept. A row arriving while the pages
+   are read leaves 18 unique rows of 18, with no loss.
+6. **Dead chromedriver.** urllib3 `HTTPError` is now in `DEVICE_ERRORS` and in `FetchService`'s
+   catch, and a test covers it. Mechanism checked in the code; no extra probe.
+7. **Scope.** dad6708 touches only files in the WP's scope and leaves `driver.py`,
+   `.github/**` and `storage/` untouched. `SensorId` is unchanged. README did not need a
+   change: it does not describe the file name.
+
+Still not verified, as stated in the hand-off note: nothing has run against the live portal.
+That covers the page-size button, the waits and `JS_READ_TABLE`, and they should be checked on
+the first real run. The open owner questions (precision, source order) do not block the merge.
