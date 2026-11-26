@@ -188,10 +188,12 @@ class PortalTimeouts(_Settings):
 
 
 class PortalTableSettings(_Settings):
-    """Reading the table *Historie meteorologických dat* as the fallback source (WP-1.10).
+    """Reading the table *Historie meteorologických dat*, the primary source (WP-1.10).
 
-    The locators were taken from a saved device page (2026-11) and are **not verified in a
-    live browser** [to be verified]. Relative XPaths start with ``./`` and are evaluated
+    The table is tried first by default (``sources: [table, export]``). The locators were
+    taken from a saved device page (2026-11); the first live run (2026-11-26) read the full
+    history of all four sensors with them. Page-size switching and incremental runs are not
+    yet verified live [to be verified]. Relative XPaths start with ``./`` and are evaluated
     inside the card found by ``card_xpath_template``.
     """
 
@@ -474,7 +476,7 @@ class PortalSettings(_Settings):
     )
     table: PortalTableSettings = Field(
         default_factory=PortalTableSettings,
-        description="Reading the device page's data table, the fallback source (WP-1.10).",
+        description="Reading the device page's data table, the primary source (WP-1.10).",
     )
 
     @model_validator(mode="after")

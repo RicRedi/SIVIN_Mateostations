@@ -34,7 +34,7 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
   Europe/Prague converted to UTC); rejected files go to quarantine with a report. Source: the
   device page's data table, written as a file in the export's CSV layout, with the Excel export
   as the fallback (`ingest.portal.sources: [table, export]`,
-  [docs/ingest.md](docs/ingest.md#fallback-the-device-table)). Only rows newer than the last
+  [docs/ingest.md](docs/ingest.md#the-device-table-primary-source)). Only rows newer than the last
   stored measurement are read.
 - **Quality control:** missing values, range, spike, step, stuck sensor, sampling, precipitation
   and battery checks; a manually kept off-site log (`sensors/offsite_log.yaml`) marks periods

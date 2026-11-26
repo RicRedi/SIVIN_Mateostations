@@ -9,11 +9,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 import pytest
 from tests.app.fake_portal import VIEWMODEL_JSON, credentials
-from tests.app.project import OUTDOOR_SENSOR, Project
+from tests.app.project import OUTDOOR_SENSOR, TEST_CONFIG, Project, make_project
 from tests.ingest.portal.conftest import FakeDriverFactory
 from tests.ingest.portal.table_fakes import TablePortalDriver, TableState, synthetic_rows
 
@@ -23,7 +24,7 @@ from sivin.app.outcome import Outcome
 from sivin.app.workspace import Workspace
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.driver import WebDriverFactory
-from sivin.ingest.portal.settings import PortalSettings
+from sivin.ingest.portal.settings import PortalSettings, PortalSource
 from sivin.storage.errors import StoreError
 from sivin.storage.store import MeasurementStore
 
@@ -139,3 +140,36 @@ def test_sivin_run_reads_only_the_rows_newer_than_the_store(project: Project) ->
     # Only the two new rows were read and written: no full-history file, no identical rows.
     assert second.ingest.appends[OUTDOOR].new_rows == 2
     assert second.ingest.appends[OUTDOOR].identical_skipped == 0
+
+
+DEFAULT_ORDER_CONFIG = TEST_CONFIG.replace("    sources: [export, table]\n", "")
+"""The test configuration without ``sources``: the default order ``[table, export]`` applies."""
+
+
+def test_the_default_order_reads_the_table_although_the_export_works(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert DEFAULT_ORDER_CONFIG != TEST_CONFIG
+    project = make_project(tmp_path / "project", config=DEFAULT_ORDER_CONFIG)
+    built: list[TablePortalDriver] = []
+
+    def build(settings: PortalSettings) -> WebDriverFactory:
+        driver = TablePortalDriver(
+            settings, VIEWMODEL_JSON, None, {OUTDOOR_NAME: TableState(synthetic_rows(NEWEST, 3))}
+        )
+        built.append(driver)
+        return FakeDriverFactory(settings, driver)
+
+    factory = ServiceFactory(Workspace.open(start=project.root), credentials=credentials)
+    assert factory.portal_settings().sources == (PortalSource.TABLE, PortalSource.EXPORT)
+    service = FetchService(factory.portal_settings(), credentials, build, factory.redactor)
+
+    with caplog.at_level(logging.INFO):
+        report = service.fetch([OUTDOOR])
+
+    assert report.outcome is Outcome.OK
+    (path,) = report.files
+    assert "(table)" in path.name
+    (driver,) = built
+    assert not any(entry[0] == "click" and "excel" in entry[1] for entry in driver.log)
+    assert factory.ingest_service().ingest(report.files).appends[OUTDOOR].new_rows == 3

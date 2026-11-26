@@ -48,8 +48,9 @@ never starts anything, it only downloads the JSON files of the last deployment.
    [Running it by hand](#running-it-by-hand))
 
    with `SIVIN_USER` and `SIVIN_PASSWORD` from the repository secrets. Chrome and chromedriver
-   come from the runner image (`$CHROMEWEBDRIVER`, [ingest.md](ingest.md)). `sivin run` fetches,
-   ingests, checks, computes the indices of the current season and builds `site/data`
+   come from the runner image (`$CHROMEWEBDRIVER`, [ingest.md](ingest.md)). `sivin run` fetches
+   each sensor's data (the device table first, the Excel export as the fallback,
+   [ingest.md](ingest.md#the-device-table-primary-source)), ingests, checks, computes the indices of the current season and builds `site/data`
    incrementally, then appends one run record ([cli.md](cli.md#sivin-run)). The log level is
    always INFO: the more verbose level is never used in Actions.
 3. **Job summary.** `sivin report --format markdown --run latest --since <start> --outcome
@@ -59,7 +60,7 @@ never starts anything, it only downloads the JSON files of the last deployment.
 4. **Exit code.** On exit code 1 a step first counts the `fetch <device>: …` failures in this
    run's record (`data/runs/*.jsonl`, the newest record started after the run step began) and,
    if there are any, writes the annotation
-   `::warning::No export was downloaded for N device(s); the run stays green but those devices
+   `::warning::No data were fetched for N device(s); the run stays green but those devices
    got no new data. …`, so a green run without new data is visible on the run page. If the
    record cannot be read, a generic *Partial failure* warning says so. 0 and 1 continue; 4 (portal unavailable) continues with the stored data and
    marks the run with a warning; anything else (3, 5, 130, …) fails the job **after** the
@@ -131,8 +132,9 @@ be deployed as it is (rollback, below). The `.gitignore` of `main` ignores `/dat
 
 **Not committed:**
 
-- `data/downloads/`: every run downloads the full exports again; their content is in the store
-  and their names are in the run record.
+- `data/downloads/`: the fetched files of a run (a table file holds only the rows newer than
+  the store, an export the full history); their content is in the store and their names are in
+  the run record.
 - `data/quarantine/` (**decision of WP-4.1**): `sivin ingest` moves a rejected export there with
   its `<file>.report.json`. On the `data` branch every daily run would add another dated copy
   of a persistently bad export (a fresh runner starts empty), so the public history would grow
@@ -166,7 +168,8 @@ The workflow file must be on the default branch before the *Run workflow* button
    `https://<owner>.github.io/<repository>/` with the registry but no measurements (site data
    with an empty manifest; verified locally, but how the web shows an empty manifest was not
    checked in a browser).
-2. *Run workflow* without options. Expected: the summary lists one export file per sensor and
+2. *Run workflow* without options. Expected: the summary lists one file per sensor (`(table)` in the name when it
+   was read from the device table) and
    the rows added per sensor; exit code 0 or 1. If it says `DATA_SOURCE_UNAVAILABLE` (4), check
    the secrets and the job log (login, chromedriver). Commit on `data`:
    `data: run of …, N new rows from M files, …`.
@@ -220,7 +223,7 @@ Open the run (Actions → pipeline → the run) and scroll to the summary. It sh
 - **Rows added per sensor** — new rows, filled values, conflicting and replaced values;
 - **Input validation findings** — counts per `<severity>:<rule>` ([data-format.md](data-format.md));
 - **Rejected files** — the reason; the report is in the run artifact;
-- **Failures** — devices not downloaded, sensors or indices that failed (`fetch …`, `qc …`,
+- **Failures** — devices without fetched data, sensors or indices that failed (`fetch …`, `qc …`,
   `indices …`, `site …`);
 - **Derived results not updated** — events files whose QC failed (the previous result is kept);
 - **Export files** — the processed files;
@@ -238,7 +241,7 @@ or `--format json` (counts only, for scripts);
 | Code | Job | Meaning | What to do |
 |---|---|---|---|
 | 0 `OK` | green | everything worked | nothing |
-| 1 `PARTIAL_FAILURE` | green, warning | a file rejected, a device not downloaded, a sensor or index failed; everything else was processed and published | read *Rejected files* / *Failures*; one-off failures (a timeout) fix themselves on the next run. The annotation `No export was downloaded for N device(s)` means those devices got no new data; if it repeats daily, read the download diagnostics in the log ([ingest.md](ingest.md#when-a-download-fails)) and try a run with `headed` |
+| 1 `PARTIAL_FAILURE` | green, warning | a file rejected, no data fetched for a device, a sensor or index failed; everything else was processed and published | read *Rejected files* / *Failures*; one-off failures (a timeout) fix themselves on the next run. The annotation `No data were fetched for N device(s)` means that neither the device table nor the export delivered for those devices, so they got no new data; if it repeats daily, read the diagnostics in the log ([ingest.md](ingest.md#when-a-download-fails)) and try a run with `headed` |
 | 4 `DATA_SOURCE_UNAVAILABLE` | green, warning | the portal could not be used (secrets missing, login failed, portal or browser unreachable); the stored data were processed and published again | check the secrets; if the portal changed, see below; the data are safe |
 | 3 `SETUP_ERROR` | **red** | invalid `config/sivin.yaml`, sensor registry or off-site log: nothing processed, nothing committed, the site stays as it was | the job log names the file, entry, line and field; fix it on `main` (`sivin sensors check` locally) and run the workflow |
 | 5 `INTERNAL_ERROR` | **red** | a bug (the traceback is in the job log, credentials redacted) | report it; nothing was committed |
@@ -249,8 +252,9 @@ previous data, and after 36 h the web marks the sensors as stale (`site.stale_af
 
 ## When the portal changes or fails
 
-- **Symptoms:** exit code 4 (login, device list) or 1 with `fetch <device>: …` failures
-  (export button, download timeout) on every run.
+- **Symptoms:** exit code 4 (login, device list) or 1 with `fetch <device>: …` failures on
+  every run (each names the reason per source, e.g. `table: TableReadError: …; export:
+  DownloadTimeoutError: …`).
 - **The data are safe:** a portal failure never deletes stored data; the run still processes
   and publishes what is stored.
 - **Diagnose locally:** `sivin fetch --headed` shows the browser; [ingest.md](ingest.md) lists
@@ -333,11 +337,17 @@ there is always a change), which may well keep the repository active, but do not
 - **Actions minutes:** standard GitHub-hosted runners are free for public repositories. A run
   takes a few minutes (installing Python and Node dependencies dominates while there are few
   sensors); the job timeouts are 5 (gate), 45 (collect), 20 (build-site) and 10 (deploy) minutes.
-  A device whose download never arrives costs `attempts_per_device` × `download_wait_s`
-  (2 × 120 s = 4 min) plus the page waits, settle pauses and reloads of both attempts, about
-  4.5–5 min in total, so 4 failing devices add about 18–20 min to `collect`. The 45 min
-  `collect` timeout is reached at roughly 8–9 devices failing in the same run; a total time
-  budget for the fetch is a possible follow-up, not implemented.
+  Each sensor's data are fetched from the device table first, the Excel export being only the
+  fallback (`ingest.portal.sources: [table, export]`). A device whose table works costs no
+  export waits; with the old order `[export, table]` every failing export cost
+  `attempts_per_device` × `download_wait_s` (2 × 120 s = 4 min) plus the page waits, settle
+  pauses and reloads of both attempts, about 4.5–5 min, i.e. about 18–20 min per run with four
+  sensors. A device for which **both** sources fail costs the table attempts
+  (`attempts_per_device` × `table.rows_wait_s` = 2 × 30 s = 1 min, plus the settle pauses and
+  reloads, about 1.5 min) and then the export attempts (about 4.5–5 min), about 6–6.5 min in
+  total (an estimate from the settings, not measured), so 4 such devices add about 25 min to
+  `collect`. The 45 min `collect` timeout is reached at roughly 6–7 devices failing completely
+  in the same run; a total time budget for the fetch is a possible follow-up, not implemented.
 - **Schedule:** scheduled runs can start late when GitHub is under load (the full hour is the
   busiest time), and under very high load a scheduled run can be dropped. The gate tolerates
   delays; a dropped run is simply missing for that day, and the next one catches up as long as

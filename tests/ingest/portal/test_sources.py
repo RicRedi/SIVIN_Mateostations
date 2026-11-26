@@ -1,4 +1,4 @@
-"""Sources of a device's data and the fallback from the export to the table (WP-1.10).
+"""Sources of a device's data and the order in which they are tried (WP-1.10).
 
 The fake portal of WP-1.3 with a SYNTHETIC device table on each meteorological tab; no browser,
 no network.
@@ -203,6 +203,55 @@ def test_a_device_fails_only_when_every_source_failed(
     assert table_reason.startswith("TableReadError: No rows in the table")
     assert table_reason.endswith("(2 attempts)")
     assert f"Table read of {SECOND} failed (TableReadError); diagnostics:" in caplog.text
+
+
+def _excel_clicks(driver: TablePortalDriver) -> list[Any]:
+    return [entry for entry in driver.log if entry[0] == "click" and "excel" in entry[1]]
+
+
+def test_the_default_order_reads_the_table_and_never_clicks_the_export(
+    table_settings: PortalSettings, credentials: PortalCredentials, viewmodel_json: str
+) -> None:
+    session, driver = _session(
+        table_settings,
+        credentials,
+        viewmodel_json,
+        tables=_tables(),
+        sources=PortalSettings().sources,
+    )
+
+    result = session.run()
+
+    assert PortalSettings().sources == (PortalSource.TABLE, PortalSource.EXPORT)
+    assert result.ok
+    assert [download.source for download in result.downloads] == ["table"] * 3
+    assert _excel_clicks(driver) == []
+
+
+def test_the_default_order_falls_back_to_the_export_for_an_empty_table(
+    table_settings: PortalSettings,
+    credentials: PortalCredentials,
+    viewmodel_json: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tables = _tables()
+    tables[SECOND] = TableState([])  # the table of one device shows no rows
+    session, driver = _session(
+        table_settings,
+        credentials,
+        viewmodel_json,
+        tables=tables,
+        sources=PortalSettings().sources,
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = session.run()
+
+    assert result.ok
+    sources = {download.device.name: download.source for download in result.downloads}
+    assert sources == {FIRST: "table", SECOND: "export", THIRD: "table"}
+    assert len(_excel_clicks(driver)) == 1
+    assert f"{SECOND}: delivered by the export source after 1 failed source(s)." in caplog.text
 
 
 def test_table_only_never_clicks_the_export(
