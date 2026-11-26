@@ -474,7 +474,18 @@ site/data/indices/<season>.json
 // indices/<season>.json
 { "season": 2026, "computed_at": "…", "sensors": { "77678271": {
     "huglin": { "value": 1834.2, "unit": "°C·d", "coverage": 0.97, "complete": true,
-                "class": "temperate_warm" } } } }
+                "class": "temperate_warm" },
+    "frost": { "value": 3.5, "unit": "h", "coverage": 0.95, "complete": true, "class": null,
+               "daily": { "levels": ["none", "frost", "hard_frost"],
+                          "start": "2026-04-01", "end": "2026-10-31",
+                          "date": ["2026-04-14"], "value": [3.5], "level": ["frost"] } } } } }
+// daily od WP-3.4 (volitelné pole, web ho musí tolerovat chybějící): denní úroveň rizika jen
+// u indexů, které ji definují (botrytis_broome, powdery_mildew_gt, frost); levels = možné
+// úrovně od nejnižšího rizika, start–end = období indexu (místní data), den bez dostatku dat
+// má level i value null, den období, který chybí v date, je „bez dat“. Úrovně jsou jen třídy
+// definované v indexech (docs/site.md), žádné nové prahy.
+// manifest.json má od WP-3.4 volitelné min_daily_coverage (podíl 0–1, analytics.min_daily_coverage):
+// web podle něj bere pro rekordy čidla jen úplné dny.
 ```
 
 Hodnoty v příkladech jsou ilustrační, ne měření.

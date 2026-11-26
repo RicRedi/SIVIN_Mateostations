@@ -6,7 +6,28 @@ literature. The literature check is in [../literature-verification.md](../litera
 
 The indices are computed from the quality-checked temperature and humidity of each sensor with
 `sivin indices --season YEAR` (part of the daily `sivin run`) and written to
-`data/derived/indices/<season>.json`. They are not shown on the web portal yet (WP-3.4).
+`data/derived/indices/<season>.json`; `sivin build-site` publishes them for the web portal
+(`indices/<season>.json`, [../site.md](../site.md)).
+
+## On the web portal
+
+The "Ukazatele" (indicators) section of the portal ([../web.md](../web.md#indicators-wp-34))
+shows, for the selected sensors and season, with a "Jak se počítá" (how it is computed) link to
+the page of each index:
+
+| Where | Indices |
+|---|---|
+| Season index cards (value, unit, class of a complete season, coverage) | `gdd_winkler`, `huglin`, `bedd`, `gst`, `cool_night` |
+| Season index cards, marked **orientational** (estimated date) | `budburst`, `gfv` (véraison; the flowering date is not published), `gsr` |
+| Daily risk strip (traffic-light level per day, grey = no data) | `botrytis_broome` (marked as estimated: wetness from humidity), `powdery_mildew_gt`, `frost` |
+| Not shown on the portal (published in `indices/<season>.json` only) | `dew_point`, `vpd`, `dtr_ripening`, `heat_hours`, `winter_freeze`, `tropical_days_nights` |
+
+The daily levels of the risk strip are the classes the indices define, nothing else:
+powdery mildew `low` / `moderate` / `high` (UC IPM points of the day's index), frost `none` /
+`frost` (T ≤ 0 °C) / `hard_frost` (T ≤ −2 °C, project default), grey mould the configured
+`risk_bands` of the day's highest infection probability — without bands (the default, no class
+limits in the literature) only `no_wetness` / `wetness` (an estimated wetness period ended that
+day). Dew point, VPD and leaf wetness can also be drawn in the chart (WP-3.7).
 
 Days are local calendar days (Europe/Prague). An index uses only days with enough valid
 measurements. Missing days are not filled, so sums over a season with gaps come out too low, and
