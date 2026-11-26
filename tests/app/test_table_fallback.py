@@ -1,4 +1,4 @@
-"""The table fallback through FetchService and the ingest into the store (WP-1.10).
+"""The table source through FetchService and the ingest into the store (WP-1.10).
 
 The fake portal's export fails for the registered outdoor sensor; its device table holds
 SYNTHETIC rows. No browser, no network.

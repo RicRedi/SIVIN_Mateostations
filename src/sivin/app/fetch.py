@@ -240,7 +240,7 @@ class PortalExports:
     def exports(
         self, sensors: Sequence[SensorId] | None
     ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
-        """Download the exports (see :class:`~sivin.app.run.ExportSource`).
+        """Fetch each device's data, table first (see :class:`~sivin.app.run.ExportSource`).
 
         Parameters
         ----------
