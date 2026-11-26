@@ -34,7 +34,8 @@ The steps are run by the `sivin` command ([cli.md](cli.md)): `sivin fetch` (1), 
 (2–4), `sivin qc` (5), `sivin indices` (7), `sivin run` (all of them); the site export (8) is
 WP-3.2.
 
-1. `PortalClient` logs in, lists devices and downloads one export per sensor.
+1. `PortalClient` logs in, lists devices and fetches one file per sensor: the device table
+   written in the export's CSV layout, or the Excel export as the fallback.
 2. `ExportParser` implementations turn each file into a `MeasurementSeries`; local wall-clock
    timestamps are converted to UTC by `LocalTimeConverter`.
 3. `InputValidator` produces a `ValidationReport`; a file with errors is quarantined and never

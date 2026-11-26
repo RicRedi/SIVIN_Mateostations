@@ -117,6 +117,10 @@ Planned ──► In progress ──► In review ──► Ready for owner ─�
 | 2026-10-05 | Výběr čidel na webu škálovatelný: rozbalovací seznam s vyhledáváním, **dvě úrovně členění obec → viniční trať** (WP-3.5). Registr dostává pole `municipality` a `track` místo `site`. |
 | 2026-10-06 | Poznámky v logu mimo-vinici (`note`) jsou **interní**; na webu se z off-site události publikuje jen kategorie důvodu (`reason`). |
 | 2026-10-06 | Q4 (část): všechna 4 čidla obec **Dolní Věstonice**; trať **Nad Silnicí** (77678271, 77680921, 77800065) a **U Kapličky** (77799986). Více čidel v jedné trati je běžný stav. Odrůda zatím neuvedena. |
+| 2026-11-26 | Úložiště zůstává rozdělené **po letech** (měsíční dělení jen jako možné budoucí rozšíření, `partitioning_registry`). |
+| 2026-11-26 | Zdroj dat: export z portálu se nestahuje → **čtení tabulky na stránce čidla** (WP-1.10); od prvního úspěšného běhu výchozí pořadí `ingest.portal.sources: [table, export]`. Čte se jen to, co je novější než poslední uložené měření. |
+| 2026-11-26 | Čidlo 77680921 bylo od 16. 11. 2026 v kanceláři (vadné) a mezera 28. 6.–16. 11. 2026 je vybitá baterie: **do logu mimo vinici se nezapisuje** (rozhodnutí ownera). |
+| 2026-11-26 | Web: graf se zvětšením, posunem/zoomem myší, odvozenými veličinami na vyžádání a exportem CSV (WP-3.7); pak analytika na webu (WP-3.4: karty indexů, denní pruh rizika, rekordy a extrémy). Barvení mapy podle ukazatele, srovnání sezón, oblíbená čidla a „důvěryhodnost dat“ odloženy (§4 *Možné pokračování*). **E-mailová upozornění ani souhrny zatím ne.** |
 
 ### 0.6 Otevřené otázky na ownera
 
@@ -294,9 +298,9 @@ Cíl: kód, který se čte jako popis domény. Konkrétně:
 ```
                    ┌────────────── GitHub Actions (cron, např. 1× za hodinu) ──────────────┐
 lemon.e-service.cz │ PortalClient ─► ExportParser ─► InputValidator ─► MeasurementStore     │
-   (Excel export)  │   (Selenium)      (xlsx/csv)      (schéma, čas)    (větev `data`)      │
-                   │                                                         │              │
-                   │   QualityPipeline (rozsah, spike, step, stuck, nasazení) │              │
+  (tabulka čidla / │   (Selenium)      (xlsx/csv)      (schéma, čas)    (větev `data`)      │
+   Excel export    │                                                         │              │
+   (záloha))       │   QualityPipeline (rozsah, spike, step, stuck, nasazení) │              │
                    │   SensorAligner (párování čidel)   ClimateIndex (indexy)  ▼              │
                    │                                       SiteBuilder ─► site/data/*.json   │
                    └──────────────────────────────────────────────┬───────────────────────────┘
@@ -341,7 +345,7 @@ by k tomu potřeboval GitHub token a čekal by minuty). Místo toho:
 
 1. Workflow `pipeline.yml` běží **podle cronu** (návrh: každou hodinu; čidla měří ~každých 30 min)
    a navíc ručně tlačítkem *Run workflow* (`workflow_dispatch`).
-2. Běh: přihlášení na portál → stažení exportů všech čidel → parsování a validace → připojení
+2. Běh: přihlášení na portál → načtení dat čidel (tabulka, export jako záloha) → parsování a validace → připojení
    nových záznamů do úložiště (duplicity se zahodí) → QC → indexy → vygenerování `site/data` →
    build webu → deploy na Pages. Vše v **jednom** workflow (push tokenem `GITHUB_TOKEN` další
    workflow nespouští).
@@ -848,16 +852,45 @@ na konci a šedě, shlukování markerů v mapě při oddálení, ovládání kl
 - **WP-2.5 — Modely chorob se srážkami:** pravidlo 3-10 pro plíseň révovou (orientační),
   zpřesnění Broomeova modelu (déšť jako začátek ovlhčení), dokumentace v `docs/indices/`.
 
+**Provozní navázání (2026-10/11, mergnuto):**
+- **WP-1.3.1 — Diagnostika stahování:** při selhání exportu blok diagnostiky v logu (složka,
+  výchozí složka Chrome, stav prohlížeče, hlášky portálu).
+- **WP-1.3.2 — Stahování v Chrome bez okna:** povolení stahování přes CDP, čekání 120 s, ruční
+  běh `headed` v pipeline, varování, když se u čidla nic nestáhne.
+- **WP-1.10 — Tabulka na portálu jako zdroj dat:** čtení tabulky „Historie meteorologických dat“,
+  jen nové řádky (celá historie jen napoprvé), výstup ve formátu CSV exportu; zdroje
+  `ingest.portal.sources`.
+- **WP-3.6 — Kopírování polohy čidla:** řádek Poloha a tlačítko Kopírovat na kartě čidla.
+
 ### Vlna 3
 
+- **WP-3.7 — Graf: průzkum dat (`wp/3.7-chart-explorer`):** zvětšení grafu do dialogu včetně
+  všech ovládacích prvků (křivky, období, rozlišení, odvozené veličiny), zoom kolečkem, posun
+  tažením, dvojklik = původní rozsah; odvozené veličiny na vyžádání (rosný bod, VPD, absolutní
+  vlhkost, odhad ovlhčení listu, srážky, baterie; stejné vzorce jako `docs/indices`); export
+  zobrazených dat do CSV.
 - **WP-2.4 — Mikroklima a prostorové srovnání** (§3.4).
-- **WP-3.4 — Analytika na webu:** karty indexů, kumulativní křivky sezóny vs. předchozí roky,
-  kalendář rizik, odkazy na `docs/indices`.
+- **WP-3.4 — Analytika na webu (po WP-3.7):** karty indexů sezóny (GDD/Winkler, Huglin, BEDD,
+  GST, fenologie), **denní pruh rizika** v barvách semaforu (plíseň šedá, padlí, mráz) s
+  vysvětlením pásem a vstupů, **rekordy a extrémy** čidla (min/max sezóny, první a poslední
+  mráz), odkazy na `docs/indices`. Srovnání sezón až s více sezónami dat.
 - **WP-5.1 — Publikační grafy a animace:** `sivin plot` (jedna / dvě osy, cs/de, PNG/PDF/EPS)
   a `sivin animate` nahrazují `one_variable_plot.py`, `two_variable_plot.py`, `rolling_stats.py`,
   `generate_animation.py`.
 - **WP-5.2 — Odstranění legacy a nové README:** smazat legacy skripty a YAML, přepsat README
   (instalace, provoz, odkazy do `docs/`).
+
+### Možné pokračování (u ledu, rozhodnutí ownera 2026-11-26)
+
+- Oblíbená čidla (hvězdička, uložená v prohlížeči).
+- Důvěryhodnost dat: čas poslední aktualizace webu, počet vyřazených hodnot u čidla, zdroj a
+  licence dat v patičce.
+- Barvení mapy podle ukazatele (vlhkost, srážky, GDD, riziko, mrazové hodiny) — až bude víc čidel.
+- Srovnání sezón (GDD/Huglin letos vs. dřív) — až bude víc sezón dat.
+- Celkový časový limit stahování v pipeline (limit 45 min se vyčerpá při ~6–7 současně
+  selhávajících čidlech).
+- Měsíční dělení úložiště (jen při stovkách čidel nebo minutovém kroku).
+- Denní souhrn / RSS — **bez e-mailů** (owner je zatím nechce).
 
 ---
 
@@ -868,7 +901,7 @@ WP-0.1 ─┬─ WP-1.1 ─┐
         ├─ WP-1.2 ─┤
         ├─ WP-1.3 ─┼─ WP-1.7 ─┐
         ├─ WP-1.4 ─┤          ├─ WP-3.2 ─┬─ WP-4.1
-        ├─ WP-1.5 ─┤          │          └─ WP-3.4
+        ├─ WP-1.5 ─┤          │          └─ WP-3.7 ── WP-3.4
         ├─ WP-1.6 ─┼──────────┼─ WP-2.4
         ├─ WP-2.1 ─┤          │
         ├─ WP-2.2 ─┤          │
@@ -879,7 +912,8 @@ WP-0.1 ─┬─ WP-1.1 ─┐
 
 Vlna 0 a 1 jsou mergnuté. Vlna 2 je rozdělená na 2a (WP-0.2, WP-1.8, WP-L.1 paralelně),
 2a-bis (WP-1.9), 2b (WP-1.7, WP-3.2) a 2c (WP-4.1, WP-3.3); každá podvlna začíná po merge
-předchozí. WP-2.5 (choroby se srážkami) patří do vlny 3.
+předchozí. WP-2.5 (choroby se srážkami) patří do vlny 3. Web pokračuje WP-3.7 (průzkum dat
+v grafu) a po jeho merge WP-3.4 (analytika na webu).
 
 ---
 

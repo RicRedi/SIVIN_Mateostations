@@ -310,7 +310,7 @@ class TestHeadedRun:
 class TestDownloadWarning:
     """Exit code 1 with devices that downloaded nothing gets a ``::warning::`` annotation."""
 
-    NAME = "Warn about devices without a download"
+    NAME = "Warn about devices without fetched data"
     STARTED = "2026-11-26T05:00:05Z"
 
     def _record(self, started_at: str, failures: list[str]) -> str:
@@ -354,8 +354,8 @@ class TestDownloadWarning:
         )
         process = self._warn(workflow, tmp_path, [earlier, "{broken", this_run])
         assert process.stdout.strip() == (
-            "::warning::No export was downloaded for 2 device(s); the run stays green but those "
-            "devices got no new data. See the job summary and the download diagnostics in the log."
+            "::warning::No data were fetched for 2 device(s); the run stays green but those "
+            "devices got no new data. See the job summary and the fetch diagnostics in the log."
         )
 
     def test_takes_the_last_record_in_file_order(

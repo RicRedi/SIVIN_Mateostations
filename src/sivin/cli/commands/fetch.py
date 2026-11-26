@@ -1,4 +1,4 @@
-"""``sivin fetch``: download the exports from the data provider's portal."""
+"""``sivin fetch``: fetch each sensor's data from the data provider's portal."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ def fetch(
         typer.Option(
             "--download-dir",
             file_okay=False,
-            help="Save the exports here instead of ingest.portal.download_dir.",
+            help="Save the fetched files here instead of ingest.portal.download_dir.",
         ),
     ] = None,
 ) -> None:
-    """Log in to the portal and download one export per sensor.
+    """Log in to the portal and fetch one file per sensor (table or export).
 
     Credentials come from SIVIN_USER and SIVIN_PASSWORD (environment or .env); they are
     never printed. Exit code 1 if a device failed, 3 if nothing could be fetched.

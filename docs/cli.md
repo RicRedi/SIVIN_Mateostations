@@ -111,7 +111,8 @@ Off-site log: 1 period(s).
 
 ## `sivin fetch [--sensor ID ...] [--headed] [--download-dir DIR]`
 
-Logs in to the portal and downloads one export per device into `ingest.portal.download_dir`
+Logs in to the portal and fetches one file per device (the device table, or the Excel export as
+the fallback; `ingest.portal.sources`) into `ingest.portal.download_dir`
 (`data/downloads`), with the settings of `ingest.portal` (see [ingest.md](ingest.md)).
 
 | Option | Meaning |

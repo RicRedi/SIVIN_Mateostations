@@ -1,8 +1,9 @@
 # Daily data pipeline and GitHub Pages deployment (WP-4.1, docs/operations.md).
 #
-# Once a day at 06:00 Europe/Prague: download the exports from the portal, ingest, quality
-# control, indices and site data (`sivin run`), commit the results to the `data` branch, build
-# the web portal with those data and deploy it to GitHub Pages. Also runs on demand
+# Once a day at 06:00 Europe/Prague: fetch each sensor's data from the portal (the device table
+# first, the Excel export as the fallback), ingest, quality control, indices and site data
+# (`sivin run`), commit the results to the `data` branch, build the web portal with those data
+# and deploy it to GitHub Pages. Also runs on demand
 # (Actions -> pipeline -> Run workflow); a manual run can show the browser window on a virtual
 # display (input `headed`) to compare with the headless scheduled runs.
 
@@ -209,9 +210,9 @@ jobs:
           fi
           cat "$summary" >> "$GITHUB_STEP_SUMMARY"
 
-      # Exit code 1 still publishes, so a run in which the portal gave no export for some
-      # devices would stay green; this step makes that visible as a warning annotation.
-      - name: Warn about devices without a download
+      # Exit code 1 still publishes, so a run in which no data were fetched for some devices
+      # would stay green; this step makes that visible as a warning annotation.
+      - name: Warn about devices without fetched data
         if: always() && steps.run.outputs.code == '1'
         env:
           STARTED: ${{ steps.run.outputs.started }}
@@ -219,7 +220,7 @@ jobs:
           set +e -uo pipefail
           # The last record in file order (log files by date, lines appended) that started after
           # the pipeline step began (fractions of a second dropped); its failures
-          # "fetch <device>: <reason>" are the devices without a download.
+          # "fetch <device>: <reason>" are the devices for which no source delivered data.
           failed=$(jq -nR --arg started "$STARTED" '
             def utc: sub("\\.[0-9]+"; "") | fromdateiso8601;
             [inputs | fromjson? | objects
@@ -229,9 +230,9 @@ jobs:
               else [(.failures // [])[] | strings | select(startswith("fetch "))] | length end
           ' data/runs/*.jsonl 2> /dev/null)
           if [ -z "$failed" ]; then
-            echo "::warning::Partial failure (exit code 1); the run record could not be read to count devices without a download. See the job summary."
+            echo "::warning::Partial failure (exit code 1); the run record could not be read to count devices without fetched data. See the job summary."
           elif [ "$failed" -gt 0 ]; then
-            echo "::warning::No export was downloaded for $failed device(s); the run stays green but those devices got no new data. See the job summary and the download diagnostics in the log."
+            echo "::warning::No data were fetched for $failed device(s); the run stays green but those devices got no new data. See the job summary and the fetch diagnostics in the log."
           fi
 
       - name: Judge the exit code

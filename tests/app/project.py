@@ -38,6 +38,7 @@ ingest:
   parsers:
     latest_timestamp: "2030-01-01T00:00:00"
   portal:
+    sources: [export, table]
     timeouts:
       element_wait_s: 0.2
       download_wait_s: 3.0
@@ -48,7 +49,8 @@ ingest:
     table:
       rows_wait_s: 0.2
 """
-"""Fixes the parsers' 'future timestamp' limit so the tests do not depend on today's date, and
+"""Fixes the parsers' 'future timestamp' limit so the tests do not depend on today's date,
+tries the export first (the fake portal models it; the default is ``[table, export]``) and
 shortens the portal waits for the fake browser (no real sleeping)."""
 
 HEADER: Final = (

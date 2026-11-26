@@ -1,4 +1,4 @@
-"""Reading the device page's data table, page by page, as the fallback source (WP-1.10).
+"""Reading the device page's data table, page by page, the primary source (WP-1.10).
 
 The device page shows the same measurements as the Excel export in the table *Historie
 meteorologických dat*, newest first, with a paging control below it. :class:`TableReader`

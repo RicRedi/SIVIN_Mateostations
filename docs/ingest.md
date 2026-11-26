@@ -1,17 +1,19 @@
-# Ingest: downloading exports from the data provider's portal
+# Ingest: fetching data from the data provider's portal
 
 The sensors' data provider, `https://lemon.e-service.cz/`, is a [DotVVM](https://www.dotvvm.com/)
-web application **without an API** (owner decision, MIGRATION_PLAN §0.5). The exports are
-downloaded by driving a real browser (Chrome/Chromium through Selenium) through the same clicks
+web application **without an API** (owner decision, MIGRATION_PLAN §0.5). The data (the
+device table, or the Excel export as the fallback) are fetched by driving a real browser (Chrome/Chromium through Selenium) through the same clicks
 a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the legacy
 `chrome_driver.py`.
 
-> **Status:** the client has been tested only against a fake browser that imitates the portal's
-> pages as the legacy script describes them. It has **not been run against the real portal**
-> (the agents' sandbox cannot reach it). The first real run must be watched; see
-> [Troubleshooting](#troubleshooting). The table fallback ([Fallback: the device
-> table](#fallback-the-device-table)) was built from a page the owner saved; its clicks and
-> waits are equally unverified in a live browser.
+> **Status:** the tests run against a fake browser that imitates the portal's pages (the agents'
+> sandbox cannot reach the portal). In the first live run (2026-11-26) the **device table**
+> ([The device table (primary source)](#the-device-table-primary-source)) delivered the full
+> history of all four sensors (9033, 9571, 8829 and 9562 rows, 36,995 rows in total; exit
+> code 0). Still **not verified live**: switching the page size, the incremental daily runs
+> (only rows newer than the store), and the Excel export: in headless Chrome it still produced
+> no file, also with the download permission granted through CDP. Watch the next runs; see
+> [Troubleshooting](#troubleshooting).
 
 ## Components
 
@@ -27,7 +29,7 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 | `DownloadWatcher` | `watcher.py` | Detects the file a click produced: a *new*, non-empty, size-stable file that is not a late file of an earlier download and not another sensor's export. |
 | `DownloadDiagnostics`, `DownloadReport` | `diagnostics.py` | After a failed download: what the download directories, the browser and the portal's notices show, logged as one WARNING block (see [When a download fails](#when-a-download-fails)). |
 | `PortalSession` | `session.py` | One run: login, device list, then per device the configured sources in order until one delivers; a device fails only when every source failed, the run goes on. Returns `SessionResult`. |
-| `DeviceSource`, `ExportSource`, `TableSource`, `device_source_registry`, `SourceContext`, `LastTimestamps` | `sources.py` | The ways of getting a device's data (`ingest.portal.sources`): the Excel export, and the device table as the fallback. New ways are new registered subclasses. |
+| `DeviceSource`, `ExportSource`, `TableSource`, `device_source_registry`, `SourceContext`, `LastTimestamps` | `sources.py` | The ways of getting a device's data (`ingest.portal.sources`): the device table (tried first by default) and the Excel export as the fallback. New ways are new registered subclasses. |
 | `TableReader`, `TableRowParser`, `TableReading` | `table.py` | Which table pages are read (newest to older, until the last stored measurement) and which rows are kept; no Selenium. |
 | `PortalTablePage` | `table_page.py` | The table in the browser: wait for rows, read a page with one script call, page size, next page. |
 | `TableCsvWriter` | `table_file.py` | Writes the rows as a file in the layout of the portal's CSV export into `download_dir`. |
@@ -64,8 +66,8 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
    gives the device names (e.g. `8615620 77678271`). All sections are searched, not only the
    first; duplicates are dropped. A structure without any `Devices` list raises
    `ViewModelError`. New devices in the portal are therefore downloaded without any change here.
-4. **For each device** (the steps of the export source; the table source is described in
-   [Fallback: the device table](#fallback-the-device-table)):
+4. **For each device** (the steps of the export source; the table source, tried first by default,
+   is described in [The device table (primary source)](#the-device-table-primary-source)):
    1. wait for the spinner to disappear, click the link containing the device name,
       pause `device_settle_s` (3 s, the legacy value), wait for the spinner;
    2. click the tab containing `Meteorologická data`, wait for the spinner, pause
@@ -89,12 +91,12 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
    file, an unreadable table, a file system error) is retried after the client has
    reloaded `portal_url` and opened the folder again (`return_to_folder()`), up to
    `attempts_per_device` attempts (default 2). Then the next source of `sources` is tried (by
-   default the table after the export). Only when every source failed is the device recorded as
+   default the export after the table). Only when every source failed is the device recorded as
    `DeviceFailure(device, reason)` (per source the first error, and the last one if it differed;
-   with several sources prefixed by the source name, e.g. `export: …; table: …`) and the run
+   with several sources prefixed by the source name, e.g. `table: …; export: …`) and the run
    continues with the next device. If the reload fails too, it is logged and the next devices
    fail on their own. The log says which source delivered each device
-   (`<device>: delivered by the table source after 1 failed source(s).`).
+   (`<device>: delivered by the export source after 1 failed source(s).`).
 6. **Close the browser** (always, also after an error) and return
    `SessionResult(downloads, failures, up_to_date)`. Each download names its `source`
    (`export` or `table`); `up_to_date` lists devices whose table had nothing newer than the
@@ -170,8 +172,8 @@ values, except `timeouts.download_wait_s` (120 s instead of 30 s).
 | `chrome_arguments` | `["--window-size=1920,1080"]` | flags | Extra Chrome arguments; add `--no-sandbox` only when running as root in a container. |
 | `partial_download_suffixes` | `[".crdownload", ".tmp"]` | suffixes | Unfinished downloads. |
 | `ignored_download_prefixes` | `["."]` | prefixes | Hidden temporary files. |
-| `sources` | `[export, table]` | list | Sources tried per device, in order: `[export, table]` (export, the table as the fallback), `[table]` (table only), `[export]` (export only). |
-| `table.*` | see [Fallback: the device table](#fallback-the-device-table) | | Locators, page sizes and waits of the table reader. |
+| `sources` | `[table, export]` | list | Sources tried per device, in order: `[table, export]` (table, the export as the fallback; default since 2026-11-26), `[export, table]` (the reverse), `[table]` (table only), `[export]` (export only). |
+| `table.*` | see [The device table (primary source)](#the-device-table-primary-source) | | Locators, page sizes and waits of the table reader. |
 
 ### Environment variables
 
@@ -299,16 +301,21 @@ has not been checked against the portal's HTML; `none visible` therefore does no
 the portal showed no message. Set `selectors.notification_css` once the real message element is
 known.
 
-## Fallback: the device table
+## The device table (primary source)
 
 Since October 2026 the Excel export has not produced a file in the daily runs (WP-1.3.1
 diagnostics). The device page shows the same data in the table *Historie meteorologických
-dat* of the tab *Meteorologická data*, so the table is the **fallback source** (WP-1.10, owner
-decision 2026-11-26): with the default `sources: [export, table]`, a device whose export failed
-after its attempts is read from the table instead. The locators below come from a page the owner
-saved in a browser (a trimmed excerpt without anything account-related is
-`tests/ingest/portal/data/meteo_table_excerpt.html`); **they have not been tried in a live
-browser.**
+dat* of the tab *Meteorologická data*, so the table reader was added as a second source
+(WP-1.10). The first live run (2026-11-26) read the whole history of all four sensors from the
+table (36,995 rows) while every export still timed out, so the table is now the **primary
+source**: the default is **`sources: [table, export]`** (owner decision 2026-11-26). The table
+is read first; the export is tried only for a device whose table failed after its attempts.
+This saves the export's waits, about 18–20 min per run with four sensors (see
+[operations.md](operations.md#costs-and-limits)). `sources: [export, table]` restores the old
+order. The locators below come from a page the owner saved in a browser (a trimmed excerpt
+without anything account-related is `tests/ingest/portal/data/meteo_table_excerpt.html`); the
+live run confirmed them for reading the full history. **Not yet verified live:** switching the page
+size with the page-size button and the incremental reading of the daily runs.
 
 What the page looks like (DotVVM GridView):
 

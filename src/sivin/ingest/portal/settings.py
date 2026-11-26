@@ -64,8 +64,9 @@ class PortalSource(StrEnum):
     """Read the table *Historie meteorologických dat* of the device page (WP-1.10)."""
 
 
-DEFAULT_SOURCES: Final = (PortalSource.EXPORT, PortalSource.TABLE)
-"""Export first, the table as the fallback (owner decision 2026-11-26)."""
+DEFAULT_SOURCES: Final = (PortalSource.TABLE, PortalSource.EXPORT)
+"""Table first, the export as the fallback: the export has produced no file in any live run
+(owner decision 2026-11-26, after the first run read all four sensors from the table)."""
 
 
 class _Settings(BaseModel):
@@ -187,10 +188,12 @@ class PortalTimeouts(_Settings):
 
 
 class PortalTableSettings(_Settings):
-    """Reading the table *Historie meteorologických dat* as the fallback source (WP-1.10).
+    """Reading the table *Historie meteorologických dat*, the primary source (WP-1.10).
 
-    The locators were taken from a saved device page (2026-11) and are **not verified in a
-    live browser** [to be verified]. Relative XPaths start with ``./`` and are evaluated
+    The table is tried first by default (``sources: [table, export]``). The locators were
+    taken from a saved device page (2026-11); the first live run (2026-11-26) read the full
+    history of all four sensors with them. Page-size switching and incremental runs are not
+    yet verified live [to be verified]. Relative XPaths start with ``./`` and are evaluated
     inside the card found by ``card_xpath_template``.
     """
 
@@ -467,13 +470,13 @@ class PortalSettings(_Settings):
         min_length=1,
         description=(
             "How a device's data are fetched, tried in this order until one succeeds (list of "
-            "'export', 'table'): [export, table] = export, the table as the fallback; [table] "
-            "= table only; [export] = export only."
+            "'export', 'table'): [table, export] = table, the export as the fallback; [export, "
+            "table] = the reverse; [table] = table only; [export] = export only."
         ),
     )
     table: PortalTableSettings = Field(
         default_factory=PortalTableSettings,
-        description="Reading the device page's data table, the fallback source (WP-1.10).",
+        description="Reading the device page's data table, the primary source (WP-1.10).",
     )
 
     @model_validator(mode="after")

@@ -127,7 +127,7 @@ class FetchService:
     """Log in to the portal and fetch the data of every device.
 
     Each device is fetched with the sources of ``settings.sources`` in order (by default the
-    Excel export, then the device table as the fallback, WP-1.10).
+    device table, then the Excel export as the fallback, WP-1.10).
 
     Parameters
     ----------
@@ -240,7 +240,7 @@ class PortalExports:
     def exports(
         self, sensors: Sequence[SensorId] | None
     ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
-        """Download the exports (see :class:`~sivin.app.run.ExportSource`).
+        """Fetch each device's data, table first (see :class:`~sivin.app.run.ExportSource`).
 
         Parameters
         ----------

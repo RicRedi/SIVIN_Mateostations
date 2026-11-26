@@ -330,3 +330,18 @@ What was verified:
 Still not verified, as stated in the hand-off note: nothing has run against the live portal.
 That covers the page-size button, the waits and `JS_READ_TABLE`, and they should be checked on
 the first real run. The open owner questions (precision, source order) do not block the merge.
+
+## Follow-up 2026-11-26
+
+- **First live run (2026-11-26, owner).** With `sources: [export, table]` every Excel export
+  still timed out in headless Chrome (also with the CDP download grant), and the table reader
+  delivered the full history of all four sensors: 9033, 9571, 8829 and 9562 rows, 36,995 rows
+  in total; exit code 0. This answers the open question on the source order.
+- **Default flipped (owner decision 2026-11-26).** `ingest.portal.sources` now defaults to
+  `[table, export]`: the table is the primary source, the export only the fallback. This saves
+  the export waits of about 18–20 min per run with four sensors. Tests that model the export
+  set `[export, table]` explicitly; new tests cover the default order (table for every device
+  and no export click; an empty table falls back to the export; an app-level fetch through the
+  default configuration).
+- **Still not verified live:** switching the page size, the incremental daily runs (only rows
+  newer than the store), and whether the export works at all in headless Chrome.
