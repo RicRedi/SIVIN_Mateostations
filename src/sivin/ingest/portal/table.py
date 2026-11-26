@@ -21,6 +21,10 @@ from sivin.ingest.portal.settings import PortalTableSettings
 
 logger = logging.getLogger(__name__)
 
+DST_CUTOFF_SHIFTS: Final = 2
+"""Clock shifts by which the cutoff is lowered when the last stored time is in a repeated hour
+(see :meth:`TableReader._local`)."""
+
 EXPORT_TIMESTAMP_FORMAT: Final = "%Y-%m-%d %H:%M:%S"
 """Timestamp format of the portal's CSV export (local wall-clock time, MIGRATION_PLAN §0.6.1)."""
 
@@ -323,10 +327,31 @@ class TableReader:
         return TableReading(collector.columns, rows, pages, collector.malformed, reached)
 
     def _local(self, since_utc: datetime) -> datetime:
-        """Return ``since_utc`` as naive wall-clock time of the source zone."""
+        """Return the local wall-clock cutoff for ``since_utc``.
+
+        Normally ``since_utc`` as naive wall-clock time of the source zone. When that time lies
+        in the repeated hour of the autumn change, the wall clock alone cannot tell the first
+        pass of the hour from the second, so the cutoff is lowered by twice the clock shift
+        (2 h): once to read the repeated hour again, once more so that ordinary rows before it
+        are in the file too; the CSV parser trusts repeated-hour rows only between ordinary
+        rows. The rows already stored come back identical and are skipped by the store.
+        """
         if since_utc.tzinfo is None:
             raise ValueError("since_utc must be timezone-aware.")
-        return since_utc.astimezone(UTC).astimezone(self._zone).replace(tzinfo=None)
+        local = since_utc.astimezone(UTC).astimezone(self._zone)
+        naive = local.replace(tzinfo=None)
+        first = naive.replace(tzinfo=self._zone, fold=0).utcoffset()
+        second = naive.replace(tzinfo=self._zone, fold=1).utcoffset()
+        if first is None or second is None or first == second:
+            return naive
+        shift = DST_CUTOFF_SHIFTS * abs(first - second)
+        logger.info(
+            "The last stored time %s lies in the repeated hour of a clock change; reading "
+            "back to %s local time.",
+            since_utc.isoformat(),
+            naive - shift,
+        )
+        return (naive - shift).replace(fold=0)
 
 
 class _RowCollector:

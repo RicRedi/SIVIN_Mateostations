@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
+from tests.ingest.conftest import make_settings
 from tests.ingest.portal.table_fakes import (
     HEADERS,
+    STEP,
     FakeMeteoTable,
     TableState,
     raw_table,
@@ -19,9 +24,12 @@ from tests.ingest.portal.table_fakes import (
     synthetic_rows,
 )
 
+from sivin.ingest.parsers.base import parser_registry
 from sivin.ingest.portal.errors import TableReadError
+from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.settings import PortalTableSettings
 from sivin.ingest.portal.table import RawTable, TableReader, TableRow, TableRowParser
+from sivin.ingest.portal.table_file import TableCsvWriter
 
 EXPORT_COLUMNS = (
     "Datum a čas",
@@ -233,3 +241,51 @@ def test_malformed_rows_are_counted_over_all_pages() -> None:
 def test_first_row_of_an_empty_page() -> None:
     assert RawTable(HEADERS, ()).first_row is None
     assert raw_table([("a",) * 6]).first_row == ("a",) * 6
+
+
+def test_a_last_time_in_the_repeated_autumn_hour_reads_that_hour_again(tmp_path: Path) -> None:
+    # 25.10.2026: 03:00 CEST becomes 02:00 CET (01:00 UTC); 02:00-03:00 local occurs twice.
+    # SYNTHETIC rows every 30 min, newest first, from 12:10 UTC back to 21:40 UTC the day before.
+    newest = datetime(2026, 10, 25, 12, 10, tzinfo=UTC)
+    instants = [newest - i * STEP for i in range(30)]
+    zone = ZoneInfo("Europe/Prague")
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", f"10,{i}", "50", "0", "100", "3,5")
+        for i, t in enumerate(instants)
+    ]
+    stored = datetime(2026, 10, 25, 0, 40, tzinfo=UTC)  # 02:40 CEST, the first pass
+
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    # A plain wall-clock cutoff (02:40) would drop 02:10 and 02:40 CET (01:10Z, 01:40Z), which
+    # are new. The cutoff 02:40 - 2 h = 00:40 local (22:40Z) keeps every row after 22:40Z: the
+    # repeated hour and two ordinary rows before it, already stored, come back once more.
+    kept = [t for t in instants if t > datetime(2026, 10, 24, 22, 40, tzinfo=UTC)]
+    assert len(reading.rows) == len(kept) == 27
+    assert _local_times(reading.rows)[-7:] == [
+        "03:10",
+        "02:40",
+        "02:10",
+        "02:40",
+        "02:10",
+        "01:40",
+        "01:10",
+    ]
+
+    path = TableCsvWriter(PortalTableSettings(), tmp_path).write(
+        PortalDevice("8615620 77680921"), reading, datetime(2026, 10, 25, 13, 0, tzinfo=UTC)
+    )
+    parsed = parser_registry.for_file(path, make_settings()).parse(path)
+    (series,) = parsed.series
+    # The CSV parser resolves the repeated hour by the backward jump of the wall clock, so both
+    # CET rows reach the store with their true UTC times.
+    assert list(series.frame["timestamp_utc"]) == [pd.Timestamp(t) for t in reversed(kept)]
+
+
+def test_a_last_time_outside_a_clock_change_is_the_cutoff() -> None:
+    table = FakeMeteoTable(TableState(synthetic_rows(datetime(2026, 10, 25, 4, 0, 0), 3)))
+    stored = datetime(2026, 10, 25, 2, 30, tzinfo=UTC)  # 03:30 CET, after the change
+
+    reading = TableReader(table, _settings()).read(stored)
+
+    assert _local_times(reading.rows) == ["04:00"]

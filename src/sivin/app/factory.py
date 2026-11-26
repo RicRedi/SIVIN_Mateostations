@@ -343,14 +343,18 @@ class ServiceFactory:
         Returns
         -------
         FetchService
-            The service.
+            The service; its table source reads only rows newer than the store holds.
         """
-        from sivin.app.fetch import FetchService
+        from sivin.app.fetch import FetchService, StoreLastTimestamps
         from sivin.ingest.portal.driver import driver_factory_registry
 
         drivers = self._drivers if self._drivers is not None else driver_factory_registry.create
         return FetchService(
-            self.portal_settings(headed, download_dir), self._credentials, drivers, self._redactor
+            self.portal_settings(headed, download_dir),
+            self._credentials,
+            drivers,
+            self._redactor,
+            last_timestamps=StoreLastTimestamps(self.store()),
         )
 
     def site_service(self) -> SiteService:

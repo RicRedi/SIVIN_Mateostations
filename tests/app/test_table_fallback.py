@@ -119,3 +119,23 @@ def test_the_last_timestamp_is_aware_utc(project: Project) -> None:
     last = StoreLastTimestamps(store).last_timestamp(OUTDOOR)
 
     assert last == datetime(2026, 11, 20, 11, 0, tzinfo=UTC)
+
+
+def test_sivin_run_reads_only_the_rows_newer_than_the_store(project: Project) -> None:
+    table = TableState(synthetic_rows(NEWEST, 30))
+    factory = ServiceFactory(
+        Workspace.open(start=project.root), drivers=_drivers(table), credentials=credentials
+    )
+
+    first = factory.run_service(skip_site=True).run(2026, [OUTDOOR])
+    assert first.ingest.appends[OUTDOOR].new_rows == 30
+
+    table.rows = synthetic_rows(datetime(2026, 11, 20, 13, 0, 0), 32)
+    table.page_index = 0
+    second = factory.run_service(skip_site=True).run(2026, [OUTDOOR])
+
+    (item,) = second.ingest.files
+    assert "(table)" in item.path.name
+    # Only the two new rows were read and written: no full-history file, no identical rows.
+    assert second.ingest.appends[OUTDOOR].new_rows == 2
+    assert second.ingest.appends[OUTDOOR].identical_skipped == 0

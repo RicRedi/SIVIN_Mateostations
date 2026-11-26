@@ -329,9 +329,8 @@ How a device is read (`TableSource` → `PortalClient.read_table` → `TableRead
 1. Open the device and its meteorological tab (the same steps as for the export).
 2. Ask the store for the sensor's **last stored measurement** (`StoreLastTimestamps`, the
    newest `timestamp_utc` of `MeasurementStore.time_range`, passed to `FetchService` as
-   `last_timestamps`). **Open:** `ServiceFactory.fetch_service` does not pass it yet (outside
-   WP-1.10's files), so `sivin fetch` and `sivin run` read the whole table until it does
-   ([WP-1.10 hand-off](wp_log/WP-1.10.md)).
+   `last_timestamps`; `ServiceFactory.fetch_service` does this for `sivin fetch` and
+   `sivin run`).
 3. Wait up to `table.rows_wait_s` until the table shows rows. Each page is read with one
    JavaScript call that returns the trimmed text of every header and body cell.
 4. Choose the page size: `table.incremental_page_size` (500 rows ≈ 10 days) when the store
@@ -345,6 +344,10 @@ How a device is read (`TableSource` → `PortalClient.read_table` → `TableRead
    before it**; without one, read every page. At most `table.max_pages` pages.
 6. Keep only rows **newer** than the last stored measurement (all rows without one). Table times
    are compared as local wall-clock time of `table.source_timezone` (= `time.source_timezone`).
+   When the last stored measurement lies in the repeated hour of the autumn change (the wall
+   clock cannot tell its two passes apart), the cutoff is lowered by twice the clock shift
+   (2 h): the repeated hour is read again, with ordinary rows before it so that the CSV parser
+   can resolve it; the rows already stored come back identical and the store skips them.
    A row repeated on the next page (a measurement arrived while reading) is kept once. A row
    with the wrong number of cells or an unreadable timestamp is skipped and counted (WARNING);
    values are copied as shown, so a bad value is judged by the input validation as in an export.
@@ -384,14 +387,12 @@ A table failure (`TableReadError`) logs the same diagnostics block as a failed d
 Known limits:
 
 - **Precision.** The table shows more decimals than the export (temperature `24,3848` in the
-  table, `23,79` in the real export of March 2026). A row stored from the table and the same row
-  in a later export are therefore likely to differ (not verified on the same rows); the store's
-  `conflict_policy` decides (default
-  `prefer_newest`: the later export's rounded value replaces the table's). Rows are never sent
-  twice by the table itself.
-- **Daylight-saving change.** Times are compared as local wall-clock time. Only if the last
-  stored measurement lay in the repeated hour of the autumn change (02:00–03:00), up to an hour
-  of rows could be taken for stored ones; the daily run at 06:00 makes this unlikely.
+  table, `23,79` in the real export of March 2026; not verified on the same rows). The table
+  never re-sends stored rows, but a later successful export that overlaps table-sourced rows
+  replaces their values under the default `storage.conflict_policy: prefer_newest` (storage is
+  unchanged by WP-1.10). Each replaced value is a conflict: logged and recorded in the run log,
+  at most `storage.max_recorded_conflicts` per append, the rest only counted. Whether that is
+  wanted is an open question for the owner ([WP-1.10](wp_log/WP-1.10.md)).
 - **Gaps stay.** Reading stops at the newest stored measurement; a gap further back is not
   filled by the table.
 

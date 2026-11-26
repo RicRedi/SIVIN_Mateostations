@@ -38,6 +38,7 @@ were taken from the page the owner saved; nothing was run in a live browser.
 - `src/sivin/ingest/portal/models.py`: `DownloadedExport.source` (default `"export"`),
   `UpToDateDevice`, `SessionResult.up_to_date` (default `()`).
 - `src/sivin/ingest/portal/errors.py`: `TableReadError`. `__init__.py`: re-exports.
+- `src/sivin/app/factory.py` (round 2): passes the store to `FetchService`.
 - `src/sivin/app/fetch.py`: `StoreLastTimestamps` (read-only, uses the existing
   `MeasurementStore.time_range`; no storage change was needed), `FetchService(last_timestamps=…)`,
   per-source counts in the log.
@@ -60,10 +61,10 @@ an excerpt in its first lines. The saved page itself is not in the repository.
 
 - `make lint` → ruff check and format clean (311 files).
 - `make type` → `mypy --strict`: no issues in 186 source files.
-- `make test` → 2112 passed.
-- `make cov` → 2112 passed, total 99.81 %. Changed/new modules: `table.py`, `table_file.py`,
+- `make test` → 2136 passed (round 2, after the rebase).
+- `make cov` → 2136 passed, total 99.81 % (round 2). Changed/new modules: `table.py`, `table_file.py`,
   `sources.py`, `session.py`, `client.py`, `models.py`, `settings.py`, `errors.py`,
-  `app/fetch.py` 100 %; `table_page.py` 97 % (two stale-element branches not hit).
+  `app/fetch.py`, `app/factory.py` 100 %; `table_page.py` 97 % (two stale-element branches not hit).
 - Tests on the real excerpt: header texts, the 20 rows (one-digit hours such as `9:53:11`), the
   paging text `Zobrazeno 5000 z 9562 (5000)` against `paging_text_pattern`, and the written file
   through `PortalCsvParser` (CET → UTC: `18.11.2026 13:49:25` → `12:49:25Z`).
@@ -92,42 +93,41 @@ an excerpt in its first lines. The saved page itself is not in the repository.
 - **Precision:** the table shows 4 decimals (`24,3848`), the March 2026 export 2 (`23,79`). Not
   verified on the same rows. See the open question below.
 
+## Round 2 (orchestrator decisions, 2026-11-26)
+
+- **Rebase:** onto `origin/wp/1.3.2-download-headless` (7c4f0df) without conflicts;
+  `docs/configuration.md` regenerated check passes (WP-1.3.2's `download_wait_s` 120 s and the
+  new `table.*` keys). The test helpers set their own short waits (`download_wait_s` 3 s in the
+  portal and app fixtures, `rows_wait_s` 0.1–0.2 s); the suite stays fast.
+- **Wiring (Files scope extended to `src/sivin/app/factory.py`):** `ServiceFactory.fetch_service`
+  passes `last_timestamps=StoreLastTimestamps(self.store())`. Test
+  `tests/app/test_table_fallback.py::test_sivin_run_reads_only_the_rows_newer_than_the_store`:
+  a second `RunService` run writes and appends exactly the 2 new rows (0 identical rows skipped,
+  so no full-history read).
+- **DST:** when the last stored time lies in the repeated autumn hour, `TableReader` lowers the
+  local cutoff by twice the clock shift (2 h, `DST_CUTOFF_SHIFTS`): one shift re-reads the
+  repeated hour, the second adds ordinary rows before it, because the CSV parser trusts
+  repeated-hour rows only between ordinary rows (`RowOrderAnalyser`, point 4; with one shift
+  the parser dropped them). Test with the 25.10.2026 change: the two new CET rows are kept and
+  reach UTC correctly through `PortalCsvParser`; outside a change the cutoff is unchanged.
+- **Precision:** storage unchanged, default `prefer_newest` kept; the behaviour is documented in
+  `docs/ingest.md` (Known limits). Still an owner question (below).
+- Config list form `ingest.portal.sources` and the `(table)` label accepted;
+  `SensorId.parse` and `ExportSourceIds` recognising the name are tested in
+  `test_table_file.py`.
+
 ## Out of scope
 
-- `src/sivin/app/factory.py` (`ServiceFactory.fetch_service`) does **not** pass the store yet, so
-  `sivin fetch` and `sivin run` read the whole table history whenever the table is used. The
-  change is one argument:
-  `FetchService(..., self._redactor, last_timestamps=StoreLastTimestamps(self.store()))`
-  (import `StoreLastTimestamps` from `sivin.app.fetch` inside the method). Not in this WP's files;
-  see question 1.
 - `docs/architecture.md` and `docs/data-format.md` do not mention the table source; a sentence
   each would help (not in this WP's files).
 
 ## Open questions for the owner
 
-1. **Wiring in `ServiceFactory` (blocking for the incremental behaviour).** Without the line
-   above, every run that falls back reads the full history (for 77680921: 9562 rows, 2 pages)
-   and writes all of it. The store skips identical rows, but rows that came from an export
-   differ in precision (question 2), so with `prefer_newest` the table's values would replace the
-   stored export values. May the orchestrator (or a fix round of this WP) add the line to
-   `factory.py`?
-2. **Precision of table vs export.** Which value should win when the same timestamp exists from
-   both sources? With the wiring, the table never re-sends stored rows; but a later successful
-   export (full history) would replace the table's 4-decimal values with rounded ones under
-   `prefer_newest`. Options: accept it, round the table values to the export's precision before
-   writing (would need the export's per-column precision, not known for sure), or use
-   `prefer_existing`.
-3. **Config shape.** The brief suggested `ingest.portal.source: export_then_table | table_only |
-   export_only`. I made it an ordered list `ingest.portal.sources: [export, table]` (`[table]`,
-   `[export]` for the other two modes), so a new source is a registered class without a new
-   mode name. Fine, or should the enum be added as well?
-4. **File name.** The brief suggested `MeteoData_<portal name>_table_<YYYYMMDD_HHMMSS>.csv`. With
-   the portal's spaced device name (`8615620 77680921`) that name is not recognised by
-   `SensorId`, so the label is written in parentheses like the export's `(VUT)`:
-   `MeteoData_8615620 77680921 (table)_20261126_060000.csv` (time = local time of writing).
-5. **Daylight-saving edge.** Table times are compared as local wall-clock time; only if the last
-   stored measurement lies in the repeated autumn hour could up to an hour of rows be taken for
-   stored ones. Acceptable?
+1. **Precision of table vs export.** The table shows 4 decimals (`24,3848`), the export 2
+   (`23,79`). The table never re-sends stored rows, but a later successful export overlapping
+   table-sourced rows replaces their values under `prefer_newest` (each a logged conflict,
+   capped by `storage.max_recorded_conflicts`). Keep this, round the table values, or prefer
+   the existing values?
 
 ## Review
 

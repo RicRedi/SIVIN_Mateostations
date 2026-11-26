@@ -34,9 +34,7 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
   Europe/Prague converted to UTC); rejected files go to quarantine with a report. Fallback when
   an export fails: the device page's data table, written as a file in the export's CSV layout
   (`ingest.portal.sources`, [docs/ingest.md](docs/ingest.md#fallback-the-device-table); not yet
-  tried against the live portal). It is meant to read only back to the last stored measurement;
-  until the store is passed to the fetch service (open, see
-  [WP-1.10](docs/wp_log/WP-1.10.md)), `sivin fetch` and `sivin run` read the whole table.
+  tried against the live portal). Only rows newer than the last stored measurement are read.
 - **Quality control:** missing values, range, spike, step, stuck sensor, sampling, precipitation
   and battery checks; a manually kept off-site log (`sensors/offsite_log.yaml`) marks periods
   when a sensor was not in the vineyard. A row missing temperature or humidity is invalid as a whole.
