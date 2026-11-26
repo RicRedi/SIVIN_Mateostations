@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Self
+from typing import Final, Self
 
 import pandas as pd
 from pydantic import Field, model_validator
 
-from sivin.analytics.base import IndexContext, IndexResult, index_registry
+from sivin.analytics.base import DailyLevels, IndexContext, IndexResult, index_registry
 from sivin.analytics.ripening.common import RipeningIndex
 from sivin.analytics.ripening.durations import SampleDurations, masked_values
 from sivin.analytics.ripening.params import MonthDayValue, PeriodParams, SampleDurationParams
 from sivin.analytics.ripening.thresholds import Comparison, Threshold
 from sivin.core.schema import Column
 from sivin.core.season import MonthDay
+
+NO_FROST_LEVEL: Final = "none"
+"""Daily level of a complete day without a sample at or below ``frost_c``."""
+
+FROST_LEVEL: Final = "frost"
+"""Daily level of a complete day with frost hours (``T <= frost_c``) but no hard frost."""
+
+HARD_FROST_LEVEL: Final = "hard_frost"
+"""Daily level of a complete day with hard-frost hours (``T <= hard_frost_c``)."""
+
+FROST_LEVELS: Final = (NO_FROST_LEVEL, FROST_LEVEL, HARD_FROST_LEVEL)
+"""The daily frost levels in ascending order of risk."""
 
 
 class FrostParams(PeriodParams):
@@ -72,8 +84,10 @@ class FrostIndex(RipeningIndex[FrostParams]):
     Hours come from :class:`~sivin.analytics.ripening.durations.SampleDurations` (time, not
     the number of rows as in the legacy ``frost_events_count``) and are counted on the complete
     days of the period. The value is the frost hours (``T <= frost_c``); ``daily`` holds them
-    per day. ``details``: ``frost_h``, ``hard_frost_h``, ``frost_nights``, ``min_temp_c`` and,
-    with ``after_date``, the same figures from that day on with the prefix ``critical_``.
+    per day and ``daily_levels`` the level of each complete day (:data:`FROST_LEVELS`: hard
+    frost if it has hard-frost hours, frost if it has frost hours, else none). ``details``:
+    ``frost_h``, ``hard_frost_h``, ``frost_nights``, ``min_temp_c`` and, with ``after_date``,
+    the same figures from that day on with the prefix ``critical_``.
     """
 
     index_id = "frost"
@@ -132,8 +146,23 @@ class FrostIndex(RipeningIndex[FrostParams]):
             details["after_date"] = params.after_date.isoformat()
             details.update({f"critical_{key}": value for key, value in _summary(critical).items()})
         return self._result(
-            ctx, selection, float(totals["frost_h"]), daily=table["frost_h"], details=details
+            ctx,
+            selection,
+            float(totals["frost_h"]),
+            daily=table["frost_h"],
+            details=details,
+            daily_levels=_daily_levels(table, *params.season.dates(ctx.year)),
         )
+
+
+def _daily_levels(table: pd.DataFrame, first: date, last: date) -> DailyLevels:
+    """Frost level of each complete day of a per-day frost table."""
+    labels = [
+        HARD_FROST_LEVEL if hard_h > 0.0 else FROST_LEVEL if frost_h > 0.0 else NO_FROST_LEVEL
+        for frost_h, hard_h in zip(table["frost_h"], table["hard_frost_h"], strict=True)
+    ]
+    by_date = pd.Series(labels, index=table.index.copy(), dtype=object)
+    return DailyLevels(FROST_LEVELS, first, last, by_date)
 
 
 def _summary(table: pd.DataFrame) -> dict[str, float | int]:

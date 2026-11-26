@@ -11,6 +11,7 @@ from pydantic import Field, ValidationError
 
 from sivin.analytics.base import (
     ClimateIndex,
+    DailyLevels,
     IndexContext,
     IndexParams,
     IndexRegistry,
@@ -233,3 +234,20 @@ def test_missing_params_model_is_rejected(context: IndexContext) -> None:
 
     assert IndexRegistry().register(WithoutParameters) is WithoutParameters
     assert WithoutParameters().params == IndexParams()
+
+
+def test_daily_levels_validation() -> None:
+    by_date = pd.Series(["low", None], index=[date(2026, 6, 1), date(2026, 6, 2)], dtype=object)
+    levels = DailyLevels(("low", "high"), date(2026, 6, 1), date(2026, 6, 30), by_date)
+    assert levels.by_date.tolist() == ["low", None]
+    with pytest.raises(ValueError, match="non-empty and unique"):
+        DailyLevels(("low", "low"), date(2026, 6, 1), date(2026, 6, 30), by_date)
+    with pytest.raises(ValueError, match="reversed"):
+        DailyLevels(("low",), date(2026, 6, 30), date(2026, 6, 1), by_date)
+    with pytest.raises(ValueError, match="outside the period"):
+        DailyLevels(("low",), date(2026, 6, 2), date(2026, 6, 30), by_date)
+    reversed_dates = pd.Series(["low", "low"], index=[date(2026, 6, 2), date(2026, 6, 1)])
+    with pytest.raises(ValueError, match="increasing"):
+        DailyLevels(("low",), date(2026, 6, 1), date(2026, 6, 30), reversed_dates)
+    with pytest.raises(ValueError, match="Unknown daily levels"):
+        DailyLevels(("high",), date(2026, 6, 1), date(2026, 6, 30), by_date)

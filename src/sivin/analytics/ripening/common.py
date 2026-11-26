@@ -14,6 +14,7 @@ import pandas as pd
 
 from sivin.analytics.base import (
     ClimateIndex,
+    DailyLevels,
     IndexContext,
     IndexParams,
     IndexResult,
@@ -43,6 +44,7 @@ class RipeningIndex[P: IndexParams](ClimateIndex[P]):
         classification: str | None = None,
         daily: pd.Series | None = None,
         details: Mapping[str, float | int | str] | None = None,
+        daily_levels: DailyLevels | None = None,
     ) -> IndexResult:
         """Assemble the result of this index.
 
@@ -61,6 +63,8 @@ class RipeningIndex[P: IndexParams](ClimateIndex[P]):
         details : Mapping, optional
             Additional numbers; ``n_days`` (number of days used) is always added. Entries that
             are ``NaN`` or infinite are omitted, so the details are always valid JSON.
+        daily_levels : DailyLevels, optional
+            Risk level per day, for indices that define one.
 
         Returns
         -------
@@ -78,6 +82,7 @@ class RipeningIndex[P: IndexParams](ClimateIndex[P]):
             classification=classification,
             daily=daily,
             details={"n_days": len(selection.days), **_finite(details or {})},
+            daily_levels=daily_levels,
         )
 
     @staticmethod

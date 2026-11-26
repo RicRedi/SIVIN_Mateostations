@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final, Protocol
 
-from sivin.analytics.base import IndexResult
+import pandas as pd
+
+from sivin.analytics.base import DailyLevels, IndexResult
 from sivin.core.ids import SensorId
 from sivin.quality.pipeline import QualityResult
 from sivin.site.columns import INDEX_DECIMALS, SHARE_DECIMALS, rounded_value
@@ -21,6 +23,45 @@ ENTRY_NO_DATA: Final = "no_data"
 
 NO_DATA_DETAIL: Final = "no data"
 """``detail`` of a :data:`ENTRY_NO_DATA` entry."""
+
+DAILY_KEY: Final = "daily"
+"""Key of the optional daily risk block of an index entry (WP-3.4)."""
+
+
+def daily_block(levels: DailyLevels, daily: pd.Series | None) -> dict[str, Any]:
+    """Return the daily risk block of an index entry (the web's daily risk strip).
+
+    Parameters
+    ----------
+    levels : DailyLevels
+        The level per local day.
+    daily : pandas.Series or None
+        The daily value of the index by local date (:attr:`IndexResult.daily`).
+
+    Returns
+    -------
+    dict
+        ``levels`` (ascending), ``start`` and ``end`` (the index period, ``YYYY-MM-DD``),
+        then the columns ``date``, ``value`` (the daily value in the unit of the index, rounded
+        to 0.01, ``null`` if the index has none for the day) and ``level``. A day without a
+        level has ``value`` ``null`` too: no number is published for a day without enough data.
+    """
+    dates = list(levels.by_date.index)
+    labels: list[str | None] = list(levels.by_date)
+    values: list[float | None] = []
+    for day, label in zip(dates, labels, strict=True):
+        raw: float | None = None
+        if daily is not None and label is not None and day in daily.index:
+            raw = float(daily[day])
+        values.append(rounded_value(raw, INDEX_DECIMALS))
+    return {
+        "levels": list(levels.levels),
+        "start": levels.period_start.isoformat(),
+        "end": levels.period_end.isoformat(),
+        "date": [day.isoformat() for day in dates],
+        "value": values,
+        "level": labels,
+    }
 
 
 def index_entry(result: IndexResult) -> dict[str, Any]:
@@ -43,7 +84,9 @@ def index_entry(result: IndexResult) -> dict[str, Any]:
         ``value`` (rounded to 0.01 in the index unit, or ``null``), ``unit``, ``coverage``
         (0-1, rounded to 0.001), ``complete``, ``class`` (or ``null``), ``estimated``
         (``true`` when the index relies on a proxy, e.g. leaf wetness from humidity),
-        ``status`` (``"ok"`` or ``"no_data"``) and, for ``"no_data"``, ``detail``.
+        ``status`` (``"ok"`` or ``"no_data"``) and, for ``"no_data"``, ``detail``; an index
+        with :attr:`IndexResult.daily_levels` that has data also gets the optional ``daily``
+        block (:func:`daily_block`).
     """
     coverage = rounded_value(result.coverage, SHARE_DECIMALS)
     no_data = result.coverage <= 0.0
@@ -58,6 +101,8 @@ def index_entry(result: IndexResult) -> dict[str, Any]:
     }
     if no_data:
         entry["detail"] = NO_DATA_DETAIL
+    elif result.daily_levels is not None:
+        entry[DAILY_KEY] = daily_block(result.daily_levels, result.daily)
     return entry
 
 

@@ -23,6 +23,8 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import date
+from itertools import pairwise
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, cast, overload
 
@@ -122,6 +124,50 @@ class IndexContext:
 
 
 @dataclass(frozen=True)
+class DailyLevels:
+    """Daily risk level of an index: one class label per local day of its period.
+
+    Only indices that define a level per day (the disease models, frost) have one. The labels
+    are the index's own classes; a day without enough data has no level (``None``).
+
+    Attributes
+    ----------
+    levels : tuple of str
+        The possible labels in ascending order of risk (lowest first).
+    period_start, period_end : datetime.date
+        First and last local day of the index period (both inclusive).
+    by_date : pandas.Series
+        Label (``str``) or ``None`` per local date, increasing, within the period; days of the
+        period that are absent have no level either.
+
+    Raises
+    ------
+    ValueError
+        If ``levels`` is empty or repeats a label, the period is reversed, a date lies outside
+        the period or is not increasing, or a label is not one of ``levels``.
+    """
+
+    levels: tuple[str, ...]
+    period_start: date
+    period_end: date
+    by_date: pd.Series
+
+    def __post_init__(self) -> None:
+        if not self.levels or len(set(self.levels)) != len(self.levels):
+            raise ValueError(f"levels must be non-empty and unique, got {self.levels}.")
+        if self.period_start > self.period_end:
+            raise ValueError(f"period {self.period_start} - {self.period_end} is reversed.")
+        dates = list(self.by_date.index)
+        if any(later <= earlier for earlier, later in pairwise(dates)):
+            raise ValueError("by_date must be indexed by increasing dates.")
+        if dates and (dates[0] < self.period_start or dates[-1] > self.period_end):
+            raise ValueError("by_date has dates outside the period.")
+        unknown = {label for label in self.by_date if label is not None} - set(self.levels)
+        if unknown:
+            raise ValueError(f"Unknown daily levels {sorted(unknown)}; expected {self.levels}.")
+
+
+@dataclass(frozen=True)
 class IndexResult:
     """Value of one index for one sensor and one season.
 
@@ -149,6 +195,9 @@ class IndexResult:
         Additional named numbers or labels (read-only).
     estimated : bool
         ``True`` if the index relies on a proxy (e.g. leaf wetness estimated from humidity).
+    daily_levels : DailyLevels or None
+        Risk level per day, for indices that define one (published as the daily risk strip of
+        the web portal); ``None`` otherwise.
 
     Raises
     ------
@@ -167,6 +216,7 @@ class IndexResult:
     daily: pd.Series | None = None
     details: Mapping[str, float | int | str] = field(default_factory=dict)
     estimated: bool = False
+    daily_levels: DailyLevels | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.coverage <= 1.0:

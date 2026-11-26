@@ -88,6 +88,21 @@ class TestFrost:
         assert result.daily is not None
         assert result.daily.tolist() == pytest.approx([6.0, 2.0, 0.0])
 
+    def test_daily_levels_of_the_complete_days(
+        self, series: MeasurementSeries, make_context: ContextFactory
+    ) -> None:
+        levels = FrostIndex().compute(make_context(series, 2026)).daily_levels
+        assert levels is not None
+        assert levels.levels == ("none", "frost", "hard_frost")
+        assert (levels.period_start, levels.period_end) == (date(2026, 4, 1), date(2026, 10, 31))
+        # Apr 10 has 2 h <= -2 °C (hard frost), Apr 20 only T <= 0 °C, Apr 25 none.
+        assert list(levels.by_date.index) == [
+            date(2026, 4, 10),
+            date(2026, 4, 20),
+            date(2026, 4, 25),
+        ]
+        assert levels.by_date.tolist() == ["hard_frost", "frost", "none"]
+
     def test_critical_frost_after_budburst(
         self, series: MeasurementSeries, make_context: ContextFactory
     ) -> None:

@@ -21,6 +21,7 @@ from sivin.site.site_files import (
 )
 from sivin.site.state import (
     STATE_FILE,
+    STATE_FORMAT,
     BuildState,
     SensorState,
     StateDirectory,
@@ -65,10 +66,11 @@ def test_manifest() -> None:
     manifest = json.loads(file.content)
     assert file.path == "manifest.json"
     assert list(manifest) == [
-        "schema_version", "generated_at", "display_timezone", "stale_after_s", "variables",
-        "sensors", "seasons", "indices",
+        "schema_version", "generated_at", "display_timezone", "stale_after_s",
+        "min_daily_coverage", "variables", "sensors", "seasons", "indices",
     ]  # fmt: skip
     assert manifest["stale_after_s"] == STALE_AFTER_S
+    assert manifest["min_daily_coverage"] == 0.9
     assert manifest["schema_version"] == 1
     assert manifest["generated_at"] == "2026-10-05T04:00:00Z"
     assert manifest["sensors"]["77680921"] == {
@@ -79,6 +81,12 @@ def test_manifest() -> None:
     }
     assert manifest["seasons"] == [2025, 2026]
     assert [index["id"] for index in manifest["indices"]] == ["huglin"]
+
+
+def test_manifest_publishes_the_configured_complete_day_rule() -> None:
+    writer = ManifestWriter(IndexCatalog(), STALE_AFTER_S, min_daily_coverage=0.75)
+    (file,) = writer.files(snapshot(GENERATED_S, None))
+    assert json.loads(file.content)["min_daily_coverage"] == 0.75
 
 
 def test_latest_staleness_threshold() -> None:
@@ -165,8 +173,8 @@ def test_state_round_trip(tmp_path: Path) -> None:
     [
         b"not json",
         b"[]",
-        b'{"format": 2}',
-        b'{"format": 2, "settings": "s", "seasons": [], "sensors": {"x": {}}}',
+        b'{"format": %d}' % STATE_FORMAT,
+        b'{"format": %d, "settings": "s", "seasons": [], "sensors": {"x": {}}}' % STATE_FORMAT,
     ],
 )
 def test_unreadable_state_is_ignored(content: bytes) -> None:
