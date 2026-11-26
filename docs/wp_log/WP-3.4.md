@@ -340,3 +340,36 @@ not; the orchestrator should confirm.
 - STATE_FORMAT instead of SITE_OUTPUT_FORMAT: see finding 4.
 - Season = calendar year, frost halves Jan-Jun / Jul-Dec: documented and consistent; the
   presentation of unobserved halves is finding 1.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewer: independent reviewer agent, 2026-11-26, worktree at `18a9bb8`.
+
+**Gates (run by the reviewer).**
+- `make lint` → clean, 311 files formatted.
+- `make type` → mypy strict, no issues in 186 files.
+- `make test` → 2165 passed.
+- `make cov` → TOTAL 99 %; `app/site.py`, `app/factory.py` and `site/state.py` are at 100 %.
+- `web/`: lint and typecheck clean; `npm test` → 33 files, 344 tests passed; build OK.
+
+**Probes re-run** (`/tmp/claude-0/review-3.4/`, synthetic data only):
+- **Seasonal values.** The synthetic season export gives seasonal entries identical to `origin/main` (with `daily` removed). The whole output is byte-identical to round 1.
+- **Upgrade path.** A project built by `origin/main` and rebuilt with this branch does a full build, because the shared fingerprint changed through `SITE_OUTPUT_FORMAT` 2. It writes 2 files, and the result is byte-identical to a fresh full build. The next run is incremental: the sensor is reused and 0 files are written.
+
+| # | Round-1 finding | Verified | Status |
+|---|---|---|---|
+| 1 | "No frost" for an unobserved half (major) | `FrostFinding` checked against `HALF_OBSERVED_SHARE` = 0.9. Tests cover Jun–Oct only, Jan–May only, and the Dec 12 / Dec 13 boundary. In Chromium the demo sensor (1 Jun – 1 Oct) shows "žádný v úplných dnech 1. 6. – 30. 6. 2026 (30 z 181 dní)" and "(91 z 184 dní)" instead of "žádný". The note states the 90 % rule. | resolved |
+| 2 | Colour as the only cue (minor) | Contrast: green–no data 3.07:1, green–white 3.54:1, green–amber 1.52:1, amber–red 1.95:1, green–red 2.97:1. Chromium at 390 px (DPR 1 and 2) and 1280 px: the `::before` tick is present on raised days (2 px elevated, 4 px high, `rgb(11,11,11)`). Day cells are 1.70 / 2.08 px wide. In a greyscale screenshot all three tones and the ticks can be told apart. No horizontal page scroll. | resolved |
+| 3 | Days note (minor) | The note now reads "1. 1. 2026 – 31. 12. 2026: 121 úplných dní z 365, první 1. 6. 2026, poslední 30. 9. 2026". | resolved |
+| 4 | State format bump loses the fallback (minor) | `STATE_FORMAT` is back to 2 and `SITE_OUTPUT_FORMAT` is 2; the new test passes. Independent check: a project built by `origin/main`, then rebuilt with this branch with the sensor builder forced to fail, exits 1 with PARTIAL_FAILURE. All `series/`, `events/` and `indices/` files are identical to before, and the manifest marks the sensor `data_status: "error"`. Only the manifest changed. | resolved |
+| 5 | GFV label (minor) | The row header and the value cell carry "zaměkání" (cs/de/en). | resolved |
+| 6 | Precipitation rule (nit) | A day counts when `precip_n_samples` × `NOMINAL_STEP_S` (existing constant, 1830 s) ≥ `min_daily_coverage` × 86 400 s. Without the column there is no record. Tested, and stated in the note. | resolved |
+| 7 | Screenshot Chromium path (nit) | Order: `CHROMIUM_PATH`, then the newest `chromium-<rev>/chrome-linux*/chrome` under `PLAYWRIGHT_BROWSERS_PATH`, then Playwright's own path. Here that finds `chromium-1243/chrome-linux64/chrome`. The script was not run by the reviewer, because it would overwrite the committed screenshots. | resolved |
+| 8 | Demo data outside scope (nit) | Accepted by the orchestrator. | closed |
+
+**New observation** (nit, open, not blocking):
+- `web/src/styles.css`: the legend swatches for "střední" / "vysoké" have no tick sample, because the `::before` rule is limited to `.risk__strip`. The ticks are explained only in the "Pásma a vstupy" text. A tick in the legend would make the cue self-explanatory.
+
+**Deviations.** The scope extension to `src/sivin/app/site.py` (orchestrator decision) is one constant plus its docstring, and is covered by the new test. OK.
