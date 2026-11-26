@@ -45,6 +45,8 @@ ingest:
       device_settle_s: 0.0
       tab_settle_s: 0.0
       list_check_s: 0.05
+    table:
+      rows_wait_s: 0.2
 """
 """Fixes the parsers' 'future timestamp' limit so the tests do not depend on today's date, and
 shortens the portal waits for the fake browser (no real sleeping)."""

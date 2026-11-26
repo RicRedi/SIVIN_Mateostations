@@ -45,18 +45,38 @@ class PortalDevice:
 
 @dataclass(frozen=True, slots=True)
 class DownloadedExport:
-    """An export file downloaded for one device.
+    """An export file downloaded (or written from the device table) for one device.
 
     Parameters
     ----------
     device : PortalDevice
         The device.
     path : pathlib.Path
-        Absolute path of the downloaded file.
+        Absolute path of the file.
+    source : str, optional
+        Name of the source that delivered it (``ingest.portal.sources``): ``"export"`` for a
+        downloaded export, ``"table"`` for a file written from the device table.
     """
 
     device: PortalDevice
     path: Path
+    source: str = "export"
+
+
+@dataclass(frozen=True, slots=True)
+class UpToDateDevice:
+    """A device whose source worked but had nothing newer than the store; no file.
+
+    Parameters
+    ----------
+    device : PortalDevice
+        The device.
+    source : str
+        Name of the source that was read (``"table"``).
+    """
+
+    device: PortalDevice
+    source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,10 +105,13 @@ class SessionResult:
         Successful downloads, in portal order.
     failures : tuple[DeviceFailure, ...]
         Devices that failed, in portal order.
+    up_to_date : tuple[UpToDateDevice, ...], optional
+        Devices read successfully without new rows, in portal order.
     """
 
     downloads: tuple[DownloadedExport, ...]
     failures: tuple[DeviceFailure, ...]
+    up_to_date: tuple[UpToDateDevice, ...] = ()
 
     @property
     def files(self) -> tuple[Path, ...]:

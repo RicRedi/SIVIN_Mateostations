@@ -15,6 +15,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Self
@@ -34,11 +35,14 @@ from sivin.ingest.portal.errors import (
     DownloadTimeoutError,
     PortalError,
     PortalLoginError,
+    TableReadError,
     ViewModelError,
 )
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.page import Locator, PortalPage
 from sivin.ingest.portal.settings import PortalSettings
+from sivin.ingest.portal.table import TableReader, TableReading
+from sivin.ingest.portal.table_page import PortalTablePage
 from sivin.ingest.portal.viewmodel import ViewModelParser
 from sivin.ingest.portal.watcher import DownloadWatcher
 
@@ -46,6 +50,10 @@ logger = logging.getLogger(__name__)
 
 SELENIUM_WIRE_LOGGER: Final = "selenium.webdriver.remote.remote_connection"
 """Selenium logger that writes request bodies (including typed text) at DEBUG level."""
+
+EXPORT_ACTION: Final = "Export"
+TABLE_ACTION: Final = "Table read"
+"""What failed, in the first words of the diagnostics WARNING."""
 
 _WIRE_LOGGER_LOCK: Final = threading.Lock()
 """Serialises the temporary level change of :data:`SELENIUM_WIRE_LOGGER` between threads."""
@@ -258,6 +266,30 @@ class PortalClient:
             logger.info("back() did not return to the device list; reloading the portal.")
             self.return_to_folder()
 
+    def open_meteo_tab(self, device: PortalDevice) -> None:
+        """Open a device from the device list and switch to its meteorological tab.
+
+        Parameters
+        ----------
+        device : PortalDevice
+            A device from :meth:`list_devices`; the device list must be shown.
+
+        Raises
+        ------
+        selenium.common.exceptions.WebDriverException
+            If the device link or the tab does not appear in time, or the browser fails.
+        """
+        page, timeouts = self._page, self._settings.timeouts
+        page.wait_until_idle()
+        page.click_when_present(page.link(device.name), f"No link for device {device.name!r}.")
+        page.settle(timeouts.device_settle_s)
+        page.wait_until_idle()
+        page.click_when_clickable(
+            page.tab(), f"Tab {self._settings.meteo_tab_name!r} is not clickable."
+        )
+        page.wait_until_idle()
+        page.settle(timeouts.tab_settle_s)
+
     def download_export(self, device: PortalDevice) -> Path:
         """Download the Excel export of one device; the browser stays on the device page.
 
@@ -282,46 +314,79 @@ class PortalClient:
         selenium.common.exceptions.WebDriverException
             If an element does not appear in time or the browser fails.
         """
-        page, timeouts = self._page, self._settings.timeouts
-        page.wait_until_idle()
-        page.click_when_present(page.link(device.name), f"No link for device {device.name!r}.")
-        page.settle(timeouts.device_settle_s)
-        page.wait_until_idle()
-        page.click_when_clickable(
-            page.tab(), f"Tab {self._settings.meteo_tab_name!r} is not clickable."
-        )
-        page.wait_until_idle()
-        page.settle(timeouts.tab_settle_s)
+        self.open_meteo_tab(device)
+        page = self._page
         button = page.export_button(device)
         before = self._watcher.snapshot()
         page.press(button)
         try:
             path = self._watcher.wait_for_new_file(before, expected=device.sensor_id)
         except (DownloadTimeoutError, DownloadIncompleteError) as error:
-            self._log_diagnostics(device, error)
+            self._log_diagnostics(EXPORT_ACTION, device, error)
             raise
         self._check_name(device, path)
         logger.info("Downloaded the export of %s: %s", device, path.name)
         return path
 
-    def _log_diagnostics(self, device: PortalDevice, error: PortalError) -> None:
-        """Log one WARNING block describing the failed download; never raises.
+    def read_table(self, device: PortalDevice, since_utc: datetime | None) -> TableReading:
+        """Read the rows of a device's data table; the browser stays on the device page.
+
+        Parameters
+        ----------
+        device : PortalDevice
+            A device from :meth:`list_devices`; the device list must be shown.
+        since_utc : datetime.datetime or None
+            Last stored measurement of the sensor (timezone-aware); ``None`` reads the whole
+            history (see :class:`~sivin.ingest.portal.table.TableReader`).
+
+        Returns
+        -------
+        TableReading
+            The rows newer than ``since_utc``, newest first.
+
+        Raises
+        ------
+        TableReadError
+            If the table shows no rows, a page does not load or its columns are unexpected.
+        selenium.common.exceptions.WebDriverException
+            If an element does not appear in time or the browser fails.
+        """
+        self.open_meteo_tab(device)
+        reader = TableReader(
+            PortalTablePage(self._driver, self._settings, self._clock), self._settings.table
+        )
+        try:
+            reading = reader.read(since_utc)
+        except TableReadError as error:
+            self._log_diagnostics(TABLE_ACTION, device, error)
+            raise
+        logger.info(
+            "Read %d new table row(s) of %s from %d page(s).",
+            len(reading.rows),
+            device,
+            reading.pages_read,
+        )
+        return reading
+
+    def _log_diagnostics(self, action: str, device: PortalDevice, error: PortalError) -> None:
+        """Log one WARNING block describing the failed download or table read; never raises.
 
         The caller re-raises ``error``, so nothing here may replace it: an unexpected error
         while collecting is logged by its name only.
         """
         try:
             report = self._diagnostics.collect(self._driver)
-        except Exception as failure:  # the original download error must reach the caller
+        except Exception as failure:  # the original error must reach the caller
             logger.warning(
-                "Export of %s failed (%s); diagnostics unavailable (%s).",
+                "%s of %s failed (%s); diagnostics unavailable (%s).",
+                action,
                 device,
                 type(error).__name__,
                 type(failure).__name__,
             )
             return
         logger.warning(
-            "Export of %s failed (%s); diagnostics:\n%s", device, type(error).__name__, report
+            "%s of %s failed (%s); diagnostics:\n%s", action, device, type(error).__name__, report
         )
 
     @staticmethod

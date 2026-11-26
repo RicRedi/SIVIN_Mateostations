@@ -13,9 +13,14 @@ from sivin.ingest.portal.credentials import PortalCredentials, Secret
 from sivin.ingest.portal.errors import PortalLoginError
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.session import NOT_LISTED_REASON, PortalSession, _describe
-from sivin.ingest.portal.settings import PortalSettings
+from sivin.ingest.portal.settings import PortalSettings, PortalSource
 
 FIRST, SECOND, THIRD = "8615620 77678271", "8615621 77678272", "8615622 77678273"
+
+
+def _export_only(settings: PortalSettings) -> PortalSettings:
+    """The settings without the table fallback (these tests are about the export)."""
+    return settings.model_copy(update={"sources": (PortalSource.EXPORT,)})
 
 
 def _names(items: Any) -> list[str]:
@@ -46,7 +51,7 @@ def test_one_device_timing_out_does_not_stop_the_others(
 ) -> None:
     stale = settings.download_dir / f"MeteoData_{SECOND} (VUT)_20260201_100000.xlsx"
     stale.write_bytes(b"older synthetic export of the failing device")
-    client, _ = make_client({SECOND: "partial"})
+    client, _ = make_client({SECOND: "partial"}, settings_override=_export_only(settings))
 
     result = PortalSession(client).run()
 
@@ -65,7 +70,7 @@ def test_one_device_timing_out_does_not_stop_the_others(
 def test_a_late_download_is_never_given_to_the_next_device(
     make_client: Any, settings: PortalSettings, attempts: int
 ) -> None:
-    once = settings.model_copy(update={"attempts_per_device": attempts})
+    once = _export_only(settings).model_copy(update={"attempts_per_device": attempts})
     client, _ = make_client({SECOND: "late"}, settings_override=once)
 
     result = PortalSession(client).run()
@@ -92,8 +97,12 @@ def test_a_device_is_retried_once_after_recovery(
     assert driver.log.count(("get", settings.portal_url)) == 2  # login + one recovery
 
 
-def test_selenium_errors_are_recorded_per_device(make_client: Any) -> None:
-    client, _ = make_client({FIRST: "no_tab", THIRD: "no_button"})
+def test_selenium_errors_are_recorded_per_device(
+    make_client: Any, settings: PortalSettings
+) -> None:
+    client, _ = make_client(
+        {FIRST: "no_tab", THIRD: "no_button"}, settings_override=_export_only(settings)
+    )
 
     result = PortalSession(client).run()
 
@@ -117,7 +126,7 @@ def test_a_failing_back_does_not_lose_the_download(
 
     assert _names(result.downloads) == [FIRST, SECOND, THIRD]
     assert result.ok
-    assert "Export downloaded, but returning to the device list failed" in caplog.text
+    assert "Data delivered, but returning to the device list failed" in caplog.text
 
 
 def test_selected_sensors_and_unknown_ones(make_client: Any) -> None:
@@ -130,9 +139,9 @@ def test_selected_sensors_and_unknown_ones(make_client: Any) -> None:
 
 
 def test_failed_recovery_is_logged_and_the_run_continues(
-    make_client: Any, caplog: pytest.LogCaptureFixture
+    make_client: Any, settings: PortalSettings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    client, driver = make_client({FIRST: "none"})
+    client, driver = make_client({FIRST: "none"}, settings_override=_export_only(settings))
     driver.fail_get_after = 1  # the login works, every reload fails
 
     with caplog.at_level(logging.WARNING):
