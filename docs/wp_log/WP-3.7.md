@@ -330,3 +330,65 @@ Details (input → wrong behaviour → suggested fix):
 
 Re-review after round 1 needs only finding 1 fixed (and ideally 2); the rest may go to *Out of
 scope* if the worker prefers.
+
+### Round 2
+
+Verdict: APPROVE (round 2)
+
+Reviewed `d36df03` (branch rebased onto `origin/main`; round-1 review is `9163bc7`).
+
+**Gates** (reviewer, `web/`): `npm run lint` clean; `npm run typecheck` clean; `npm test`
+31 files / 314 tests passed, coverage lines 99.49 %, statements 99.47 %, branches 93.59 %,
+functions 99.46 %; `npm run build` OK (JS 330.38 kB, gzip 106.94 kB). Diff still only inside the
+Files scope; no new dependency.
+
+**Re-run probes** (`/tmp/claude-0/review-3.7/`, synthetic data, vite preview + Chromium 1243):
+
+- *Formula injection* (`CsvWriter` directly and `ChartCsv` with a stub label `-5`):
+  `=1+1`, `+cmd|calc`, `-2+3`, `@SUM(A1)`, `\t=1`, `\r=1`, `-1,5e3`, `=A1;b` → prefixed with `'`
+  (quoted where needed); numbers `-0,25`, `-5` and exported values such as `-1,23` stay
+  numeric; header `'-5 – Temperature (°C)`. ` =1+1` (leading space), full-width `＝1+1`,
+  `a\n=1` are left as is, which spreadsheets do not evaluate. Finding 1 resolved.
+- *Citation*: "[source not verified]" in `psychrometry.ts:25` and `docs/web.md:374`. Resolved.
+- *Wheel bubbling*: wheel out over the fully zoomed-out small chart scrolls the side panel
+  (scrollTop 559 → 588, "Celé okno" stays disabled); wheel in zooms and does not scroll; at the
+  minimum span (2 h 02 min ≈ 4 × 1830 s, 7 rows in the CSV) further wheel-in scrolls the panel.
+  Resolved.
+- *Hourly precipitation* (`Resampler.hourlyPrecipitation`, hand-built raw series, 1 mm per
+  sample, 1830 s grid from 10:05Z): regular → 10:00 = 2, 11:00 = 2 (midpoint binning correct);
+  a `null` sample or a MANUAL_EXCLUDE sample → its midpoint hour `null`; a missed-sample gap →
+  the hour holding the long interval's midpoint `null`. Remaining hole, see minor below.
+- *Owner decisions*: CSV in `lang=en` uses a decimal comma (`23,60`, `-1,23`). At daily
+  resolution the leaf-wetness check box is disabled with "– jen pro surová data a hodinové
+  průměry", stays checked in the hash, no band/legend entry and no CSV column; switching to
+  hourly re-enables it and draws two lanes. With the dialog open the hash is unchanged.
+- *Performance* (8 sensors × 29 days raw, dialog 1280 px, `perf.mjs`): median 66 ms (p90 83)
+  temp + RH, 108 ms (p90 127) with five quantities — consistent with the numbers now in
+  `docs/web.md`; headless software rendering only.
+
+| Severity | File:line | Finding | Status |
+|---|---|---|---|
+| major | web/src/app/CsvWriter.ts:51 | CSV formula injection | resolved |
+| minor | web/src/domain/psychrometry.ts:24, docs/web.md:364 | unverified citation not marked | resolved |
+| minor | web/src/ui/ZoomPanPlugin.ts:193 | wheel always consumed | resolved |
+| minor | web/src/domain/Resampler.ts:89 | hourly precipitation binning / partial hours | partly resolved, see below |
+| minor | docs/web.md (performance) | performance claim | resolved (numbers documented) |
+| nit | web/src/domain/dailyColumnSeries.ts:3-4 | type between imports | resolved |
+| nit | web/src/ui/SeriesChart.ts:147 | zoom kept by object identity | resolved (`TimeWindow.equals`) |
+| nit | web/src/ui/ChartDialog.ts | empty dialog without sensors | resolved (empty-state note) |
+| minor | web/src/domain/Resampler.ts:100-125, docs/web.md:399-402 | Completeness is judged by the samples whose midpoints fall in an hour, not by coverage of the hour. At the edge of a gap or at the end of the loaded data an hour can be partly uncovered and still shown as a complete sum. | open |
+
+Detail of the new minor: samples at 10:05Z and 10:35Z, then nothing until 14:00Z (1 mm each,
+5 mm in the 14:00 sample) → hour 10:00 = 1 mm is shown although 10:35–11:00 is not covered
+(that rain sits in the 14:00 sample, whose hour 12:00 is correctly `null`); likewise the hour
+after the gap (14:00 = 1 mm, covering only 14:00–14:30) and the latest, still running hour of
+live data. `docs/web.md` says "a partial sum never looks like a complete one", which is too
+strong. Suggested fix (follow-up, not blocking): also mark an hour incomplete when the next
+sample's interval starts after the hour's end minus 1.5 steps / no later sample exists before
+the hour's end, or weaken the sentence in `docs/web.md`. It affects only hours adjacent to gaps
+and needs real precipitation data to matter (the demo has none).
+
+**Assessment:** every round-1 finding is fixed and verified; the owner decisions are
+implemented as stated. No blockers or majors remain. The one new minor (edge hours of hourly
+precipitation) is a documentation/precision issue for a follow-up; it should be listed in
+*Out of scope* or noted in the PR description.
