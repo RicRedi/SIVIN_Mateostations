@@ -9,7 +9,9 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 > **Status:** the client has been tested only against a fake browser that imitates the portal's
 > pages as the legacy script describes them. It has **not been run against the real portal**
 > (the agents' sandbox cannot reach it). The first real run must be watched; see
-> [Troubleshooting](#troubleshooting).
+> [Troubleshooting](#troubleshooting). The table fallback ([Fallback: the device
+> table](#fallback-the-device-table)) was built from a page the owner saved; its clicks and
+> waits are equally unverified in a live browser.
 
 ## Components
 
@@ -24,7 +26,11 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 | `ViewModelParser` | `viewmodel.py` | Pure parser of the DotVVM viewmodel JSON into `PortalDevice` objects. |
 | `DownloadWatcher` | `watcher.py` | Detects the file a click produced: a *new*, non-empty, size-stable file that is not a late file of an earlier download and not another sensor's export. |
 | `DownloadDiagnostics`, `DownloadReport` | `diagnostics.py` | After a failed download: what the download directories, the browser and the portal's notices show, logged as one WARNING block (see [When a download fails](#when-a-download-fails)). |
-| `PortalSession` | `session.py` | One run: login, device list, one export per device; a failing device is recorded, the run goes on. Returns `SessionResult`. |
+| `PortalSession` | `session.py` | One run: login, device list, then per device the configured sources in order until one delivers; a device fails only when every source failed, the run goes on. Returns `SessionResult`. |
+| `DeviceSource`, `ExportSource`, `TableSource`, `device_source_registry`, `SourceContext`, `LastTimestamps` | `sources.py` | The ways of getting a device's data (`ingest.portal.sources`): the Excel export, and the device table as the fallback. New ways are new registered subclasses. |
+| `TableReader`, `TableRowParser`, `TableReading` | `table.py` | Which table pages are read (newest to older, until the last stored measurement) and which rows are kept; no Selenium. |
+| `PortalTablePage` | `table_page.py` | The table in the browser: wait for rows, read a page with one script call, page size, next page. |
+| `TableCsvWriter` | `table_file.py` | Writes the rows as a file in the layout of the portal's CSV export into `download_dir`. |
 
 `import sivin.ingest.portal` loads only the Selenium-free parts (settings, credentials, value
 objects, errors, parser, watcher), so reading the configuration never needs the `ingest` extra.
@@ -58,7 +64,8 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
    gives the device names (e.g. `8615620 77678271`). All sections are searched, not only the
    first; duplicates are dropped. A structure without any `Devices` list raises
    `ViewModelError`. New devices in the portal are therefore downloaded without any change here.
-4. **For each device:**
+4. **For each device** (the steps of the export source; the table source is described in
+   [Fallback: the device table](#fallback-the-device-table)):
    1. wait for the spinner to disappear, click the link containing the device name,
       pause `device_settle_s` (3 s, the legacy value), wait for the spinner;
    2. click the tab containing `Meteorologická data`, wait for the spinner, pause
@@ -77,15 +84,21 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
       device). If it is not there — e.g. because the tab switch added a history entry — the
       portal is reloaded and the folder opened again. A failure here is logged; the download is
       kept.
-5. **A failing device** (any Selenium exception, a missing button, a download timeout or an
-   incomplete file, a file system error) is retried after the client has reloaded `portal_url`
-   and opened the folder again (`return_to_folder()`), up to `attempts_per_device` attempts
-   (default 2). Then it is recorded as `DeviceFailure(device, reason)` (the first error, and the
-   last one if it differed) and the run continues with the next device. If the reload fails
-   too, it is logged and the next devices fail on their own.
+5. **A failing source** (any Selenium exception, a lost connection to chromedriver (urllib3
+   errors such as `MaxRetryError`), a missing button, a download timeout or an incomplete
+   file, an unreadable table, a file system error) is retried after the client has
+   reloaded `portal_url` and opened the folder again (`return_to_folder()`), up to
+   `attempts_per_device` attempts (default 2). Then the next source of `sources` is tried (by
+   default the table after the export). Only when every source failed is the device recorded as
+   `DeviceFailure(device, reason)` (per source the first error, and the last one if it differed;
+   with several sources prefixed by the source name, e.g. `export: …; table: …`) and the run
+   continues with the next device. If the reload fails too, it is logged and the next devices
+   fail on their own. The log says which source delivered each device
+   (`<device>: delivered by the table source after 1 failed source(s).`).
 6. **Close the browser** (always, also after an error) and return
-   `SessionResult(downloads, failures)`. `result.ok` is `True` when nothing failed; the caller
-   decides the exit code.
+   `SessionResult(downloads, failures, up_to_date)`. Each download names its `source`
+   (`export` or `table`); `up_to_date` lists devices whose table had nothing newer than the
+   store. `result.ok` is `True` when nothing failed; the caller decides the exit code.
 
 ### How a finished download is recognised
 
@@ -157,6 +170,8 @@ values, except `timeouts.download_wait_s` (120 s instead of 30 s).
 | `chrome_arguments` | `["--window-size=1920,1080"]` | flags | Extra Chrome arguments; add `--no-sandbox` only when running as root in a container. |
 | `partial_download_suffixes` | `[".crdownload", ".tmp"]` | suffixes | Unfinished downloads. |
 | `ignored_download_prefixes` | `["."]` | prefixes | Hidden temporary files. |
+| `sources` | `[export, table]` | list | Sources tried per device, in order: `[export, table]` (export, the table as the fallback), `[table]` (table only), `[export]` (export only). |
+| `table.*` | see [Fallback: the device table](#fallback-the-device-table) | | Locators, page sizes and waits of the table reader. |
 
 ### Environment variables
 
@@ -223,6 +238,12 @@ setting in `config/sivin.yaml` (no code change needed):
 | `ExportButtonNotFoundError` | `selectors.excel_button_xpath`, `selectors.section_button_xpath_template`; the window size in `chrome_arguments` |
 | `TimeoutException: Spinner #UpdateProgress is still visible.` | `selectors.spinner_id`, `timeouts.element_wait_s` |
 | `DownloadTimeoutError` | read the diagnostics block first ([When a download fails](#when-a-download-fails)); then `timeouts.download_wait_s`, Chrome's download preferences, free disk space |
+| `TableReadError: No rows in the table …` | `table.rows_wait_s` (the rows come with a postback), `table.card_xpath_template`, `table.table_xpath`, `export_section_name`; or the device really has no data |
+| `TableReadError: The table has no column 'Datum a čas'` | `table.columns` (the table's header texts) |
+| `TableReadError: None of the N rows of table page P could be read` | `table.timestamp_format`, `table.columns` (the table's format changed) |
+| `TableReadError: The table is not sorted newest first` | the grid's sort order (header links sort it); sort by *Datum a čas*, newest first |
+| `TableReadError: The next table page did not load` | `table.next_page_xpath`, `timeouts.element_wait_s` |
+| WARNING `The page size stayed at …` / `Page size … not reached` | `table.page_size_xpath`, `table.max_page_size_clicks`; harmless: the reader goes on with the size shown |
 
 ## When a download fails
 
@@ -277,6 +298,116 @@ The notification selector is generic (ARIA `alert`/`status` roles and common toa
 has not been checked against the portal's HTML; `none visible` therefore does not prove that
 the portal showed no message. Set `selectors.notification_css` once the real message element is
 known.
+
+## Fallback: the device table
+
+Since October 2026 the Excel export has not produced a file in the daily runs (WP-1.3.1
+diagnostics). The device page shows the same data in the table *Historie meteorologických
+dat* of the tab *Meteorologická data*, so the table is the **fallback source** (WP-1.10, owner
+decision 2026-11-26): with the default `sources: [export, table]`, a device whose export failed
+after its attempts is read from the table instead. The locators below come from a page the owner
+saved in a browser (a trimmed excerpt without anything account-related is
+`tests/ingest/portal/data/meteo_table_excerpt.html`); **they have not been tried in a live
+browser.**
+
+What the page looks like (DotVVM GridView):
+
+- the table `tbody[data-bind="foreach: MeteoData"]` has one row per measurement, newest first,
+  with six cells: `Datum a čas` (`18.11.2026 9:53:11`, local time Europe/Prague, one-digit
+  hours), `Teplota`, `Vlhkost`, `Srážky`, `Celkové srážky`, `Nabití baterie` (decimal comma,
+  e.g. `24,3848`). DotVVM renders the table only while it has rows
+  (`<!-- ko if: MeteoData()?.length -->`); the rows arrive with a postback after the tab opens,
+  so the hidden viewmodel input holds `MeteoData: null` and is **not** read;
+- below it a paging control (`dotvvm-with-control-properties: { Paging: _Paging,
+  RecordsPerPage: RecordsPerPage }`): first/previous page (`fa-fast-backward`,
+  `fa-step-backward`), page numbers, next/last page (`fa-step-forward`, `fa-fast-forward`,
+  disabled on the last page), a page-size button (`fa-chevron-down`, tooltip "Zvětšit počet
+  zobrazených záznamů"; the viewmodel offers 10, 15, 20, 30, 50, 100, 500, 1000 and 5000 rows),
+  the Excel button and the text `Zobrazeno 5000 z 9562 (5000)` (shown, total, page size). Other
+  tabs of the device page have paging controls of their own, so every locator is searched
+  inside the card of `export_section_name`.
+
+How a device is read (`TableSource` → `PortalClient.read_table` → `TableReader`):
+
+1. Open the device and its meteorological tab (the same steps as for the export).
+2. Ask the store for the sensor's **last stored measurement** (`StoreLastTimestamps`, the
+   newest `timestamp_utc` of `MeasurementStore.time_range`, passed to `FetchService` as
+   `last_timestamps`; `ServiceFactory.fetch_service` does this for `sivin fetch` and
+   `sivin run`).
+3. Wait up to `table.rows_wait_s` until the table shows rows. Each page is read with one
+   JavaScript call that returns the trimmed text of every header and body cell.
+4. Choose the page size: `table.incremental_page_size` (500 rows ≈ 10 days) when the store
+   has the sensor, `table.full_history_page_size` (5000) when it has nothing. The page-size
+   button is clicked until the paging text shows that size, at most
+   `table.max_page_size_clicks` times. **What the button does is assumed** (step to the next
+   size, wrapping round after 5000); when the size is not reached, reading goes on with the
+   size shown, which changes only the number of pages.
+5. Read the pages newest to older (the next-page button; a page counts as loaded when its first
+   row changed). With a last stored time, stop after the **first page that holds a row at or
+   before it**; without one, read every page. At most `table.max_pages` pages.
+6. Keep only rows **newer** than the last stored measurement (all rows without one). Table times
+   are compared as local wall-clock time of `table.source_timezone` (= `time.source_timezone`).
+   When the last stored measurement lies in the repeated hour of the autumn change (the wall
+   clock cannot tell its two passes apart), the cutoff is lowered by twice the clock shift
+   (2 h), so the repeated hour is read again. Whenever the oldest written row lies in a
+   repeated hour, the older rows down to the first ordinary row are written too, as an anchor:
+   the CSV parser resolves the repeated hour only between ordinary rows. Rows written again
+   this way are already stored; the store skips them (a row stored from an export may differ in
+   precision, see *Known limits*).
+   Rows a page repeats from the end of the page before (a measurement arrived while reading;
+   at most 10) are kept once; no other rows are merged, so equal rows of the repeated hour stay.
+   The rows must go back in time (later only inside a repeated hour); a table sorted otherwise
+   raises `TableReadError: The table is not sorted newest first …`. A row with the wrong number
+   of cells or an unreadable timestamp is skipped and counted (WARNING); a page on which **no**
+   row can be read raises `TableReadError: None of the N rows of table page P could be read`
+   (a changed timestamp format must not look like "up to date"). Values are copied as shown, so
+   a bad value is judged by the input validation as in an export.
+7. Write the rows into `download_dir` as
+   `MeteoData_<device number> <serial> (table)_<YYYYMMDD>_<HHMMSS>.csv` (local time of writing;
+   a label of the device name such as `(VUT)` is replaced by `(table)`, since a file name may
+   carry one label only), e.g. `MeteoData_8615620 77799986 (table)_20261126_060000.csv`: exactly
+   the layout of the portal's CSV export (`Meteo Data;` title row, the export's headers, newest
+   first, `;`, CRLF, decimal comma, `YYYY-MM-DD HH:MM:SS`, a last line `;`). The name names the
+   sensor for `SensorId`, its time becomes the store's short source identifier and the label
+   `(table)` shows the origin in the run record. When nothing is newer, no file is written and
+   the device is *up to date*.
+
+The file then goes through the unchanged ingest path: parser (local time → UTC), validation,
+quarantine, store, run record. Rows already stored are never sent again, so the store only
+appends.
+
+A table failure (`TableReadError`) logs the same diagnostics block as a failed download, headed
+`Table read of <device> failed (TableReadError); diagnostics:`.
+
+| Key (`ingest.portal.table.`) | Default | Unit | Meaning |
+|---|---|---|---|
+| `card_xpath_template` | heading containing `{text}` → nearest ancestor with class `card` | XPath | The card of `export_section_name` ([to be verified]). |
+| `table_xpath` | `.//table[.//tbody]` | XPath (relative) | The data table in the card. |
+| `paging_xpath` | `.//*[contains(@data-bind, 'RecordsPerPage')]` | XPath (relative) | The paging control. |
+| `next_page_xpath` | `.//button[.//i[contains(@class, 'fa-step-forward')]]` | XPath (relative) | Next (older) page. |
+| `page_size_xpath` | `.//button[.//i[contains(@class, 'fa-chevron-down')]]` | XPath (relative) | Page-size button ([to be verified]). |
+| `paging_text_pattern` | `Zobrazeno <shown> z <total> (<page_size>)` | regex | Groups `shown`, `total`, `page_size`. |
+| `columns` | table header → export header, six columns | mapping | First entry = timestamp column; other table columns are ignored. |
+| `timestamp_format` | `%d.%m.%Y %H:%M:%S` | format | Table timestamps. |
+| `source_timezone` | = `time.source_timezone` | zone | Zone of the table times. |
+| `incremental_page_size` | 500 | rows | Page size when the store has the sensor. |
+| `full_history_page_size` | 5000 | rows | Page size when it has nothing. |
+| `max_page_size_clicks` | 9 | count | Clicks to reach the page size. |
+| `max_pages` | 100 | count | Pages read per device at most. |
+| `rows_wait_s` | 30 | s | Wait for the first rows ([to be tuned]). |
+| `file_label` | `table` | word | Label in the file name. |
+
+Known limits:
+
+- **Precision.** The table shows more decimals than the export (temperature `24,3848` in the
+  table, `23,79` in the real export of March 2026; not verified on the same rows). The table
+  never re-sends stored rows, but a later successful export that overlaps table-sourced rows
+  replaces their values under the default `storage.conflict_policy: prefer_newest` (storage is
+  unchanged by WP-1.10). Each replaced value is a conflict: logged and recorded in the run log,
+  at most `storage.max_recorded_conflicts` per append, the rest only counted. Whether that is
+  wanted is an open question for the owner ([WP-1.10](wp_log/WP-1.10.md)).
+- **Gaps stay.** Reading stops at the newest stored measurement; a gap further back is not
+  filled by the table.
 
 ## Troubleshooting
 

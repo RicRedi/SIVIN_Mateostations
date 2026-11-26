@@ -35,7 +35,7 @@ from sivin.ingest.portal.diagnostics import (
 from sivin.ingest.portal.errors import DownloadIncompleteError, DownloadTimeoutError
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.session import PortalSession
-from sivin.ingest.portal.settings import PortalSelectors, PortalSettings
+from sivin.ingest.portal.settings import PortalSelectors, PortalSettings, PortalSource
 from sivin.ingest.portal.watcher import DownloadWatcher, FileKind
 
 FIRST_NAME = "8615620 77678271"
@@ -552,9 +552,10 @@ def test_an_unexpected_collecting_error_does_not_mask_the_download_error(
 
 
 def test_session_retry_behaviour_is_unchanged(
-    make_client: Any, caplog: pytest.LogCaptureFixture
+    make_client: Any, settings: PortalSettings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    client, _ = make_client(behaviours={FIRST_NAME: "none"})
+    export_only = settings.model_copy(update={"sources": (PortalSource.EXPORT,)})
+    client, _ = make_client(behaviours={FIRST_NAME: "none"}, settings_override=export_only)
 
     with caplog.at_level(logging.WARNING):
         result = PortalSession(client).run()

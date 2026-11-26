@@ -42,6 +42,10 @@ ingest:
     headless: true
     browser: chrome
     download_dir: data/downloads    # exports are saved here by `sivin fetch`
+    sources: [export, table]        # tried in order: [export] or [table] alone also work
+    table:                          # device table, the fallback when the export fails
+      incremental_page_size: 500    # rows per page when the store has the sensor (~10 days)
+      full_history_page_size: 5000  # rows per page when the store has nothing of the sensor
   quarantine_mode: move             # move | copy a rejected export to paths.quarantine_dir
   file_patterns: ["*.csv", "*.xlsx"]  # files picked up by `sivin ingest --from-dir`
 

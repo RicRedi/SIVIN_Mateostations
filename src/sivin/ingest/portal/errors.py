@@ -34,3 +34,7 @@ class DownloadTimeoutError(PortalError):
 
 class DownloadIncompleteError(PortalError):
     """Raised when the only new file is smaller than the minimum export size (e.g. empty)."""
+
+
+class TableReadError(PortalError):
+    """Raised when the device page's data table cannot be read (no rows, paging, columns)."""

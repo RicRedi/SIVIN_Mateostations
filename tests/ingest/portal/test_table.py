@@ -1,0 +1,401 @@
+"""TableRowParser and TableReader: which pages are read and which rows are kept (WP-1.10).
+
+The rows are SYNTHETIC, except where they come from the excerpt of a real device page
+(``real_excerpt``). Expected values are worked out by hand in the comments.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import pytest
+from tests.ingest.conftest import make_settings
+from tests.ingest.portal.table_fakes import (
+    HEADERS,
+    STEP,
+    FakeMeteoTable,
+    TableState,
+    raw_table,
+    real_excerpt,
+    synthetic_rows,
+)
+
+from sivin.ingest.parsers.base import parser_registry
+from sivin.ingest.portal.errors import TableReadError
+from sivin.ingest.portal.models import PortalDevice
+from sivin.ingest.portal.settings import PortalTableSettings
+from sivin.ingest.portal.table import (
+    RawTable,
+    TableReader,
+    TableRow,
+    TableRowParser,
+    repeated_shift,
+)
+from sivin.ingest.portal.table_file import TableCsvWriter
+
+EXPORT_COLUMNS = (
+    "Datum a čas",
+    "Teplota (°C)",
+    "Vlhkost (%)",
+    "Srážky (mm)",
+    "Celkové srážky (mm)",
+    "Nabití baterie (V)",
+)
+
+NEWEST = datetime(2026, 11, 20, 12, 0, 0)
+"""Local time of the newest SYNTHETIC row (CET, UTC+1)."""
+
+
+def _settings(**changes: object) -> PortalTableSettings:
+    return PortalTableSettings(incremental_page_size=5, full_history_page_size=10).model_copy(
+        update=changes
+    )
+
+
+def _local_times(rows: tuple[TableRow, ...]) -> list[str]:
+    return [row.local_time.strftime("%H:%M") for row in rows]
+
+
+class TestRowParser:
+    def test_real_rows_become_export_rows(self) -> None:
+        excerpt = real_excerpt()
+        page = raw_table(excerpt.rows, excerpt.headers)
+
+        parsed = TableRowParser(PortalTableSettings()).parse(page)
+
+        assert parsed.columns == EXPORT_COLUMNS
+        assert parsed.malformed_rows == 0
+        assert len(parsed.rows) == 20
+        assert parsed.rows[0] == TableRow(
+            datetime(2026, 11, 18, 13, 49, 25),
+            ("2026-11-18 13:49:25", "24,3848", "35,498", "0", "200,57", "3,3"),
+        )
+        # "18.11.2026 9:53:11" has a one-digit hour on the page; the export pads it.
+        assert parsed.rows[8].cells[0] == "2026-11-18 09:53:11"
+        assert parsed.rows[-1].cells[0] == "2026-11-18 04:28:17"
+
+    def test_columns_are_found_by_header_text(self) -> None:
+        page = raw_table(
+            [("21,5", "1.12.2026 0:05:00", "x", "80,1")],
+            headers=("Teplota", "Datum a čas", "Unknown column", "Vlhkost"),
+        )
+
+        parsed = TableRowParser(PortalTableSettings()).parse(page)
+
+        assert parsed.columns == ("Datum a čas", "Teplota (°C)", "Vlhkost (%)")
+        assert parsed.rows[0].cells == ("2026-12-01 00:05:00", "21,5", "80,1")
+
+    def test_missing_timestamp_column_is_an_error(self) -> None:
+        page = raw_table([("21,5",)], headers=("Teplota",))
+
+        with pytest.raises(TableReadError, match="no column 'Datum a čas'"):
+            TableRowParser(PortalTableSettings()).parse(page)
+
+    def test_malformed_rows_are_skipped_and_counted(self, caplog: pytest.LogCaptureFixture) -> None:
+        rows = [
+            ("20.11.2026 12:00:00", "1", "2", "0", "100", "3,5"),
+            ("20.11.2026 11:30:00", "1", "2", "0", "100"),  # one cell short
+            ("31.02.2026 11:00:00", "1", "2", "0", "100", "3,5"),  # no such day
+            ("", "", "", "", "", ""),  # empty row
+            ("20.11.2026 10:30:00", "abc", "2", "0", "100", "3,5"),  # value left to validation
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            parsed = TableRowParser(PortalTableSettings()).parse(raw_table(rows))
+
+        assert parsed.malformed_rows == 3
+        assert [row.cells[0] for row in parsed.rows] == [
+            "2026-11-20 12:00:00",
+            "2026-11-20 10:30:00",
+        ]
+        assert parsed.rows[1].cells[1] == "abc"
+        assert "Skipped 3 malformed table row(s) of 5." in caplog.text
+
+
+class TestIncrementalReading:
+    def test_stops_at_the_page_that_reaches_the_last_stored_row(self) -> None:
+        state = TableState(synthetic_rows(NEWEST, 30), page_size=5000)
+        table = FakeMeteoTable(state)
+        # 05:00 UTC = 06:00 CET. Newer rows: 12:00, 11:30, ..., 06:30 = 12 rows. With 5 rows
+        # per page, page 3 (07:00 ... 05:00) holds 06:00, so pages 4-6 are never opened.
+        since_utc = datetime(2026, 11, 20, 5, 0, tzinfo=UTC)
+
+        reading = TableReader(table, _settings()).read(since_utc)
+
+        assert table.requested_sizes == [5]
+        assert reading.pages_read == 3
+        assert table.pages_opened == 2
+        assert reading.reached_stored
+        assert len(reading.rows) == 12
+        assert _local_times(reading.rows)[0] == "12:00"
+        assert _local_times(reading.rows)[-1] == "06:30"
+        assert reading.columns == EXPORT_COLUMNS
+
+    def test_summer_time_is_converted_with_the_source_zone(self) -> None:
+        newest = datetime(2026, 7, 1, 12, 0, 0)  # CEST, UTC+2
+        table = FakeMeteoTable(TableState(synthetic_rows(newest, 10)))
+        since_utc = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)  # 11:00 CEST
+
+        reading = TableReader(table, _settings()).read(since_utc)
+
+        assert _local_times(reading.rows) == ["12:00", "11:30"]
+        assert reading.pages_read == 1
+
+    def test_nothing_newer_gives_no_rows(self) -> None:
+        table = FakeMeteoTable(TableState(synthetic_rows(NEWEST, 30)))
+        since_utc = datetime(2026, 11, 20, 11, 0, tzinfo=UTC)  # 12:00 CET, the newest row
+
+        reading = TableReader(table, _settings()).read(since_utc)
+
+        assert reading.rows == ()
+        assert reading.pages_read == 1
+        assert reading.reached_stored
+
+    def test_an_unreachable_page_size_only_changes_the_page_count(self) -> None:
+        state = TableState(synthetic_rows(NEWEST, 30), page_size=4)
+        table = FakeMeteoTable(state, sizes_reachable=False)
+        since_utc = datetime(2026, 11, 20, 5, 0, tzinfo=UTC)
+
+        reading = TableReader(table, _settings()).read(since_utc)
+
+        # 4 rows per page: 06:00 is row 12 (0-based), on page 4 (rows 12-15).
+        assert reading.pages_read == 4
+        assert len(reading.rows) == 12
+
+    def test_naive_since_is_refused(self) -> None:
+        table = FakeMeteoTable(TableState(synthetic_rows(NEWEST, 3)))
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            TableReader(table, _settings()).read(datetime(2026, 11, 20, 5, 0))
+
+
+class TestFullHistory:
+    def test_reads_every_page_at_the_full_history_size(self) -> None:
+        table = FakeMeteoTable(TableState(synthetic_rows(NEWEST, 25), page_size=500))
+
+        reading = TableReader(table, _settings()).read(None)
+
+        assert table.requested_sizes == [10]
+        assert reading.pages_read == 3  # 10 + 10 + 5 rows
+        assert len(reading.rows) == 25
+        assert not reading.reached_stored
+
+    def test_max_pages_stops_with_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        table = FakeMeteoTable(TableState(synthetic_rows(NEWEST, 25)))
+
+        with caplog.at_level(logging.WARNING):
+            reading = TableReader(table, _settings(max_pages=2)).read(None)
+
+        assert reading.pages_read == 2
+        assert len(reading.rows) == 20
+        assert "Stopped after max_pages = 2 table pages before the last page" in caplog.text
+
+
+class ScriptedTable:
+    """A MeteoTable that serves fixed pages, for shifted and inconsistent pages."""
+
+    def __init__(self, pages: list[RawTable]) -> None:
+        self.pages = pages
+        self.index = 0
+
+    def wait_for_rows(self) -> RawTable:
+        return self.pages[0]
+
+    def change_page_size(self, page_size: int, current: RawTable) -> RawTable:
+        return current
+
+    def next_page(self, current: RawTable) -> RawTable | None:
+        self.index += 1
+        return self.pages[self.index] if self.index < len(self.pages) else None
+
+
+def test_a_row_repeated_on_the_next_page_is_kept_once() -> None:
+    rows = synthetic_rows(NEWEST, 5)
+    # A new measurement arrived between the two reads: page 2 starts with page 1's last row.
+    table = ScriptedTable([raw_table(rows[:3]), raw_table(rows[2:])])
+
+    reading = TableReader(table, _settings()).read(None)
+
+    assert reading.pages_read == 2
+    assert _local_times(reading.rows) == ["12:00", "11:30", "11:00", "10:30", "10:00"]
+
+
+def test_columns_changing_between_pages_is_an_error() -> None:
+    rows = synthetic_rows(NEWEST, 4)
+    second = raw_table([row[:5] for row in rows[2:]], headers=HEADERS[:5])
+    table = ScriptedTable([raw_table(rows[:2]), second])
+
+    with pytest.raises(TableReadError, match="columns changed between pages"):
+        TableReader(table, _settings()).read(None)
+
+
+def test_malformed_rows_are_counted_over_all_pages() -> None:
+    rows = synthetic_rows(NEWEST, 4)
+    bad = ("not a time", "1", "2", "0", "100", "3,5")
+    table = ScriptedTable([raw_table([rows[0], bad]), raw_table([rows[1], bad, rows[2]])])
+
+    reading = TableReader(table, _settings()).read(None)
+
+    assert reading.malformed_rows == 2
+    assert len(reading.rows) == 3
+
+
+def test_first_row_of_an_empty_page() -> None:
+    assert RawTable(HEADERS, ()).first_row is None
+    assert raw_table([("a",) * 6]).first_row == ("a",) * 6
+
+
+def test_a_last_time_in_the_repeated_autumn_hour_reads_that_hour_again(tmp_path: Path) -> None:
+    # 25.10.2026: 03:00 CEST becomes 02:00 CET (01:00 UTC); 02:00-03:00 local occurs twice.
+    # SYNTHETIC rows every 30 min, newest first, from 12:10 UTC back to 21:40 UTC the day before.
+    newest = datetime(2026, 10, 25, 12, 10, tzinfo=UTC)
+    instants = [newest - i * STEP for i in range(30)]
+    zone = ZoneInfo("Europe/Prague")
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", f"10,{i}", "50", "0", "100", "3,5")
+        for i, t in enumerate(instants)
+    ]
+    stored = datetime(2026, 10, 25, 0, 40, tzinfo=UTC)  # 02:40 CEST, the first pass
+
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    # A plain wall-clock cutoff (02:40) would drop 02:10 and 02:40 CET (01:10Z, 01:40Z), which
+    # are new. The cutoff 02:40 - 2 h = 00:40 local (22:40Z) keeps every row after 22:40Z: the
+    # repeated hour and two ordinary rows before it, already stored, come back once more.
+    kept = [t for t in instants if t > datetime(2026, 10, 24, 22, 40, tzinfo=UTC)]
+    assert len(reading.rows) == len(kept) == 27
+    assert _local_times(reading.rows)[-7:] == [
+        "03:10",
+        "02:40",
+        "02:10",
+        "02:40",
+        "02:10",
+        "01:40",
+        "01:10",
+    ]
+
+    path = TableCsvWriter(PortalTableSettings(), tmp_path).write(
+        PortalDevice("8615620 77680921"), reading, datetime(2026, 10, 25, 13, 0, tzinfo=UTC)
+    )
+    parsed = parser_registry.for_file(path, make_settings()).parse(path)
+    (series,) = parsed.series
+    # The CSV parser resolves the repeated hour by the backward jump of the wall clock, so both
+    # CET rows reach the store with their true UTC times.
+    assert list(series.frame["timestamp_utc"]) == [pd.Timestamp(t) for t in reversed(kept)]
+
+
+def test_a_last_time_outside_a_clock_change_is_the_cutoff() -> None:
+    table = FakeMeteoTable(TableState(synthetic_rows(datetime(2026, 10, 25, 4, 0, 0), 3)))
+    stored = datetime(2026, 10, 25, 2, 30, tzinfo=UTC)  # 03:30 CET, after the change
+
+    reading = TableReader(table, _settings()).read(stored)
+
+    assert _local_times(reading.rows) == ["04:00"]
+
+
+def _autumn_rows(newest: datetime, count: int) -> tuple[list[datetime], list[tuple[str, ...]]]:
+    """SYNTHETIC 30-min rows over the 25.10.2026 change, newest first (UTC instants, texts)."""
+    zone = ZoneInfo("Europe/Prague")
+    instants = [newest - i * STEP for i in range(count)]
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", f"10,{i}", "50", "0", "100", "3,5")
+        for i, t in enumerate(instants)
+    ]
+    return instants, rows
+
+
+@pytest.mark.parametrize(
+    ("stored", "anchor"),
+    [
+        # 01:40 CEST, just before the repeated hour (review round 1): anchor 01:40 itself.
+        (datetime(2026, 10, 24, 23, 40, tzinfo=UTC), "01:40"),
+        # 01:10 CEST: the newer 01:40 is ordinary, but the oldest kept row must be ordinary.
+        (datetime(2026, 10, 24, 23, 10, tzinfo=UTC), None),
+        # 02:10 CEST (first pass) and 02:10 CET (second pass): cutoff lowered by 2 h.
+        (datetime(2026, 10, 25, 0, 10, tzinfo=UTC), None),
+        (datetime(2026, 10, 25, 1, 10, tzinfo=UTC), None),
+    ],
+)
+def test_no_new_row_is_lost_around_the_autumn_change(
+    tmp_path: Path, stored: datetime, anchor: str | None
+) -> None:
+    instants, rows = _autumn_rows(datetime(2026, 10, 25, 12, 10, tzinfo=UTC), 40)
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    if anchor is not None:
+        # The oldest written row is the already stored ordinary row before the repeated hour.
+        assert _local_times(reading.rows)[-1] == anchor
+    path = TableCsvWriter(PortalTableSettings(), tmp_path).write(
+        PortalDevice("8615620 77680921"), reading, datetime(2026, 10, 25, 13, 0, tzinfo=UTC)
+    )
+    parsed = parser_registry.for_file(path, make_settings()).parse(path)
+    (series,) = parsed.series
+    written = set(series.frame["timestamp_utc"])
+    new = {pd.Timestamp(t) for t in instants if t > stored}
+    assert new <= written
+
+
+def test_rows_that_all_fail_to_parse_are_an_error() -> None:
+    # SYNTHETIC rows with ISO timestamps while the format is day-first (a format change).
+    rows = [
+        (f"2026-11-20 {hour:02d}:00:00", "1", "2", "0", "100", "3,5") for hour in range(23, 0, -1)
+    ]
+    table = FakeMeteoTable(TableState(rows))
+
+    with pytest.raises(TableReadError, match="None of the 5 rows of table page 1 could be read"):
+        TableReader(table, _settings()).read(datetime(2026, 11, 20, 5, 0, tzinfo=UTC))
+
+
+def test_an_oldest_first_table_is_an_error() -> None:
+    rows = list(reversed(synthetic_rows(NEWEST, 5)))
+
+    with pytest.raises(
+        TableReadError,
+        match="not sorted newest first: 2026-11-20 10:30:00 follows 2026-11-20 10:00:00",
+    ):
+        TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(None)
+
+
+def test_an_older_page_must_not_start_later_than_the_page_before() -> None:
+    rows = synthetic_rows(NEWEST, 6)
+    table = ScriptedTable([raw_table(rows[3:]), raw_table(rows[:3])])
+
+    with pytest.raises(TableReadError, match="not sorted newest first"):
+        TableReader(table, _settings()).read(None)
+
+
+def test_equal_rows_in_the_repeated_hour_are_both_kept() -> None:
+    # 02:10 CEST and 02:10 CET with the same values (rain 0 at night): two measurements.
+    zone = ZoneInfo("Europe/Prague")
+    instants = [datetime(2026, 10, 25, 2, 10, tzinfo=UTC) - i * STEP for i in range(6)]
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", "8", "90", "0", "100", "3,5") for t in instants
+    ]
+
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(None)
+
+    assert _local_times(reading.rows) == ["03:10", "02:40", "02:10", "02:40", "02:10", "01:40"]
+
+
+def test_repeated_shift() -> None:
+    zone = ZoneInfo("Europe/Prague")
+
+    assert repeated_shift(datetime(2026, 10, 25, 2, 30), zone) == timedelta(hours=1)
+    assert repeated_shift(datetime(2026, 10, 25, 3, 0), zone) is None
+    assert repeated_shift(datetime(2026, 3, 29, 2, 30), zone) is None  # skipped, not repeated
+
+
+def test_a_missing_anchor_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    # Only rows of the repeated hour were read (03:10 CET is ordinary, the rest repeated).
+    _, rows = _autumn_rows(datetime(2026, 10, 25, 2, 10, tzinfo=UTC), 4)
+    stored = datetime(2026, 10, 25, 0, 0, tzinfo=UTC)  # 02:00 CEST, in the repeated hour
+
+    with caplog.at_level(logging.WARNING):
+        reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    assert len(reading.rows) == 4
+    assert "No ordinary row was read before the repeated hour" in caplog.text

@@ -8,6 +8,7 @@ from their modules::
     from sivin.ingest.portal.client import PortalClient
     from sivin.ingest.portal.driver import ChromeDriverFactory, driver_factory_registry
     from sivin.ingest.portal.session import PortalSession
+    from sivin.ingest.portal.sources import device_source_registry
 
 See ``docs/ingest.md``.
 """
@@ -21,10 +22,23 @@ from sivin.ingest.portal.errors import (
     MissingCredentialsError,
     PortalError,
     PortalLoginError,
+    TableReadError,
     ViewModelError,
 )
-from sivin.ingest.portal.models import DeviceFailure, DownloadedExport, PortalDevice, SessionResult
-from sivin.ingest.portal.settings import PortalSelectors, PortalSettings, PortalTimeouts
+from sivin.ingest.portal.models import (
+    DeviceFailure,
+    DownloadedExport,
+    PortalDevice,
+    SessionResult,
+    UpToDateDevice,
+)
+from sivin.ingest.portal.settings import (
+    PortalSelectors,
+    PortalSettings,
+    PortalSource,
+    PortalTableSettings,
+    PortalTimeouts,
+)
 from sivin.ingest.portal.viewmodel import ViewModelParser
 from sivin.ingest.portal.watcher import DirectorySnapshot, DownloadWatcher
 
@@ -44,10 +58,14 @@ __all__ = [
     "PortalLoginError",
     "PortalSelectors",
     "PortalSettings",
+    "PortalSource",
+    "PortalTableSettings",
     "PortalTimeouts",
     "Secret",
     "SessionResult",
     "SystemClock",
+    "TableReadError",
+    "UpToDateDevice",
     "ViewModelError",
     "ViewModelParser",
 ]
