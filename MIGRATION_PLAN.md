@@ -298,9 +298,9 @@ Cíl: kód, který se čte jako popis domény. Konkrétně:
 ```
                    ┌────────────── GitHub Actions (cron, např. 1× za hodinu) ──────────────┐
 lemon.e-service.cz │ PortalClient ─► ExportParser ─► InputValidator ─► MeasurementStore     │
-   (Excel export)  │   (Selenium)      (xlsx/csv)      (schéma, čas)    (větev `data`)      │
-                   │                                                         │              │
-                   │   QualityPipeline (rozsah, spike, step, stuck, nasazení) │              │
+  (tabulka čidla / │   (Selenium)      (xlsx/csv)      (schéma, čas)    (větev `data`)      │
+   Excel export    │                                                         │              │
+   (záloha))       │   QualityPipeline (rozsah, spike, step, stuck, nasazení) │              │
                    │   SensorAligner (párování čidel)   ClimateIndex (indexy)  ▼              │
                    │                                       SiteBuilder ─► site/data/*.json   │
                    └──────────────────────────────────────────────┬───────────────────────────┘
@@ -345,7 +345,7 @@ by k tomu potřeboval GitHub token a čekal by minuty). Místo toho:
 
 1. Workflow `pipeline.yml` běží **podle cronu** (návrh: každou hodinu; čidla měří ~každých 30 min)
    a navíc ručně tlačítkem *Run workflow* (`workflow_dispatch`).
-2. Běh: přihlášení na portál → stažení exportů všech čidel → parsování a validace → připojení
+2. Běh: přihlášení na portál → načtení dat čidel (tabulka, export jako záloha) → parsování a validace → připojení
    nových záznamů do úložiště (duplicity se zahodí) → QC → indexy → vygenerování `site/data` →
    build webu → deploy na Pages. Vše v **jednom** workflow (push tokenem `GITHUB_TOKEN` další
    workflow nespouští).
@@ -880,7 +880,6 @@ na konci a šedě, shlukování markerů v mapě při oddálení, ovládání kl
 - **WP-5.2 — Odstranění legacy a nové README:** smazat legacy skripty a YAML, přepsat README
   (instalace, provoz, odkazy do `docs/`).
 
-
 ### Možné pokračování (u ledu, rozhodnutí ownera 2026-11-26)
 
 - Oblíbená čidla (hvězdička, uložená v prohlížeči).
@@ -888,10 +887,11 @@ na konci a šedě, shlukování markerů v mapě při oddálení, ovládání kl
   licence dat v patičce.
 - Barvení mapy podle ukazatele (vlhkost, srážky, GDD, riziko, mrazové hodiny) — až bude víc čidel.
 - Srovnání sezón (GDD/Huglin letos vs. dřív) — až bude víc sezón dat.
-- Celkový časový limit stahování v pipeline (limit 45 min se vyčerpá při ~8–9 současně
+- Celkový časový limit stahování v pipeline (limit 45 min se vyčerpá při ~6–7 současně
   selhávajících čidlech).
 - Měsíční dělení úložiště (jen při stovkách čidel nebo minutovém kroku).
 - Denní souhrn / RSS — **bez e-mailů** (owner je zatím nechce).
+
 ---
 
 ## 5. Vlny a závislosti
@@ -901,7 +901,7 @@ WP-0.1 ─┬─ WP-1.1 ─┐
         ├─ WP-1.2 ─┤
         ├─ WP-1.3 ─┼─ WP-1.7 ─┐
         ├─ WP-1.4 ─┤          ├─ WP-3.2 ─┬─ WP-4.1
-        ├─ WP-1.5 ─┤          │          └─ WP-3.4
+        ├─ WP-1.5 ─┤          │          └─ WP-3.7 ── WP-3.4
         ├─ WP-1.6 ─┼──────────┼─ WP-2.4
         ├─ WP-2.1 ─┤          │
         ├─ WP-2.2 ─┤          │
@@ -912,7 +912,8 @@ WP-0.1 ─┬─ WP-1.1 ─┐
 
 Vlna 0 a 1 jsou mergnuté. Vlna 2 je rozdělená na 2a (WP-0.2, WP-1.8, WP-L.1 paralelně),
 2a-bis (WP-1.9), 2b (WP-1.7, WP-3.2) a 2c (WP-4.1, WP-3.3); každá podvlna začíná po merge
-předchozí. WP-2.5 (choroby se srážkami) patří do vlny 3.
+předchozí. WP-2.5 (choroby se srážkami) patří do vlny 3. Web pokračuje WP-3.7 (průzkum dat
+v grafu) a po jeho merge WP-3.4 (analytika na webu).
 
 ---
 
