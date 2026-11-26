@@ -217,13 +217,14 @@ jobs:
           STARTED: ${{ steps.run.outputs.started }}
         run: |
           set +e -uo pipefail
-          # The newest run record started after the pipeline step began (fractions of a second
-          # dropped); its failures "fetch <device>: <reason>" are the devices without a download.
+          # The last record in file order (log files by date, lines appended) that started after
+          # the pipeline step began (fractions of a second dropped); its failures
+          # "fetch <device>: <reason>" are the devices without a download.
           failed=$(jq -nR --arg started "$STARTED" '
             def utc: sub("\\.[0-9]+"; "") | fromdateiso8601;
             [inputs | fromjson? | objects
               | select(try ((.started_at | utc) >= ($started | utc)) catch false)]
-            | sort_by(.started_at) | last
+            | last
             | if . == null then empty
               else [(.failures // [])[] | strings | select(startswith("fetch "))] | length end
           ' data/runs/*.jsonl 2> /dev/null)

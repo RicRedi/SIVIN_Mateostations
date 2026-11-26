@@ -334,8 +334,10 @@ there is always a change), which may well keep the repository active, but do not
   takes a few minutes (installing Python and Node dependencies dominates while there are few
   sensors); the job timeouts are 5 (gate), 45 (collect), 20 (build-site) and 10 (deploy) minutes.
   A device whose download never arrives costs `attempts_per_device` × `download_wait_s`
-  (2 × 120 s = 4 min) plus the page waits, so 4 failing devices add about 16 min to `collect`;
-  with many more sensors failing at once, the 45 min timeout would need raising.
+  (2 × 120 s = 4 min) plus the page waits, settle pauses and reloads of both attempts, about
+  4.5–5 min in total, so 4 failing devices add about 18–20 min to `collect`. The 45 min
+  `collect` timeout is reached at roughly 8–9 devices failing in the same run; a total time
+  budget for the fetch is a possible follow-up, not implemented.
 - **Schedule:** scheduled runs can start late when GitHub is under load (the full hour is the
   busiest time), and under very high load a scheduled run can be dropped. The gate tolerates
   delays; a dropped run is simply missing for that day, and the next one catches up as long as

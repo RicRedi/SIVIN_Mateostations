@@ -317,11 +317,15 @@ class TestDownloadWarning:
         return json.dumps({"started_at": started_at, "failures": failures})
 
     def _warn(
-        self, workflow: dict[Any, Any], tmp_path: Path, lines: list[str] | None
+        self,
+        workflow: dict[Any, Any],
+        tmp_path: Path,
+        lines: list[str] | None,
+        exist_ok: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         if lines is not None:
             runs = tmp_path / "data" / "runs"
-            runs.mkdir(parents=True)
+            runs.mkdir(parents=True, exist_ok=exist_ok)
             (runs / "2026-11-26.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         script = step(workflow, "collect", self.NAME)["run"]
         process, _ = run_script(script, tmp_path, {"STARTED": self.STARTED}, workflow)
@@ -353,6 +357,18 @@ class TestDownloadWarning:
             "::warning::No export was downloaded for 2 device(s); the run stays green but those "
             "devices got no new data. See the job summary and the download diagnostics in the log."
         )
+
+    def test_takes_the_last_record_in_file_order(
+        self, workflow: dict[Any, Any], tmp_path: Path
+    ) -> None:
+        next_day = tmp_path / "data" / "runs" / "2026-11-27.jsonl"
+        next_day.parent.mkdir(parents=True)
+        next_day.write_text(
+            self._record("2026-11-27T00:00:01Z", ["fetch a: synthetic"]) + "\n", encoding="utf-8"
+        )
+        this_day = [self._record("2026-11-26T23:59:59.5Z", ["fetch a: x", "fetch b: x"])]
+        process = self._warn(workflow, tmp_path, this_day, exist_ok=True)
+        assert "for 1 device(s)" in process.stdout
 
     def test_silent_when_every_device_was_downloaded(
         self, workflow: dict[Any, Any], tmp_path: Path

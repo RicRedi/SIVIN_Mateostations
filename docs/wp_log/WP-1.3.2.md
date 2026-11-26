@@ -94,11 +94,33 @@ neither the download mechanics nor the workflow inputs; no change needed.
 
 ## Out of scope
 
+- A total time budget for the fetch (stop trying further devices once it is spent): with
+  ~4.5–5 min per fully failing device, the 45 min `collect` timeout is reached at roughly 8–9
+  devices failing in the same run. The timeout itself is unchanged.
+
 - `src/sivin/app/summary_formats.py` (`JsonSummary`): a `fetch_failures` count in
   `sivin report --format json` would let the workflow use `sivin report` instead of reading the
   run log with `jq`. Not touched (WP-1.10 works in `src/sivin/app/**`).
 - The job summary (`sivin report --format markdown`) could state "N of M devices downloaded"
   in its outcome line; same module.
+
+## Follow-up after review
+
+Round 1 verdict APPROVE; the minor and the nit were addressed in a follow-up commit:
+
+- `driver.py` `CdpDownloadPermission.grant`: catches any `Exception` from `execute_cdp_cmd`
+  (type name in the WARNING, next command tried), so it truly never raises; new test with a
+  `RuntimeError` from the driver.
+- `docs/operations.md` *Costs and limits*: realistic estimate ~4.5–5 min per fully failing
+  device (two attempts incl. page waits, settle pauses, reloads), 4 devices ≈ 18–20 min; the
+  45 min timeout is reached at roughly 8–9 simultaneously failing devices. Total fetch budget
+  recorded under *Out of scope*.
+- Warning step: takes the last matching record in file order (log files sorted by date, lines
+  appended) instead of `sort_by(.started_at)`; new test with records in two daily files.
+- Gates: `make lint` all checks passed, 301 files formatted; `make type` no issues in 182 files;
+  `make cov` 2057 passed, total 99.83 %, `driver.py` 100 % (128 statements, 26 branches);
+  `actionlint -shellcheck <scratchpad shellcheck> .github/workflows/*.yml` → exit 0, no
+  findings (the earlier "actionlint not run" item is now resolved).
 
 ## Open questions for the owner
 

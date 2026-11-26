@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -61,7 +60,8 @@ class CdpDownloadPermission:
     Headless Chrome may ignore the download preferences of the profile and drop a download
     silently. The CDP command ``Browser.setDownloadBehavior`` allows downloads explicitly; when
     it fails, the older ``Page.setDownloadBehavior`` is tried. Granting never raises: when CDP is
-    unavailable a WARNING is logged and the browser keeps only the profile preferences.
+    unavailable or a command fails with any exception, a WARNING is logged and the browser keeps
+    only the profile preferences.
 
     Parameters
     ----------
@@ -115,7 +115,7 @@ class CdpDownloadPermission:
         for command, parameters in self.commands():
             try:
                 driver.execute_cdp_cmd(command, parameters)
-            except WebDriverException as error:
+            except Exception as error:  # granting must never stop the run
                 errors.append(f"{command}: {type(error).__name__}")
                 continue
             logger.info("Downloads allowed into %s via %s.", self._download_dir, command)

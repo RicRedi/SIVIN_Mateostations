@@ -240,6 +240,26 @@ class TestCdpDownloadPermission:
             "rely on the profile preferences only."
         )
 
+    def test_any_other_error_is_logged_and_does_not_raise(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class BrokenDriver(_CdpDriver):
+            def execute_cdp_cmd(self, cmd: str, cmd_args: dict[str, Any]) -> dict[str, Any]:
+                self.commands.append((cmd, cmd_args))
+                raise RuntimeError("synthetic: connection to chromedriver lost")
+
+        driver = BrokenDriver()
+
+        assert CdpDownloadPermission(tmp_path).grant(driver) is None
+
+        assert len(driver.commands) == 2
+        (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warning.getMessage() == (
+            "Could not allow downloads via CDP (Browser.setDownloadBehavior: RuntimeError; "
+            "Page.setDownloadBehavior: RuntimeError); downloads rely on the profile "
+            "preferences only."
+        )
+
     def test_driver_without_cdp_logs_a_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
