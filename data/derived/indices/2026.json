@@ -1,0 +1,1102 @@
+{
+  "season": 2026,
+  "data_from": "2025-01-01",
+  "data_to": "2026-12-31",
+  "sensors": {
+    "77678271": {
+      "bedd": {
+        "value": 693.4228600000001,
+        "unit": "°C·d",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "n_missing_days": 112
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "botrytis_broome": {
+        "value": 0.37132886240871915,
+        "unit": "1",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_events": 24,
+          "wetness_proxy": "rh_pct >= 90",
+          "total_wetness_h": 88.62583333333333,
+          "max_infection_probability": 0.37132886240871915,
+          "max_event_start_utc": "2026-06-10T15:34:53+00:00",
+          "max_event_duration_h": 12.680277777777778,
+          "max_event_mean_temp_c": 12.856553523625932
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "budburst": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.9779005524861878,
+        "complete": true,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_days": 177,
+          "n_missing_days": 4,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "cool_night": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dew_point": {
+        "value": 8.509737178119583,
+        "unit": "°C",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "mean_depression_c": 10.588957830224723,
+          "n_rh_non_positive": 0,
+          "magnus_a": 17.625,
+          "magnus_b_c": 243.04
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dtr_ripening": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0,
+          "window_start": "2026-08-01",
+          "window_end": "2026-09-30"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "frost": {
+        "value": 0.5080555555555556,
+        "unit": "h",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "frost_h": 0.5080555555555556,
+          "hard_frost_h": 0.0,
+          "frost_nights": 1,
+          "min_temp_c": -0.0537109
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gdd_winkler": {
+        "value": 985.3369799999998,
+        "unit": "°C·d",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "n_missing_days": 112
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gfv": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.5428571428571428,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 133,
+          "n_missing_days": 112,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gsr": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "n_missing_days": 112,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gst": {
+        "value": 19.581179848529416,
+        "unit": "°C",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "n_missing_days": 112
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "heat_hours": {
+        "value": 247.74277777777783,
+        "unit": "h",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "optimum_h": 805.5247222222224,
+          "heat_stress_h": 247.74277777777783,
+          "extreme_heat_h": 72.99805555555555,
+          "observed_h": 2440.422222222222
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "huglin": {
+        "value": 1430.0737402000007,
+        "unit": "°C·d",
+        "coverage": 0.5573770491803278,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "n_missing_days": 81,
+          "k": 1.06
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "powdery_mildew_gt": {
+        "value": 100.0,
+        "unit": "points",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": "high",
+        "estimated": false,
+        "details": {
+          "current_index_points": 20,
+          "phase": "active",
+          "n_days": 107,
+          "n_favourable_days": 39,
+          "n_unfavourable_days": 64,
+          "n_undetermined_days": 4,
+          "n_heat_days": 21,
+          "longest_run_h_max": 15.644166666666667,
+          "onset_date": "2026-05-03",
+          "current_class": "low"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "tropical_days_nights": {
+        "value": 34.0,
+        "unit": "d",
+        "coverage": 0.5260273972602739,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 192,
+          "tropical_days": 34,
+          "tropical_nights": 9,
+          "summer_days": 60,
+          "frost_days": 39,
+          "ice_days": 17
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "vpd": {
+        "value": 2.6467880854414796,
+        "unit": "kPa",
+        "coverage": 0.4766355140186916,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 102,
+          "hours_above_threshold_h": 466.1625000000001,
+          "threshold_kpa": 2.0,
+          "n_rh_non_positive": 0,
+          "max_vpd_kpa": 6.187214970667045
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "winter_freeze": {
+        "value": 0.0,
+        "unit": "d",
+        "coverage": 0.6357615894039735,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 96,
+          "severe_days": 0,
+          "min_temp_c": -9.70947
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      }
+    },
+    "77680921": {
+      "bedd": {
+        "value": 512.91744,
+        "unit": "°C·d",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "botrytis_broome": {
+        "value": 0.362244319434375,
+        "unit": "1",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_events": 17,
+          "wetness_proxy": "rh_pct >= 90",
+          "total_wetness_h": 74.265,
+          "max_infection_probability": 0.362244319434375,
+          "max_event_start_utc": "2026-06-10T15:10:50+00:00",
+          "max_event_duration_h": 12.880555555555556,
+          "max_event_mean_temp_c": 12.612660411904248
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "budburst": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.9668508287292817,
+        "complete": true,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_days": 175,
+          "n_missing_days": 6,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "cool_night": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dew_point": {
+        "value": 7.128202640391327,
+        "unit": "°C",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "mean_depression_c": 10.409002457990836,
+          "n_rh_non_positive": 0,
+          "magnus_a": 17.625,
+          "magnus_b_c": 243.04
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dtr_ripening": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0,
+          "window_start": "2026-08-01",
+          "window_end": "2026-09-30"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "frost": {
+        "value": 4.451944444444444,
+        "unit": "h",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "frost_h": 4.451944444444444,
+          "hard_frost_h": 0.0,
+          "frost_nights": 1,
+          "min_temp_c": -0.737305
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gdd_winkler": {
+        "value": 670.4125750000001,
+        "unit": "°C·d",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gfv": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.47346938775510206,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 116,
+          "n_missing_days": 129,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gsr": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gst": {
+        "value": 17.758932441176473,
+        "unit": "°C",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "heat_hours": {
+        "value": 143.23749999999998,
+        "unit": "h",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "optimum_h": 549.3033333333334,
+          "heat_stress_h": 143.23749999999998,
+          "extreme_heat_h": 46.9,
+          "observed_h": 2040.0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "huglin": {
+        "value": 1000.3504345000002,
+        "unit": "°C·d",
+        "coverage": 0.4644808743169399,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 98,
+          "k": 1.06
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "powdery_mildew_gt": {
+        "value": 100.0,
+        "unit": "points",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": "high",
+        "estimated": false,
+        "details": {
+          "current_index_points": 50,
+          "phase": "active",
+          "n_days": 89,
+          "n_favourable_days": 27,
+          "n_unfavourable_days": 59,
+          "n_undetermined_days": 3,
+          "n_heat_days": 8,
+          "longest_run_h_max": 13.339166666666667,
+          "onset_date": "2026-05-03",
+          "current_class": "moderate"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "tropical_days_nights": {
+        "value": 19.0,
+        "unit": "d",
+        "coverage": 0.4821917808219178,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 176,
+          "tropical_days": 19,
+          "tropical_nights": 5,
+          "summer_days": 36,
+          "frost_days": 41,
+          "ice_days": 16
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "vpd": {
+        "value": 2.2239233239863463,
+        "unit": "kPa",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "hours_above_threshold_h": 293.8616666666667,
+          "threshold_kpa": 2.0,
+          "n_rh_non_positive": 0,
+          "max_vpd_kpa": 6.383558669599459
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "winter_freeze": {
+        "value": 0.0,
+        "unit": "d",
+        "coverage": 0.6357615894039735,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 96,
+          "severe_days": 0,
+          "min_temp_c": -10.2222
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      }
+    },
+    "77799986": {
+      "bedd": {
+        "value": 628.6467725000001,
+        "unit": "°C·d",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "n_missing_days": 132
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "botrytis_broome": {
+        "value": 0.40488333271717936,
+        "unit": "1",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_events": 23,
+          "wetness_proxy": "rh_pct >= 90",
+          "total_wetness_h": 129.745,
+          "max_infection_probability": 0.40488333271717936,
+          "max_event_start_utc": "2026-06-10T15:15:34+00:00",
+          "max_event_duration_h": 13.741388888888888,
+          "max_event_mean_temp_c": 12.741762538155209
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "budburst": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.574585635359116,
+        "complete": false,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_days": 104,
+          "n_missing_days": 77,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "cool_night": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dew_point": {
+        "value": 8.889279277717023,
+        "unit": "°C",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "mean_depression_c": 11.656731123237499,
+          "n_rh_non_positive": 0,
+          "magnus_a": 17.625,
+          "magnus_b_c": 243.04
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dtr_ripening": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0,
+          "window_start": "2026-08-01",
+          "window_end": "2026-09-30"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "frost": {
+        "value": 1.5280555555555555,
+        "unit": "h",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "frost_h": 1.5280555555555555,
+          "hard_frost_h": 0.0,
+          "frost_nights": 1,
+          "min_temp_c": -0.13916
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gdd_winkler": {
+        "value": 853.2899149999998,
+        "unit": "°C·d",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "n_missing_days": 132
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gfv": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.42448979591836733,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 104,
+          "n_missing_days": 141,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gsr": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "n_missing_days": 132,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gst": {
+        "value": 20.391578902439022,
+        "unit": "°C",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "n_missing_days": 132
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "heat_hours": {
+        "value": 174.965,
+        "unit": "h",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "optimum_h": 841.5519444444444,
+          "heat_stress_h": 174.965,
+          "extreme_heat_h": 45.59277777777778,
+          "observed_h": 1965.9558333333334
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "huglin": {
+        "value": 1173.9681631,
+        "unit": "°C·d",
+        "coverage": 0.44808743169398907,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "n_missing_days": 101,
+          "k": 1.06
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "powdery_mildew_gt": {
+        "value": 100.0,
+        "unit": "points",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": "high",
+        "estimated": false,
+        "details": {
+          "current_index_points": 10,
+          "phase": "active",
+          "n_days": 89,
+          "n_favourable_days": 40,
+          "n_unfavourable_days": 45,
+          "n_undetermined_days": 4,
+          "n_heat_days": 9,
+          "longest_run_h_max": 24.38722222222222,
+          "onset_date": "2026-04-03",
+          "current_class": "low"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "tropical_days_nights": {
+        "value": 21.0,
+        "unit": "d",
+        "coverage": 0.28493150684931506,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 104,
+          "tropical_days": 21,
+          "tropical_nights": 38,
+          "summer_days": 60,
+          "frost_days": 1,
+          "ice_days": 0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "vpd": {
+        "value": 2.40482154497613,
+        "unit": "kPa",
+        "coverage": 0.38317757009345793,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 82,
+          "hours_above_threshold_h": 619.2527777777779,
+          "threshold_kpa": 2.0,
+          "n_rh_non_positive": 0,
+          "max_vpd_kpa": 5.112398573025863
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "winter_freeze": {
+        "value": null,
+        "unit": "d",
+        "coverage": 0.1456953642384106,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 22,
+          "status": "previous_autumn_missing"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      }
+    },
+    "77800065": {
+      "bedd": {
+        "value": 498.55986750000005,
+        "unit": "°C·d",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "botrytis_broome": {
+        "value": 0.39040409372460955,
+        "unit": "1",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_events": 23,
+          "wetness_proxy": "rh_pct >= 90",
+          "total_wetness_h": 113.83944444444444,
+          "max_infection_probability": 0.39040409372460955,
+          "max_event_start_utc": "2026-06-12T19:41:55+00:00",
+          "max_event_duration_h": 10.473611111111111,
+          "max_event_mean_temp_c": 15.071380840737307
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "budburst": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.9668508287292817,
+        "complete": true,
+        "class": null,
+        "estimated": true,
+        "details": {
+          "n_days": 175,
+          "n_missing_days": 6,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "cool_night": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dew_point": {
+        "value": 7.369349948557331,
+        "unit": "°C",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "mean_depression_c": 9.858391722215597,
+          "n_rh_non_positive": 0,
+          "magnus_a": 17.625,
+          "magnus_b_c": 243.04
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "dtr_ripening": {
+        "value": null,
+        "unit": "°C",
+        "coverage": 0.0,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 0,
+          "window_start": "2026-08-01",
+          "window_end": "2026-09-30"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "frost": {
+        "value": 3.4966666666666666,
+        "unit": "h",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "frost_h": 3.4966666666666666,
+          "hard_frost_h": 0.0,
+          "frost_nights": 1,
+          "min_temp_c": -0.566406
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gdd_winkler": {
+        "value": 651.9956349999999,
+        "unit": "°C·d",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gfv": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.47346938775510206,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 116,
+          "n_missing_days": 129,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gsr": {
+        "value": null,
+        "unit": "DOY",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129,
+          "status": "not configured"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "gst": {
+        "value": 17.496551964705883,
+        "unit": "°C",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 129
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "heat_hours": {
+        "value": 131.24,
+        "unit": "h",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "optimum_h": 541.0361111111112,
+          "heat_stress_h": 131.24,
+          "extreme_heat_h": 37.76833333333333,
+          "observed_h": 2040.0
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "huglin": {
+        "value": 975.2833345500001,
+        "unit": "°C·d",
+        "coverage": 0.4644808743169399,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "n_missing_days": 98,
+          "k": 1.06
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "powdery_mildew_gt": {
+        "value": 100.0,
+        "unit": "points",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": "high",
+        "estimated": false,
+        "details": {
+          "current_index_points": 30,
+          "phase": "active",
+          "n_days": 89,
+          "n_favourable_days": 22,
+          "n_unfavourable_days": 64,
+          "n_undetermined_days": 3,
+          "n_heat_days": 7,
+          "longest_run_h_max": 12.95111111111111,
+          "onset_date": "2026-05-04",
+          "current_class": "low"
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "tropical_days_nights": {
+        "value": 19.0,
+        "unit": "d",
+        "coverage": 0.4794520547945205,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 175,
+          "tropical_days": 19,
+          "tropical_nights": 4,
+          "summer_days": 36,
+          "frost_days": 40,
+          "ice_days": 16
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "vpd": {
+        "value": 2.1249605429664284,
+        "unit": "kPa",
+        "coverage": 0.397196261682243,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 85,
+          "hours_above_threshold_h": 264.9444444444444,
+          "threshold_kpa": 2.0,
+          "n_rh_non_positive": 0,
+          "max_vpd_kpa": 5.901355273324062
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      },
+      "winter_freeze": {
+        "value": 0.0,
+        "unit": "d",
+        "coverage": 0.6357615894039735,
+        "complete": false,
+        "class": null,
+        "estimated": false,
+        "details": {
+          "n_days": 96,
+          "severe_days": 0,
+          "min_temp_c": -9.70947
+        },
+        "status": "ok",
+        "computed_at": "2026-11-26T12:40:08.726388Z"
+      }
+    }
+  }
+}

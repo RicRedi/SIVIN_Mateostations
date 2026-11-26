@@ -1,0 +1,197 @@
+{
+  "sensor_id": "77678271",
+  "status": "ok",
+  "computed_at": "2026-11-26T12:40:06.813682Z",
+  "first_t": "2025-07-30T08:17:54Z",
+  "last_t": "2026-07-16T15:43:35Z",
+  "n_samples": 9571,
+  "flag_counts": {
+    "OUT_OF_RANGE": 13,
+    "SPIKE": 2,
+    "STEP": 7,
+    "TIMESTAMP_SUSPECT": 9
+  },
+  "values_set_aside": 0,
+  "events": [
+    {
+      "type": "low_battery",
+      "t": "2025-07-30T08:17:54Z",
+      "t_end": "2025-07-30T11:53:44Z",
+      "source": "detected",
+      "severity": "warning",
+      "confidence": null,
+      "detail": "low battery: 3 reading(s) below 3.3 V (lowest 3 V)",
+      "origin": "battery"
+    },
+    {
+      "type": "gap",
+      "t": "2025-07-30T08:18:07Z",
+      "t_end": "2025-07-30T11:53:44Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 3.6 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "irregular_sampling",
+      "t": "2025-07-30T08:18:07Z",
+      "t_end": "2026-05-05T03:44:14Z",
+      "source": "detected",
+      "severity": "warning",
+      "confidence": null,
+      "detail": "9 interval(s) of type irregular_sampling",
+      "origin": "sampling"
+    },
+    {
+      "type": "gap",
+      "t": "2025-07-30T11:53:44Z",
+      "t_end": "2025-07-31T11:43:26Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 23.8 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "gap",
+      "t": "2025-07-31T11:43:56Z",
+      "t_end": "2025-12-25T11:35:37Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 3527.9 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "unlogged_off_site",
+      "t": "2026-03-15T23:08:01Z",
+      "t_end": "2026-03-20T15:58:33Z",
+      "source": "detected",
+      "severity": "warning",
+      "confidence": 0.5,
+      "detail": "possible unlogged off-site period 2026-03-16 00:08 CET (2026-03-15 23:08 UTC) - 2026-03-20 16:58 CET (15:58 UTC) (indoor → outdoor: level +0.9 °C, daily spread x11.5, humidity +3 %, votes 2/4); if the sensor was not in the vineyard, add an entry to sensors/offsite_log.yaml with from: \"2026-03-16T00:08+01:00\" and to: \"2026-03-20T16:58+01:00\"",
+      "origin": "deployment"
+    },
+    {
+      "type": "gap",
+      "t": "2026-04-14T23:03:27Z",
+      "t_end": "2026-04-15T05:38:04Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 6.6 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "step",
+      "t": "2026-05-19T18:01:11Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -9.1 °C",
+      "origin": "step"
+    },
+    {
+      "type": "step",
+      "t": "2026-05-25T18:23:53Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -9.4 °C",
+      "origin": "step"
+    },
+    {
+      "type": "gap",
+      "t": "2026-06-06T10:38:27Z",
+      "t_end": "2026-06-07T14:52:43Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 28.2 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "gap",
+      "t": "2026-06-07T15:53:33Z",
+      "t_end": "2026-06-07T19:25:00Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 3.5 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "step",
+      "t": "2026-06-16T04:25:48Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step +5.7 °C",
+      "origin": "step"
+    },
+    {
+      "type": "gap",
+      "t": "2026-06-28T06:49:25Z",
+      "t_end": "2026-06-28T12:21:28Z",
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "no sample for 5.5 h (expected every 1830 s)",
+      "origin": "sampling"
+    },
+    {
+      "type": "step",
+      "t": "2026-06-29T16:03:41Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -7.2 °C",
+      "origin": "step"
+    },
+    {
+      "type": "step",
+      "t": "2026-07-11T16:40:19Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -5.6 °C",
+      "origin": "step"
+    },
+    {
+      "type": "step",
+      "t": "2026-07-14T17:18:48Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -11.4 °C",
+      "origin": "step"
+    },
+    {
+      "type": "step",
+      "t": "2026-07-14T17:18:48Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "rh_pct level step +31.5 %",
+      "origin": "step"
+    },
+    {
+      "type": "step",
+      "t": "2026-07-15T16:30:56Z",
+      "t_end": null,
+      "source": "detected",
+      "severity": "info",
+      "confidence": null,
+      "detail": "temp_c level step -12.4 °C",
+      "origin": "step"
+    }
+  ]
+}
