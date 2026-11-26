@@ -13,6 +13,7 @@ from tests.app.conftest import make_factory
 from tests.app.project import (
     OUTDOOR_SENSOR,
     REAL_SENSOR,
+    TEST_CONFIG,
     Project,
     make_project,
     write_synthetic_export,
@@ -103,6 +104,13 @@ def test_site_of_the_real_and_a_synthetic_sensor(project: Project) -> None:
     assert not (root / STATE_FILE).exists()  # the build state is not published
     state = (project.root / "data" / "derived" / STATE_FILE).read_text(encoding="utf-8")
     assert str(project.root) not in state
+
+
+def test_manifest_carries_the_configured_complete_day_rule(project: Project) -> None:
+    project.write_config(TEST_CONFIG + "analytics:\n  min_daily_coverage: 0.75\n")
+    make_factory(project).site_service().build()
+    manifest = json.loads((project.root / "site/data/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["min_daily_coverage"] == 0.75
 
 
 def test_retired_sensor_is_published_with_its_status(project: Project) -> None:

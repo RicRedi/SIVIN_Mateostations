@@ -36,6 +36,10 @@ define; seasonal values are unchanged.
   - `src/sivin/site/indices.py`: `daily_block` and the `daily` key.
   - `site_files.py`: manifest `min_daily_coverage`.
   - `state.py`: `STATE_FORMAT` 3.
+- Python, app (scope extended by the orchestrator for this one change): `src/sivin/app/factory.py`
+  passes `analytics.min_daily_coverage` to `default_site_writers`, so the manifest carries the
+  configured value; test `tests/site/test_service.py::test_manifest_carries_the_configured_complete_day_rule`
+  (0.75 in the config → 0.75 in `manifest.json`).
 - Python tests:
   - `tests/analytics/test_base.py`, `disease/test_botrytis.py`, `disease/test_gubler_thomas.py`,
     `ripening/test_hour_indices.py`.
@@ -101,15 +105,16 @@ define; seasonal values are unchanged.
 
 ## How it was verified
 
-All commands were run in `/home/user/wt/wp-3.4`, after rebasing onto `origin/wp/3.7-chart-explorer`
-(0f37bc0).
+All commands were run in `/home/user/wt/wp-3.4`, after rebasing onto `origin/main` (5ab9e48, WP-3.7
+merged).
 
 - `make lint` → ruff check and format clean (311 files).
 - `make type` → mypy strict: "Success: no issues found in 186 source files".
-- `make test` → 2163 passed.
-- `make cov` → 2163 passed, TOTAL 99 %. Changed modules:
+- `make test` → 2164 passed.
+- `make cov` → 2164 passed, TOTAL 99 %. Changed modules:
   - `analytics/base.py`, `disease/powdery_mildew.py`, `disease/result.py`, `ripening/common.py`,
-    `ripening/frost.py`, `site/indices.py`, `site/site_files.py`, `site/state.py`: 100 %.
+    `ripening/frost.py`, `site/indices.py`, `site/site_files.py`, `site/state.py`,
+    `app/factory.py`: 100 %.
   - `disease/botrytis.py`: 99 %. The 2 missed lines (384-385) are earlier code, not changed here.
 - `tests/e2e/test_site.py` (the Python fixture matches the committed `web/tests/fixtures/python-site`)
   and `test_incremental_and_full_builds_are_byte_identical` both pass.
@@ -139,10 +144,6 @@ All commands were run in `/home/user/wt/wp-3.4`, after rebasing onto `origin/wp/
 - **No real data.** The real export (77799986) is off site the whole time, so its entries are
   `no_data` and have no daily block. The strips and cards were seen only on synthetic data:
   the demo fixture and the 4-day synthetic sensor of the Python fixture.
-- **`min_daily_coverage` in the manifest is the default 0.9, not the configured value.**
-  `default_site_writers` and `ManifestWriter` accept it, but the wiring in
-  `src/sivin/app/factory.py` (outside the scope) does not pass `analytics.min_daily_coverage`.
-  The shipped config also has 0.9, so the result is correct today.
 - **Screen readers.** Accessibility was checked only structurally in tests: `role="img"` with a
   text summary, tooltips, a legend and text in the table. No screen reader was used.
 - The strip is not aligned under the chart's time axis. The chart window and the index period
@@ -153,9 +154,6 @@ All commands were run in `/home/user/wt/wp-3.4`, after rebasing onto `origin/wp/
 
 ## Out of scope
 
-- `src/sivin/app/factory.py`, `site_service()`: pass
-  `min_daily_coverage=analytics.min_daily_coverage` to `default_site_writers(...)`. This is a
-  one-line change.
 - `docs/web.md` earlier listed two things for WP-3.4 that are not in its approved scope:
   - a band for `unlogged_off_site` on the chart;
   - use of the manifest's `data_status` / `last_built_at` in the UI.

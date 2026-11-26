@@ -69,10 +69,7 @@ seconds (rounded down; the store keeps whole seconds); `generated_at` and `compu
 threshold, so the web can judge staleness against the current time; optional in the web
 contract), **`min_daily_coverage`** (WP-3.4: the complete-day share 0-1 of the indices, so the
 web computes the records of a sensor from the same complete days; optional in the web
-contract, which falls back to 0.9; **limitation:** `default_site_writers` takes it as a
-parameter, but the wiring in `src/sivin/app/factory.py`, outside the scope of WP-3.4, does not
-pass `analytics.min_daily_coverage` yet, so the default 0.9 is published — the value of the
-shipped `config/sivin.yaml`), then:
+contract, which falls back to 0.9; the value of `analytics.min_daily_coverage`), then:
 
 - `variables`: `temp_c` (°C), `rh_pct` (%), `precip_mm` (mm) and `battery_v` (V) with labels
   `cs`/`de`/`en` (`sivin.site.labels.VARIABLES`). The web looks labels up by id; extra entries
@@ -239,6 +236,11 @@ time zone) from the first to the last sample of any published sensor. The output
 these seasons; indices files of other seasons are removed.
 
 ## Incremental build
+
+**One-time full rebuild after WP-3.4:** the build state format is 3 (the index entries carry the
+daily risk block), so the first build after the update ignores a state of format 2 and rebuilds
+every sensor. A sensor that fails in exactly that build has no earlier state to fall back on and
+is left out until it builds again.
 
 The build state `<paths.derived_dir>/site-build-state.json` (outside the published directory)
 holds a fingerprint of the shared inputs, the seasons,
