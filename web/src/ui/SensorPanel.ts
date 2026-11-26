@@ -12,12 +12,14 @@ const ELEVATION_DECIMALS = 0;
 
 /**
  * Side panel (a bottom sheet on phones): sensor picker, metadata and latest values of the selected
- * sensors, time-window controls and the chart. The picker, controls and chart are separate
- * components rendered into the slots this panel exposes.
+ * sensors, time-window controls, chart quantities and the chart. The picker, controls and chart
+ * are separate components rendered into the slots this panel exposes (the chart dialog moves the
+ * picker, control and chart slots into itself while it is open).
  */
 export class SensorPanel {
   readonly pickerSlot = el('section', { class: 'panel__section' });
   readonly windowSlot = el('section', { class: 'panel__section' });
+  readonly quantitySlot = el('section', { class: 'panel__section' });
   readonly chartSlot = el('section', { class: 'panel__section chart' });
   private readonly toggle = el('button', {
     type: 'button',
@@ -53,7 +55,7 @@ export class SensorPanel {
       this.renderToggle();
       onToggle();
     });
-    this.body.append(this.pickerSlot, this.hint, this.details, this.windowSlot, this.chartSlot);
+    this.body.append(this.pickerSlot, this.hint, this.details, this.windowSlot, this.quantitySlot, this.chartSlot);
     root.append(this.toggle, this.body);
   }
 
@@ -67,6 +69,7 @@ export class SensorPanel {
     this.hint.textContent = this.i18n.t('selectHint');
     this.hint.hidden = hasSelection;
     this.windowSlot.hidden = !hasSelection;
+    this.quantitySlot.hidden = !hasSelection;
     this.chartSlot.hidden = !hasSelection;
     for (const button of this.copyButtons) {
       button.dispose();

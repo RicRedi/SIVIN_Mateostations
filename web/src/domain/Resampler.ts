@@ -1,5 +1,5 @@
-import { QcMask } from './QcFlags';
-import type { RawSeries, RawVariable } from './RawSeries';
+import { AUXILIARY_DISPLAY_EXCLUDE_MASK, QcMask } from './QcFlags';
+import type { RawColumn, RawSeries } from './RawSeries';
 import { TimeSeries } from './TimeSeries';
 import { SECONDS_PER_HOUR } from './units';
 
@@ -18,17 +18,29 @@ export const RAW_GAP_THRESHOLD_S = 3 * NOMINAL_STEP_S;
 
 const HALF_HOUR_S = SECONDS_PER_HOUR / 2;
 
+/** How the values of one hour are combined. */
+type HourlyAggregate = 'mean' | 'sum';
+
 /**
- * Turns raw samples into chart series: QC-masked raw values or hourly means. Daily values are
- * not computed here; they come from `daily.json` (see {@link dailyColumnSeries}).
+ * Turns raw samples into chart series: QC-masked raw values, hourly means or hourly sums. Daily
+ * values are not computed here; they come from `daily.json` (see {@link dailyColumnSeries}).
+ *
+ * Temperature and humidity are masked with `mask`; the auxiliary precipitation and battery
+ * voltage with `auxiliaryMask` (by default {@link AUXILIARY_DISPLAY_EXCLUDE_MASK}, as the pipeline).
  */
 export class Resampler {
-  /** @param mask - Decides which QC flags exclude a sample. */
-  constructor(private readonly mask: QcMask) {}
+  /**
+   * @param mask - Decides which QC flags exclude a temperature or humidity sample.
+   * @param auxiliaryMask - Decides which QC flags exclude a precipitation or battery sample.
+   */
+  constructor(
+    private readonly mask: QcMask,
+    private readonly auxiliaryMask: QcMask = new QcMask(AUXILIARY_DISPLAY_EXCLUDE_MASK),
+  ) {}
 
   /** Raw values with excluded samples set to `null` and gaps broken for drawing. */
-  raw(series: RawSeries, variable: RawVariable): TimeSeries {
-    return series.variable(variable, this.mask).withGapBreaks(RAW_GAP_THRESHOLD_S);
+  raw(series: RawSeries, variable: RawColumn): TimeSeries {
+    return this.masked(series, variable).withGapBreaks(RAW_GAP_THRESHOLD_S);
   }
 
   /**
@@ -43,8 +55,31 @@ export class Resampler {
    * @param startT - Window start, Unix seconds UTC.
    * @param endT - Window end (exclusive), Unix seconds UTC.
    */
-  hourlyMeans(series: RawSeries, variable: RawVariable, startT: number, endT: number): TimeSeries {
-    const values = series.variable(variable, this.mask);
+  hourlyMeans(series: RawSeries, variable: RawColumn, startT: number, endT: number): TimeSeries {
+    return this.hourly(series, variable, startT, endT, 'mean');
+  }
+
+  /**
+   * Hourly sums over UTC hours, stamped like {@link hourlyMeans}; for precipitation per hour (mm).
+   * An hour without a valid value is `null`, not 0, so missing data stay visible.
+   */
+  hourlySums(series: RawSeries, variable: RawColumn, startT: number, endT: number): TimeSeries {
+    return this.hourly(series, variable, startT, endT, 'sum');
+  }
+
+  private masked(series: RawSeries, variable: RawColumn): TimeSeries {
+    const isAuxiliary = variable === 'precip_mm' || variable === 'battery_v';
+    return series.variable(variable, isAuxiliary ? this.auxiliaryMask : this.mask);
+  }
+
+  private hourly(
+    series: RawSeries,
+    variable: RawColumn,
+    startT: number,
+    endT: number,
+    aggregate: HourlyAggregate,
+  ): TimeSeries {
+    const values = this.masked(series, variable);
     const firstHourT = Math.floor(startT / SECONDS_PER_HOUR) * SECONDS_PER_HOUR;
     const hourCount = Math.max(0, Math.ceil((endT - firstHourT) / SECONDS_PER_HOUR));
     const sums = new Array<number>(hourCount).fill(0);
@@ -59,10 +94,13 @@ export class Resampler {
       counts[bin] = (counts[bin] ?? 0) + 1;
     });
     const t = sums.map((_, bin) => firstHourT + bin * SECONDS_PER_HOUR + HALF_HOUR_S);
-    const means = sums.map((sum, bin) => {
+    const aggregated = sums.map((sum, bin) => {
       const count = counts[bin] ?? 0;
-      return count === 0 ? null : sum / count;
+      if (count === 0) {
+        return null;
+      }
+      return aggregate === 'sum' ? sum : sum / count;
     });
-    return TimeSeries.of(t, means);
+    return TimeSeries.of(t, aggregated);
   }
 }

@@ -39,7 +39,7 @@ class FakePresenter implements ChartController {
 function fakeViews() {
   const log = {
     map: [] as (readonly string[])[], panel: [] as string[][], picker: [] as [readonly string[], LimitNotice | null][],
-    header: 0, chart: 0, fitted: 0,
+    header: 0, chart: 0, fitted: 0, quantities: [] as (readonly string[])[], quantityControl: [] as (readonly string[])[],
   };
   const views: AppViews = {
     header: { render: () => { log.header += 1; } },
@@ -47,7 +47,8 @@ function fakeViews() {
     panel: { render: (selected: readonly SensorInfo[]) => { log.panel.push(selected.map((s) => s.id)); } },
     picker: { render: (ids, notice) => { log.picker.push([ids, notice]); } },
     windowControl: { render: () => undefined },
-    chart: { render: () => { log.chart += 1; } },
+    quantityControl: { render: (state) => { log.quantityControl.push(state.quantities); } },
+    chart: { render: () => { log.chart += 1; }, setQuantities: (ids) => { log.quantities.push(ids); } },
   };
   return { views, log };
 }
@@ -154,5 +155,19 @@ describe('App', () => {
     const count = presenter.refreshed.length;
     app.onWindowChange({ window: { kind: '30d' } });
     expect(presenter.refreshed.length).toBe(count + 1);
+  });
+
+  it('shows other quantities without reloading and keeps them in the URL', () => {
+    app.onSensorClick('77678271', false);
+    const count = presenter.refreshed.length;
+    expect(log.quantities).toEqual([['temp_c', 'rh_pct']]);
+    app.onQuantitiesChange(['temp_c', 'dew_point_c', 'vpd_kpa']);
+    expect(log.quantities.at(-1)).toEqual(['temp_c', 'dew_point_c', 'vpd_kpa']);
+    expect(log.quantityControl.at(-1)).toEqual(['temp_c', 'dew_point_c', 'vpd_kpa']);
+    expect(presenter.refreshed.length).toBe(count);
+    expect(window.location.hash).toBe('#s=77678271&w=7d&q=temp_c,dew_point_c,vpd_kpa&lang=cs');
+    const before = log.quantities.length;
+    app.onQuantitiesChange(['vpd_kpa', 'temp_c', 'dew_point_c']);
+    expect(log.quantities.length).toBe(before);
   });
 });

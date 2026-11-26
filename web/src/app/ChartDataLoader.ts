@@ -1,7 +1,7 @@
 import { eventInWindow, type SensorEvent } from '../contract';
 import type { DataClient } from '../data/DataClient';
 import { dailyColumnSeries } from '../domain/dailyColumnSeries';
-import type { RawVariable } from '../domain/RawSeries';
+import type { RawColumn } from '../domain/RawSeries';
 import type { Resampler } from '../domain/Resampler';
 import type { TimeSeries } from '../domain/TimeSeries';
 import type { TimeWindow } from '../domain/TimeWindow';
@@ -11,11 +11,17 @@ import { SECONDS_PER_DAY } from '../domain/units';
 /** Daily points farther apart than 1.5 days (a missing day) are drawn with a gap. */
 export const DAILY_GAP_THRESHOLD_S = 1.5 * SECONDS_PER_DAY;
 
-/** Chart input for one sensor. */
+/**
+ * Chart input for one sensor, at the window's resolution. Precipitation is per sample (raw),
+ * summed per hour (hourly) or the daily sum (daily); battery voltage is per sample, the hourly
+ * mean or the daily minimum. Both are empty-valued (`null`) where the data have no such column.
+ */
 export interface SensorChartData {
   readonly sensorId: string;
   readonly temp_c: TimeSeries;
   readonly rh_pct: TimeSeries;
+  readonly precip_mm: TimeSeries;
+  readonly battery_v: TimeSeries;
   /** Events inside the window; `off_site` periods that overlap it. */
   readonly events: readonly SensorEvent[];
 }
@@ -38,10 +44,15 @@ export interface WarningSink {
   warn(message: string): void;
 }
 
-const DAILY_COLUMN: Readonly<Record<RawVariable, 'temp_mean' | 'rh_mean'>> = {
+/** Column of `daily.json` shown for each raw column at daily resolution. */
+const DAILY_COLUMN: Readonly<Record<RawColumn, 'temp_mean' | 'rh_mean' | 'precip_sum_mm' | 'battery_min_v'>> = {
   temp_c: 'temp_mean',
   rh_pct: 'rh_mean',
+  precip_mm: 'precip_sum_mm',
+  battery_v: 'battery_min_v',
 };
+
+type SeriesColumns = Record<RawColumn, TimeSeries>;
 
 /**
  * Loads what the chart needs for a window, sensor by sensor: raw samples, hourly means or daily
@@ -97,27 +108,39 @@ export class ChartDataLoader {
   private async loadSeries(
     sensorId: string,
     window: TimeWindow,
-  ): Promise<Record<RawVariable, TimeSeries>> {
+  ): Promise<SeriesColumns> {
     const { startT, endT } = window;
     switch (window.resolution) {
       case 'daily': {
         const daily = await this.client.getDaily(sensorId);
-        const column = (variable: RawVariable): TimeSeries =>
+        const column = (variable: RawColumn): TimeSeries =>
           dailyColumnSeries(daily, DAILY_COLUMN[variable], this.zone, startT, endT).withGapBreaks(
             DAILY_GAP_THRESHOLD_S,
           );
-        return { temp_c: column('temp_c'), rh_pct: column('rh_pct') };
+        return {
+          temp_c: column('temp_c'),
+          rh_pct: column('rh_pct'),
+          precip_mm: column('precip_mm'),
+          battery_v: column('battery_v'),
+        };
       }
       case 'hourly': {
         const raw = await this.client.getRawRange(sensorId, startT, endT);
         return {
           temp_c: this.resampler.hourlyMeans(raw, 'temp_c', startT, endT),
           rh_pct: this.resampler.hourlyMeans(raw, 'rh_pct', startT, endT),
+          precip_mm: this.resampler.hourlySums(raw, 'precip_mm', startT, endT),
+          battery_v: this.resampler.hourlyMeans(raw, 'battery_v', startT, endT),
         };
       }
       case 'raw': {
         const raw = await this.client.getRawRange(sensorId, startT, endT);
-        return { temp_c: this.resampler.raw(raw, 'temp_c'), rh_pct: this.resampler.raw(raw, 'rh_pct') };
+        return {
+          temp_c: this.resampler.raw(raw, 'temp_c'),
+          rh_pct: this.resampler.raw(raw, 'rh_pct'),
+          precip_mm: this.resampler.raw(raw, 'precip_mm'),
+          battery_v: this.resampler.raw(raw, 'battery_v'),
+        };
       }
     }
   }

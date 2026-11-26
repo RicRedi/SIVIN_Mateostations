@@ -25,7 +25,7 @@ const catalog = SensorCatalog.build(
 const T = utc(2026, 6, 3, 8);
 
 function fakePlot() {
-  const ctx = { save: vi.fn(), restore: vi.fn(), setLineDash: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillRect: vi.fn(), strokeStyle: '', fillStyle: '', lineWidth: 0 };
+  const ctx = { save: vi.fn(), restore: vi.fn(), setLineDash: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillRect: vi.fn(), strokeStyle: '', fillStyle: '', lineWidth: 0 };
   const plot = {
     over: document.createElement('div'),
     ctx,
@@ -51,6 +51,17 @@ describe('EventMarkers', () => {
       'Deployed in the vineyard – 77799986 (VUT) · 3 Jun 2026, 10:00 · confidence 93 % · office → vineyard',
     );
     expect(buttons[1]?.dataset.tip).toBe('Retrieved from the vineyard – 00000000 · 3 Jun 2026, 10:10');
+  });
+
+  it('hides the buttons of events outside the visible (zoomed) range and clips drawing to the plot', () => {
+    const { plot, ctx } = fakePlot();
+    // The plotting area is 55 px wide: the marker at 50 px stays, the one at 60 px is hidden.
+    (plot as unknown as { bbox: { width: number } }).bbox.width = 55;
+    markers.attach(plot);
+    const buttons = [...plot.over.querySelectorAll<HTMLButtonElement>('button.event-marker')];
+    expect(buttons.map((b) => b.hidden)).toEqual([false, true]);
+    markers.drawLines(plot);
+    expect(ctx.clip).toHaveBeenCalledOnce();
   });
 
   it('draws one dashed vertical line per event across the plotting area', () => {

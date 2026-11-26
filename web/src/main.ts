@@ -1,6 +1,7 @@
 import './styles.css';
 import { ChartDataLoader } from './app/ChartDataLoader';
 import { ChartPresenter } from './app/ChartPresenter';
+import { createQuantityRegistry } from './app/ChartQuantities';
 import { SensorCatalog } from './app/SensorCatalog';
 import type { Manifest } from './contract';
 import { DataClient } from './data/DataClient';
@@ -19,16 +20,23 @@ import { DEFAULT_APP_STATE, type AppState } from './state/AppState';
 import { HashStateCodec } from './state/HashStateCodec';
 import { Store } from './state/Store';
 import { App } from './ui/App';
+import { ChartCsv } from './ui/ChartCsv';
+import { ChartDialog } from './ui/ChartDialog';
+import { ChartExport, ChartToolbar } from './ui/ChartToolbar';
 import type { TextClipboard } from './ui/CopyButton';
+import { FileDownload } from './ui/FileDownload';
 import { HashSync } from './ui/HashSync';
 import { HeaderView } from './ui/HeaderView';
 import { MapView } from './ui/MapView';
 import { TemperatureScale } from './ui/palette';
 import { SensorPicker } from './ui/picker/SensorPicker';
+import { QuantityControl } from './ui/QuantityControl';
+import { QuantityLabels } from './ui/QuantityLabels';
 import { SensorColors } from './ui/SensorColors';
 import { SensorPanel } from './ui/SensorPanel';
 import { SeriesChart } from './ui/SeriesChart';
 import { TimeWindowControl } from './ui/TimeWindowControl';
+import { animationFrames } from './ui/ZoomPanPlugin';
 
 /** Data directory, relative to the deployed base path (see `vite.config.ts`). */
 const DATA_BASE_URL = `${import.meta.env.BASE_URL}data/`;
@@ -88,7 +96,43 @@ async function start(): Promise<void> {
   const panel = new SensorPanel(requireElement('panel'), i18n, zone.name, colors, () => {
     map.invalidateSize();
   }, clipboardOrNull());
-  const chart = new SeriesChart(panel.chartSlot, i18n, catalog, colors, manifest.variables, zone);
+  const quantities = createQuantityRegistry(manifest.variables);
+  const labels = new QuantityLabels(i18n, manifest.variables);
+  const isPhone = () => window.matchMedia(PHONE_LAYOUT_QUERY).matches;
+  const csv = new ChartCsv(i18n, catalog, zone, labels);
+  const download = new FileDownload(document, URL);
+  let toolbar: ChartToolbar | null = null;
+  const chart = new SeriesChart(panel.chartSlot, i18n, catalog, colors, quantities, labels, zone, animationFrames(window), (state) =>
+    toolbar?.update(state),
+  );
+  const chartExport = new ChartExport(
+    () => chart.snapshot(),
+    (model, view) => csv.file(model, view),
+    (name, content) => {
+      download.save(name, content);
+    },
+  );
+  const dialog = new ChartDialog(
+    document,
+    i18n,
+    { controls: [panel.pickerSlot, panel.windowSlot, panel.quantitySlot], chart: panel.chartSlot },
+    isPhone,
+    (open) => {
+      toolbar?.update({ maximised: open });
+      // Redraw for the new container: axis sizes and the fill height depend on it (zoom is kept).
+      chart.render();
+    },
+  );
+  toolbar = new ChartToolbar(panel.chartSlot, i18n, {
+    onMaximise: () => {
+      dialog.open();
+    },
+    onResetZoom: () => {
+      chart.resetZoom();
+    },
+    onDownload: () => chartExport.run(),
+  });
+  const chartToolbar = toolbar;
   const loader = new ChartDataLoader(client, new Resampler(new QcMask(DISPLAY_EXCLUDE_MASK)), zone, console);
   const presenter = new ChartPresenter(loader, factory, i18n, chart, dataEndT(manifest));
   const legendCollapsed = window.matchMedia(COMPACT_LEGEND_QUERY).matches;
@@ -98,11 +142,32 @@ async function start(): Promise<void> {
   const picker = new SensorPicker(panel.pickerSlot, catalog, i18n, colors, {
     onSensorToggle: (id) => app?.onSensorToggle(id),
     onGroupToggle: (ids) => app?.onGroupToggle(ids),
-  }, () => window.matchMedia(PHONE_LAYOUT_QUERY).matches);
+  }, isPhone);
   const windowControl = new TimeWindowControl(panel.windowSlot, i18n, zone, manifest.seasons, (change) =>
     app?.onWindowChange(change),
   );
-  app = new App(store, catalog, i18n, preference, colors, presenter, { header, map, panel, picker, windowControl, chart });
+  const quantityControl = new QuantityControl(panel.quantitySlot, quantities, labels, i18n, (shown) =>
+    app?.onQuantitiesChange(shown),
+  );
+  const chartView = {
+    render: () => {
+      chart.render();
+      chartToolbar.render();
+      dialog.render();
+    },
+    setQuantities: (shown: AppState['quantities']) => {
+      chart.setQuantities(shown);
+    },
+  };
+  app = new App(store, catalog, i18n, preference, colors, presenter, {
+    header,
+    map,
+    panel,
+    picker,
+    windowControl,
+    quantityControl,
+    chart: chartView,
+  });
   new HashSync(store, codec, window.location, window.history, window).write();
   app.start();
 }

@@ -7,21 +7,33 @@ const codec = new HashStateCodec();
 
 describe('HashStateCodec', () => {
   it('encodes the documented example', () => {
-    const state: AppState = { selectedSensorIds: ['77678271', '77680921'], window: { kind: '7d' }, resolution: 'hourly', language: 'cs' };
+    const state: AppState = { selectedSensorIds: ['77678271', '77680921'], window: { kind: '7d' }, resolution: 'hourly', quantities: ['temp_c', 'rh_pct'], language: 'cs' };
     expect(codec.encode(state)).toBe('#s=77678271,77680921&w=7d&r=hourly&lang=cs');
   });
 
   it.each<AppState>([
-    { selectedSensorIds: ['77678271'], window: { kind: '24h' }, resolution: 'raw', language: 'de' },
-    { selectedSensorIds: ['77678271', '77799986'], window: { kind: 'season', year: 2026 }, resolution: 'auto', language: 'en' },
-    { selectedSensorIds: [], window: { kind: 'custom', from: '2026-06-01', to: '2026-06-15' }, resolution: 'daily', language: 'cs' },
-    { selectedSensorIds: [], window: { kind: '30d' }, resolution: 'auto', language: 'cs' },
+    { selectedSensorIds: ['77678271'], window: { kind: '24h' }, resolution: 'raw', quantities: ['temp_c', 'rh_pct'], language: 'de' },
+    { selectedSensorIds: ['77678271', '77799986'], window: { kind: 'season', year: 2026 }, resolution: 'auto', quantities: ['temp_c', 'rh_pct'], language: 'en' },
+    { selectedSensorIds: [], window: { kind: 'custom', from: '2026-06-01', to: '2026-06-15' }, resolution: 'daily', quantities: ['temp_c', 'rh_pct'], language: 'cs' },
+    { selectedSensorIds: [], window: { kind: '30d' }, resolution: 'auto', quantities: ['temp_c', 'rh_pct'], language: 'cs' },
+    { selectedSensorIds: [], window: { kind: '7d' }, resolution: 'auto', quantities: ['temp_c', 'dew_point_c', 'vpd_kpa'], language: 'cs' },
+    { selectedSensorIds: [], window: { kind: '7d' }, resolution: 'auto', quantities: [], language: 'en' },
   ])('round-trips %j', (state) => {
     expect({ ...DEFAULT_APP_STATE, ...codec.decode(codec.encode(state)) }).toEqual(state);
   });
 
   it('omits r for automatic resolution and s for an empty selection', () => {
     expect(codec.encode(DEFAULT_APP_STATE)).toBe('#w=7d&lang=cs');
+  });
+
+  it('encodes non-default chart quantities and normalises them on decoding', () => {
+    expect(codec.encode({ ...DEFAULT_APP_STATE, quantities: ['rh_pct', 'leaf_wetness', 'precip_mm'] })).toBe(
+      '#w=7d&q=rh_pct,leaf_wetness,precip_mm&lang=cs',
+    );
+    expect(codec.encode({ ...DEFAULT_APP_STATE, quantities: [] })).toBe('#w=7d&q=&lang=cs');
+    // Unknown ids dropped, canonical order, only the first extra-axis quantity kept.
+    expect(codec.decode('#q=battery_v,dew_point_c,wind,vpd_kpa,temp_c').quantities).toEqual(['temp_c', 'dew_point_c', 'battery_v']);
+    expect(codec.decode('#q=').quantities).toEqual([]);
   });
 
   it('ignores invalid parts and keeps valid ones', () => {

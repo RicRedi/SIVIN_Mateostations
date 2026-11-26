@@ -1,3 +1,4 @@
+import { DEFAULT_QUANTITIES, type QuantityId } from '../domain/quantities';
 import type { ResolutionChoice, WindowSpec } from '../domain/WindowSpec';
 import { DEFAULT_WINDOW } from '../domain/WindowSpec';
 import type { Language } from '../i18n/languages';
@@ -10,6 +11,8 @@ export interface AppState {
   readonly selectedSensorIds: readonly string[];
   readonly window: WindowSpec;
   readonly resolution: ResolutionChoice;
+  /** Quantities shown in the chart, canonical order, at most one with an extra axis (`QuantitySelection`). */
+  readonly quantities: readonly QuantityId[];
   readonly language: Language;
 }
 
@@ -17,6 +20,7 @@ export const DEFAULT_APP_STATE: AppState = {
   selectedSensorIds: [],
   window: DEFAULT_WINDOW,
   resolution: 'auto',
+  quantities: DEFAULT_QUANTITIES,
   language: DEFAULT_LANGUAGE,
 };
 
