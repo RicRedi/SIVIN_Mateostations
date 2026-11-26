@@ -398,8 +398,11 @@ since the previous sample, i.e. of the interval `(t_prev, t]`, so it is counted 
 contains the interval's midpoint (the first loaded sample is assumed to cover one nominal step).
 An hour is shown only if it is complete: every sample counted in it has a valid value (not
 `null`, not masked by PRE_DEPLOYMENT / MANUAL_EXCLUDE) and covers at most 1.5 nominal steps
-(2745 s; a longer interval means a missed sample). Otherwise the hour is `null` (a gap), so a
-partial sum never looks like a complete one. Daily sums come from `precip_sum_mm` as published
+(2745 s; a longer interval means a missed sample), and the counted intervals cover the hour up
+to half that tolerance (1372.5 s) at its start and end. Otherwise the hour is `null` (a gap): an
+hour where a data gap starts or ends, the running last hour of the data, or an hour with a
+masked sample. So a partial sum is not shown as a complete one; the price is that an hour at
+the edge of the data is left empty even if part of its rain is known. Daily sums come from `precip_sum_mm` as published
 (`precip_n_samples` tells how complete a day is; not shown).
 
 ### CSV export

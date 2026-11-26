@@ -219,6 +219,22 @@ has no leaf-wetness series; a wheel down over the fully zoomed-out small chart s
 panel (scrollTop 100 → 300); after removing every sensor in the dialog the empty-state note is
 displayed; no page errors.
 
+## Follow-up after review round 2
+
+- **minor, hourly precipitation at the edge of a gap** (`Resampler.hourlyPrecipitation`): an
+  hour is now also `null` unless its counted intervals `(t_prev, t]` (which chain without gaps)
+  start at most `PRECIP_COVERAGE_TOLERANCE_S` = 1372.5 s (half of the 1.5-step tolerance)
+  after the hour's start and end at most that much before its end. This leaves out an hour where
+  a gap starts or ends and the running last hour of the data. Tests in
+  `tests/auxiliary.test.ts`: the reviewer's example (10:05Z 0.5 mm, 10:35Z 1.0 mm, next sample
+  14:00Z → hour 10 `null`, before 1.0 mm), the running last hour, and the existing grid
+  extended by two samples so that hour 2 is complete (0.5 + 0.6 mm). The loader test now
+  expects `[null, null]` (its last hour ends at 01:31:30). `docs/web.md` adjusted, including
+  the trade-off that an hour at the edge of the data stays empty although part of its rain is
+  known.
+- Gates (in `web/`): `npm run lint` clean, `npm run typecheck` clean, `npm test` 31 files / 316
+  tests passed, coverage lines 99.5 % (1992/2002), branches 93.22 %; `npm run build` OK.
+
 ## Review
 
 Verdict: CHANGES_REQUESTED (round 1)

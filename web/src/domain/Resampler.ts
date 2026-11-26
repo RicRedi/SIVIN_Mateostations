@@ -22,6 +22,14 @@ export const RAW_GAP_THRESHOLD_S = 3 * NOMINAL_STEP_S;
  */
 export const MAX_PRECIP_INTERVAL_S = 1.5 * NOMINAL_STEP_S;
 
+/**
+ * How far the counted intervals of an hour may fall short of its start or end: half of
+ * {@link MAX_PRECIP_INTERVAL_S}. Counting by the interval midpoint leaves up to half an
+ * interval of an hour to the neighbouring hours' samples; more than that means the hour is not
+ * covered (a gap starts or ends in it, or the data end inside it).
+ */
+export const PRECIP_COVERAGE_TOLERANCE_S = MAX_PRECIP_INTERVAL_S / 2;
+
 const HALF_HOUR_S = SECONDS_PER_HOUR / 2;
 const HALF = 0.5;
 
@@ -93,8 +101,11 @@ export class Resampler {
    * `(t_prev, t]`; it is counted in the hour that contains the interval's midpoint
    * `t − (t − t_prev)/2` (the first loaded sample is assumed to cover one nominal step). An hour
    * is shown only if it is **complete**: every sample counted in it has a valid (non-null, not
-   * masked) value and covers at most {@link MAX_PRECIP_INTERVAL_S}. Otherwise — and for an hour
-   * without samples — it is `null`, so a partial sum never looks like a complete one.
+   * masked) value and covers at most {@link MAX_PRECIP_INTERVAL_S}, and the counted intervals
+   * (which chain without gaps) reach from at most {@link PRECIP_COVERAGE_TOLERANCE_S} after the
+   * hour's start to at least that much before its end. Otherwise — at the edge of a gap, in the
+   * running last hour, or without samples — it is `null`, so a partial sum never looks like a
+   * complete one.
    *
    * @param series - Raw samples.
    * @param startT - Window start, Unix seconds UTC.
@@ -106,6 +117,8 @@ export class Resampler {
     const sums = new Array<number>(bins.count).fill(0);
     const counts = new Array<number>(bins.count).fill(0);
     const incomplete = new Array<boolean>(bins.count).fill(false);
+    const coveredFromT = new Array<number>(bins.count).fill(Number.POSITIVE_INFINITY);
+    const coveredToT = new Array<number>(bins.count).fill(Number.NEGATIVE_INFINITY);
     values.t.forEach((t, i) => {
       const previous = values.t[i - 1];
       const intervalS = previous === undefined ? NOMINAL_STEP_S : t - previous;
@@ -121,8 +134,20 @@ export class Resampler {
       }
       sums[bin] = (sums[bin] ?? 0) + value;
       counts[bin] = (counts[bin] ?? 0) + 1;
+      coveredFromT[bin] = Math.min(coveredFromT[bin] ?? Number.POSITIVE_INFINITY, t - intervalS);
+      coveredToT[bin] = Math.max(coveredToT[bin] ?? Number.NEGATIVE_INFINITY, t);
     });
-    return Resampler.stamped(bins, sums.map((sum, bin) => ((counts[bin] ?? 0) === 0 || incomplete[bin] === true ? null : sum)));
+    const covered = (bin: number): boolean => {
+      const hourT = bins.firstHourT + bin * SECONDS_PER_HOUR;
+      return (
+        (coveredFromT[bin] ?? Number.POSITIVE_INFINITY) <= hourT + PRECIP_COVERAGE_TOLERANCE_S &&
+        (coveredToT[bin] ?? Number.NEGATIVE_INFINITY) >= hourT + SECONDS_PER_HOUR - PRECIP_COVERAGE_TOLERANCE_S
+      );
+    };
+    return Resampler.stamped(
+      bins,
+      sums.map((sum, bin) => ((counts[bin] ?? 0) === 0 || incomplete[bin] === true || !covered(bin) ? null : sum)),
+    );
   }
 
   private masked(series: RawSeries, variable: RawColumn): TimeSeries {
