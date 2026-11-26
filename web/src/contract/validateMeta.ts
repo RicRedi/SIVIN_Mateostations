@@ -7,6 +7,7 @@ import {
   SENSOR_EVENT_TYPES,
   SUPPORTED_SCHEMA_VERSION,
   type EventsFile,
+  type IndexDaily,
   type IndexValue,
   type IndicesFile,
   type LatestFile,
@@ -18,6 +19,7 @@ import {
 } from './types';
 
 const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+const ISO_DATE_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 /** Receives non-fatal contract findings (tolerantly ignored fields). */
 export type ContractWarning = (message: string) => void;
@@ -43,6 +45,55 @@ function optionalField<T>(value: unknown, read: (value: unknown) => T, warn: Con
     warn(`${error.message}; optional field ignored`);
     return undefined;
   }
+}
+
+function readShare(reader: FieldReader, value: unknown, path: string): number {
+  const share = reader.number(value, path);
+  if (share < 0 || share > 1) {
+    reader.fail(path, `must be within 0-1, got ${share}`);
+  }
+  return share;
+}
+
+function readIsoDate(reader: FieldReader, value: unknown, path: string): string {
+  const text = reader.string(value, path);
+  if (!ISO_DATE_PATTERN.test(text)) {
+    reader.fail(path, `must be a date YYYY-MM-DD, got "${text}"`);
+  }
+  return text;
+}
+
+/** The daily risk block of an index entry (WP-3.4); dates increasing, levels from `levels`. */
+function readIndexDaily(reader: FieldReader, value: unknown, path: string): IndexDaily {
+  const daily = reader.object(value, path);
+  const levels = reader.list(daily.levels, `${path}.levels`, reader.stringItem);
+  const date = reader.list(daily.date, `${path}.date`, (item, itemPath) => readIsoDate(reader, item, itemPath));
+  date.forEach((day, i) => {
+    const previous = date[i - 1];
+    if (previous !== undefined && day <= previous) {
+      reader.fail(`${path}.date[${i}]`, `must be after "${previous}", got "${day}"`);
+    }
+  });
+  const level = reader.list(
+    daily.level,
+    `${path}.level`,
+    (item, itemPath) => {
+      const label = reader.nullableString(item, itemPath);
+      if (label !== null && !levels.includes(label)) {
+        reader.fail(itemPath, `must be one of ${JSON.stringify(levels)} or null, got "${label}"`);
+      }
+      return label;
+    },
+    date.length,
+  );
+  return {
+    levels,
+    start: readIsoDate(reader, daily.start, `${path}.start`),
+    end: readIsoDate(reader, daily.end, `${path}.end`),
+    date,
+    value: reader.list(daily.value, `${path}.value`, reader.nullableNumberItem, date.length),
+    level,
+  };
 }
 
 function readLabel(reader: FieldReader, value: unknown, path: string): LocalizedLabel {
@@ -82,11 +133,13 @@ export function parseManifest(value: unknown, file = 'manifest.json', warn: Cont
   const root = reader.object(value, '$');
   reader.literal(root.schema_version, [SUPPORTED_SCHEMA_VERSION], '$.schema_version');
   const staleAfterS = optionalField(root.stale_after_s, (item) => reader.number(item, '$.stale_after_s'), warn);
+  const minDailyCoverage = optionalField(root.min_daily_coverage, (item) => readShare(reader, item, '$.min_daily_coverage'), warn);
   return {
     schema_version: SUPPORTED_SCHEMA_VERSION,
     generated_at: reader.string(root.generated_at, '$.generated_at'),
     display_timezone: reader.string(root.display_timezone, '$.display_timezone'),
     ...(staleAfterS === undefined ? {} : { stale_after_s: staleAfterS }),
+    ...(minDailyCoverage === undefined ? {} : { min_daily_coverage: minDailyCoverage }),
     variables: reader.list(root.variables, '$.variables', (item, path) => {
       const variable = reader.object(item, path);
       return {
@@ -198,7 +251,9 @@ function readIndexValue(reader: FieldReader, value: unknown, path: string, warn:
   const estimated = optionalField(result.estimated, (item) => reader.boolean(item, `${path}.estimated`), warn);
   const status = optionalField(result.status, (item) => reader.string(item, `${path}.status`), warn);
   const detail = optionalField(result.detail, (item) => reader.string(item, `${path}.detail`), warn);
+  const daily = optionalField(result.daily, (item) => readIndexDaily(reader, item, `${path}.daily`), warn);
   return {
+    ...(daily === undefined ? {} : { daily }),
     ...(estimated === undefined ? {} : { estimated }),
     ...(status === undefined ? {} : { status }),
     ...(detail === undefined ? {} : { detail }),

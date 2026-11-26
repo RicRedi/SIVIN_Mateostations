@@ -1,16 +1,22 @@
 import './styles.css';
+import { AnalyticsCatalog } from './app/AnalyticsCatalog';
+import { AnalyticsLoader } from './app/AnalyticsLoader';
+import { AnalyticsPresenter } from './app/AnalyticsPresenter';
 import { ChartDataLoader } from './app/ChartDataLoader';
 import { ChartPresenter } from './app/ChartPresenter';
 import { createQuantityRegistry } from './app/ChartQuantities';
+import { IndexDocs } from './app/IndexDocs';
 import { SensorCatalog } from './app/SensorCatalog';
 import type { Manifest } from './contract';
 import { DataClient } from './data/DataClient';
 import { DISPLAY_EXCLUDE_MASK, QcMask } from './domain/QcFlags';
 import { Resampler } from './domain/Resampler';
 import { ResolutionPolicy } from './domain/ResolutionPolicy';
+import { DEFAULT_MIN_DAILY_COVERAGE, RecordsCalculator } from './domain/SensorRecords';
 import { TimeWindowFactory } from './domain/TimeWindowFactory';
 import { TimeZone } from './domain/TimeZone';
 import { MS_PER_SECOND } from './domain/units';
+import { AnalyticsTerms } from './i18n/analyticsTerms';
 import { cs } from './i18n/cs';
 import { de } from './i18n/de';
 import { en } from './i18n/en';
@@ -19,6 +25,7 @@ import { LanguagePreference } from './i18n/LanguagePreference';
 import { DEFAULT_APP_STATE, type AppState } from './state/AppState';
 import { HashStateCodec } from './state/HashStateCodec';
 import { Store } from './state/Store';
+import { AnalyticsSection } from './ui/AnalyticsSection';
 import { App } from './ui/App';
 import { ChartCsv } from './ui/ChartCsv';
 import { ChartDialog } from './ui/ChartDialog';
@@ -27,11 +34,15 @@ import type { TextClipboard } from './ui/CopyButton';
 import { FileDownload } from './ui/FileDownload';
 import { HashSync } from './ui/HashSync';
 import { HeaderView } from './ui/HeaderView';
+import { IndexCardsView } from './ui/IndexCardsView';
+import { IndexFormat } from './ui/IndexFormat';
 import { MapView } from './ui/MapView';
 import { TemperatureScale } from './ui/palette';
 import { SensorPicker } from './ui/picker/SensorPicker';
 import { QuantityControl } from './ui/QuantityControl';
 import { QuantityLabels } from './ui/QuantityLabels';
+import { RecordsView } from './ui/RecordsView';
+import { RiskStripView } from './ui/RiskStripView';
 import { SensorColors } from './ui/SensorColors';
 import { SensorPanel } from './ui/SensorPanel';
 import { SeriesChart } from './ui/SeriesChart';
@@ -40,6 +51,11 @@ import { animationFrames } from './ui/ZoomPanPlugin';
 
 /** Data directory, relative to the deployed base path (see `vite.config.ts`). */
 const DATA_BASE_URL = `${import.meta.env.BASE_URL}data/`;
+/**
+ * Repository files on GitHub, base of the "how it is computed" links to `docs/indices/*.md`
+ * (the manifest gives each index its repository path). Override with `VITE_DOCS_BASE_URL`.
+ */
+const DOCS_BASE_URL: string = import.meta.env.VITE_DOCS_BASE_URL ?? 'https://github.com/RicRedi/SIVIN_Mateostations/blob/main/';
 /** Build-time flag: the bundled data are the synthetic fixture unless set to `"false"`. */
 const IS_DEMO_DATA = import.meta.env.VITE_DEMO_DATA !== 'false';
 /** Below this viewport width the map legend starts collapsed so it does not cover the map. */
@@ -149,6 +165,25 @@ async function start(): Promise<void> {
   const quantityControl = new QuantityControl(panel.quantitySlot, quantities, labels, i18n, (shown) =>
     app?.onQuantitiesChange(shown),
   );
+  const indexFormat = new IndexFormat(i18n);
+  const terms = new AnalyticsTerms(i18n);
+  const docs = new IndexDocs(DOCS_BASE_URL);
+  let analyticsPresenter: AnalyticsPresenter | null = null;
+  const analytics = new AnalyticsSection(
+    panel.analyticsSlot,
+    i18n,
+    AnalyticsCatalog.fromManifest(manifest),
+    catalog,
+    colors,
+    {
+      cards: new IndexCardsView(i18n, terms, indexFormat, docs),
+      risks: new RiskStripView(i18n, terms, indexFormat, docs),
+      records: new RecordsView(i18n, indexFormat, new RecordsCalculator(manifest.min_daily_coverage ?? DEFAULT_MIN_DAILY_COVERAGE)),
+    },
+    manifest.seasons,
+    (season, ids) => void analyticsPresenter?.refresh(season, ids),
+  );
+  analyticsPresenter = new AnalyticsPresenter(new AnalyticsLoader(client), i18n, analytics);
   const chartView = {
     render: () => {
       chart.render();
@@ -167,6 +202,7 @@ async function start(): Promise<void> {
     windowControl,
     quantityControl,
     chart: chartView,
+    analytics,
   });
   new HashSync(store, codec, window.location, window.history, window).write();
   app.start();

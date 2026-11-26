@@ -130,6 +130,24 @@ const EXCLUDE_MASK = 1 | 2 | 4 | 16 | 32 | 256;
 const GDD_SEASON_DAYS = 214;
 const HUGLIN_SEASON_DAYS = 183;
 const BASE_TEMP_C = 10;
+const SEPTEMBER_DAYS = 30;
+/** BEDD placeholder: the GDD sum scaled down (BEDD caps warm days); not the Gladstones formula. */
+const BEDD_PLACEHOLDER_FACTOR = 0.9;
+/** Complete-day threshold published in the manifest (default of analytics.min_daily_coverage). */
+const MIN_DAILY_COVERAGE = 0.9;
+/** Period of the placeholder risk strips (local dates), as the default of the Python models. */
+const RISK_PERIOD = [`${SEASON}-04-01`, `${SEASON}-10-31`];
+/** Placeholder powdery-mildew rule on DAILY values (not the hourly Gubler-Thomas rule): a day is
+ * "favourable" with a daily maximum of 24-33 °C; 3 such days start the index at 60 points,
+ * then +20 / -10 points per day within 0-100; low < 40 <= moderate < 60 <= high. */
+const PM_FAVOURABLE_MAX_C = [24, 33];
+const PM = { onsetDays: 3, onset: 60, up: 20, down: 10, max: 100, moderate: 40, high: 60 };
+/** Placeholder wetness rule: daily maximum humidity >= 90 % marks an estimated wetness day with a
+ * fixed placeholder value 0.1 (not a Broome probability). */
+const WET_RH_PCT = 90;
+const WET_PLACEHOLDER_VALUE = 0.1;
+/** Placeholder frost hours of a day with a daily minimum <= 0 °C (none occur June-September). */
+const FROST_PLACEHOLDER_H = 1;
 
 /** Mulberry32: small, fast, deterministic 32-bit PRNG returning floats in [0, 1). */
 function mulberry32(seed) {
@@ -346,6 +364,57 @@ function dailyFile(sensorId, rows) {
   return file;
 }
 
+function placeholderEntry(value, unit, coverage, extra = {}) {
+  return { value, unit, coverage: round2(coverage), complete: false, class: null, estimated: false, status: 'ok', ...extra };
+}
+
+function riskBlock(daily, levels, assess) {
+  const block = { levels, start: RISK_PERIOD[0], end: RISK_PERIOD[1], date: [], value: [], level: [] };
+  daily.date.forEach((date, i) => {
+    const [value, level] = daily.coverage[i] >= MIN_DAILY_COVERAGE ? assess(i) : [null, null];
+    block.date.push(date);
+    block.value.push(value);
+    block.level.push(level);
+  });
+  return block;
+}
+
+function powderyMildewBlock(daily) {
+  let streak = 0;
+  let points = null;
+  return riskBlock(daily, ['low', 'moderate', 'high'], (i) => {
+    const max = daily.temp_max[i];
+    const favourable = max !== null && max >= PM_FAVOURABLE_MAX_C[0] && max <= PM_FAVOURABLE_MAX_C[1];
+    if (points === null) {
+      streak = favourable ? streak + 1 : 0;
+      points = streak >= PM.onsetDays ? PM.onset : null;
+    } else {
+      points = Math.min(PM.max, Math.max(0, points + (favourable ? PM.up : -PM.down)));
+    }
+    const value = points ?? 0;
+    return [value, value >= PM.high ? 'high' : value >= PM.moderate ? 'moderate' : 'low'];
+  });
+}
+
+function placeholderRisks(daily, days) {
+  const coverage = days / GDD_SEASON_DAYS;
+  const botrytis = riskBlock(daily, ['no_wetness', 'wetness'], (i) =>
+    (daily.rh_max[i] ?? 0) >= WET_RH_PCT ? [WET_PLACEHOLDER_VALUE, 'wetness'] : [0, 'no_wetness'],
+  );
+  const mildew = powderyMildewBlock(daily);
+  const frost = riskBlock(daily, ['none', 'frost', 'hard_frost'], (i) =>
+    (daily.temp_min[i] ?? 1) <= 0 ? [FROST_PLACEHOLDER_H, 'frost'] : [0, 'none'],
+  );
+  const known = (block) => block.value.filter((value) => value !== null);
+  const max = (block) => Math.max(0, ...known(block));
+  const sum = (block) => known(block).reduce((total, value) => total + value, 0);
+  return {
+    botrytis_broome: placeholderEntry(max(botrytis), '1', coverage, { estimated: true, daily: botrytis }),
+    frost: placeholderEntry(sum(frost), 'h', coverage, { daily: frost }),
+    powdery_mildew_gt: placeholderEntry(max(mildew), 'points', coverage, { daily: mildew }),
+  };
+}
+
 function placeholderIndices(daily) {
   let gdd = 0;
   let huglin = 0;
@@ -362,11 +431,36 @@ function placeholderIndices(daily) {
       huglinDays += 1;
     }
   });
+  const means = daily.temp_mean.filter((mean) => mean !== null);
+  const septemberMins = daily.date.flatMap((date, i) => (date.slice(5, 7) === '09' && daily.temp_min[i] !== null ? [daily.temp_min[i]] : []));
+  const average = (values) => (values.length === 0 ? null : round1(values.reduce((sum, value) => sum + value, 0) / values.length));
   return {
-    gdd_winkler: { value: round1(gdd), unit: '°C·d', coverage: round2(gddDays / GDD_SEASON_DAYS), complete: false, class: null },
-    huglin: { value: round1(huglin), unit: '°C·d', coverage: round2(huglinDays / HUGLIN_SEASON_DAYS), complete: false, class: null },
+    bedd: placeholderEntry(round1(gdd * BEDD_PLACEHOLDER_FACTOR), '°C·d', gddDays / GDD_SEASON_DAYS),
+    budburst: placeholderEntry(null, 'DOY', 0.01, { estimated: true }),
+    cool_night: placeholderEntry(average(septemberMins), '°C', septemberMins.length / SEPTEMBER_DAYS),
+    gdd_winkler: placeholderEntry(round1(gdd), '°C·d', gddDays / GDD_SEASON_DAYS),
+    gfv: placeholderEntry(null, 'DOY', gddDays / GDD_SEASON_DAYS),
+    gsr: placeholderEntry(null, 'DOY', gddDays / GDD_SEASON_DAYS),
+    gst: placeholderEntry(average(means), '°C', gddDays / GDD_SEASON_DAYS),
+    huglin: placeholderEntry(round1(huglin), '°C·d', huglinDays / HUGLIN_SEASON_DAYS),
+    ...placeholderRisks(daily, gddDays),
   };
 }
+
+/** Indices of the demo manifest: id, unit and the labels of `sivin.site.labels`. */
+const INDEX_SPECS = [
+  ['bedd', '°C·d', 'Biologicky efektivní stupňodny', 'Biologisch effektive Gradtage', 'Biologically effective degree-days'],
+  ['botrytis_broome', '1', 'Riziko plísně šedé (Broome)', 'Botrytis-Risiko (Broome)', 'Botrytis risk (Broome)'],
+  ['budburst', 'DOY', 'Odhad rašení', 'Geschätzter Austrieb', 'Budburst estimate'],
+  ['cool_night', '°C', 'Index chladných nocí', 'Index kühler Nächte', 'Cool night index'],
+  ['frost', 'h', 'Mrazové hodiny a noci', 'Froststunden und -nächte', 'Frost hours and nights'],
+  ['gdd_winkler', '°C·d', 'Suma efektivních teplot (Winklerův index)', 'Gradtage nach Winkler', 'Growing degree-days (Winkler)'],
+  ['gfv', 'DOY', 'Model kvetení a zaměkání (GFV)', 'Blüte-Véraison-Modell (GFV)', 'Grapevine Flowering Véraison model'],
+  ['gsr', 'DOY', 'Model cukernatosti hroznů (GSR)', 'Zuckerreife-Modell (GSR)', 'Grapevine Sugar Ripeness model'],
+  ['gst', '°C', 'Průměrná teplota vegetačního období', 'Mitteltemperatur der Vegetationsperiode', 'Growing season average temperature'],
+  ['huglin', '°C·d', 'Huglinův index', 'Huglin-Index', 'Huglin index'],
+  ['powdery_mildew_gt', 'points', 'Riziko padlí (Gubler-Thomas)', 'Mehltau-Risiko (Gubler-Thomas)', 'Powdery mildew risk (Gubler-Thomas)'],
+];
 
 const isoSeconds = (t) => new Date(t * 1000).toISOString().replace('.000Z', 'Z');
 
@@ -441,7 +535,9 @@ real; their municipality, track and variety are null. The other 16 sensors (ids 
 and all varieties are **fictional**; they exist to exercise the sensor picker and marker
 clustering at a larger network size and have data only for September 2026. Placement dates,
 events and index values are placeholders. The placeholder indices use simplified formulas
-(Huglin without the latitude coefficient) and are marked \`complete: false\`.
+(Huglin without the latitude coefficient, BEDD as a scaled GDD sum, daily risk levels from
+daily values instead of the hourly models, a fixed placeholder wetness value) and are marked
+\`complete: false\`; the phenology models have no estimate (not configured).
 
 The layout follows the static site data contract, MIGRATION_PLAN.md §2.6
 (\`schema_version: 1\`). Regenerate with \`npm run fixture\` in \`web/\`.
@@ -479,16 +575,14 @@ function main() {
     schema_version: 1,
     generated_at: GENERATED_AT,
     display_timezone: DISPLAY_TIMEZONE,
+    min_daily_coverage: MIN_DAILY_COVERAGE,
     variables: [
       { id: 'temp_c', unit: '°C', label: { cs: 'Teplota', de: 'Temperatur', en: 'Temperature' } },
       { id: 'rh_pct', unit: '%', label: { cs: 'Vlhkost', de: 'Feuchtigkeit', en: 'Humidity' } },
     ],
     sensors: manifestSensors,
     seasons: [SEASON],
-    indices: [
-      { id: 'gdd_winkler', unit: '°C·d', doc: 'docs/indices/gdd_winkler.md', label: { cs: 'Winklerův index (GDD)', de: 'Winkler-Index (GDD)', en: 'Winkler index (GDD)' } },
-      { id: 'huglin', unit: '°C·d', doc: 'docs/indices/huglin.md', label: { cs: 'Huglinův index', de: 'Huglin-Index', en: 'Huglin index' } },
-    ],
+    indices: INDEX_SPECS.map(([id, unit, cs, de, en]) => ({ id, unit, doc: `docs/indices/${id}.md`, label: { cs, de, en } })),
   });
   writeJson('latest.json', { generated_at: GENERATED_AT, sensors: latest });
   writeJson('sensors.geojson', { type: 'FeatureCollection', features: sensors.map(registryFeature) });

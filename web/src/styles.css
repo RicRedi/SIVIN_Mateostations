@@ -1024,6 +1024,242 @@ input {
   display: none;
 }
 
+.analytics h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.analytics h4 {
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.analytics h5 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  margin: 0.6rem 0 0.25rem;
+  font-size: 0.85rem;
+}
+
+.analytics__season-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.analytics__season {
+  min-height: 1.9rem;
+  font: inherit;
+}
+
+.analytics__status:empty {
+  display: none;
+}
+
+.analytics__status,
+.analytics__note {
+  margin: 0.35rem 0;
+  font-size: 0.78rem;
+  color: var(--ink-secondary);
+}
+
+.analytics__error {
+  margin: 0.35rem 0;
+  font-size: 0.85rem;
+  color: #a12020;
+}
+
+.analytics__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.index-table,
+.records__table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.index-table th,
+.index-table td,
+.records__table th,
+.records__table td {
+  padding: 0.3rem 0.45rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.index-table thead th {
+  white-space: nowrap;
+}
+
+.index-table tbody th {
+  min-width: 9rem;
+  font-weight: 500;
+}
+
+.index-table td {
+  min-width: 6.5rem;
+}
+
+.index-table__label,
+.index-table__value,
+.index-table__class,
+.index-table__incomplete,
+.index-table__coverage {
+  display: block;
+}
+
+.index-table__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.index-table__class {
+  color: var(--ink);
+}
+
+.index-table__incomplete,
+.index-table__coverage,
+.index-table__empty {
+  color: var(--ink-secondary);
+}
+
+.index-table__doc {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #1f5fa8;
+}
+
+.badge {
+  display: inline-block;
+  margin: 0.15rem 0.3rem 0 0;
+  padding: 0 0.35rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.badge--orientational {
+  color: #6b4a00;
+}
+
+.badge--estimated {
+  color: #6a3c8c;
+}
+
+/* Traffic-light tones of the daily risk strip; all >= 3:1 against white (WCAG 1.4.11):
+   green #1a7f37 5.1, amber #b06000 4.6 (hatched with #c47518 3.6), red #c62f2f 5.5.
+   No data: neutral grey, never green. */
+.risk-day {
+  display: block;
+  min-height: 1.1rem;
+}
+
+.risk-day--low {
+  background: #1a7f37;
+}
+
+.risk-day--elevated {
+  background: repeating-linear-gradient(135deg, #b06000 0 3px, #c47518 3px 5px);
+}
+
+.risk-day--high {
+  background: repeating-linear-gradient(45deg, #c62f2f 0 2px, #8f1d1d 2px 4px);
+}
+
+.risk-day--none {
+  background: repeating-linear-gradient(90deg, #dcdbd4 0 2px, #cfcec6 2px 3px);
+}
+
+.risk__row {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.risk__sensor {
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.risk__strip {
+  display: grid;
+  margin-top: 0.15rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.risk__ticks {
+  position: relative;
+  height: 1rem;
+  font-size: 0.68rem;
+  color: var(--ink-secondary);
+}
+
+.risk__tick {
+  position: absolute;
+  top: 0;
+  padding-left: 2px;
+  border-left: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+
+.risk__summary,
+.risk__empty {
+  margin: 0.1rem 0 0;
+  font-size: 0.76rem;
+  color: var(--ink-secondary);
+}
+
+.risk__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.8rem;
+  margin: 0.2rem 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+}
+
+.risk__legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.risk__legend .risk-day {
+  width: 1.1rem;
+  min-height: 0.8rem;
+  border: 1px solid var(--line-strong);
+}
+
+.risk__explain {
+  font-size: 0.78rem;
+  color: var(--ink-secondary);
+}
+
+.risk__explain summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.risk__explain p {
+  margin: 0.3rem 0;
+}
+
+.records {
+  margin-bottom: 0.4rem;
+}
+
+.records__table td {
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 400px) {
   .header__title {
     font-size: 0.8rem;
