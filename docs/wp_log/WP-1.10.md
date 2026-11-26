@@ -116,6 +116,24 @@ an excerpt in its first lines. The saved page itself is not in the repository.
   `SensorId.parse` and `ExportSourceIds` recognising the name are tested in
   `test_table_file.py`.
 
+## Changes after review round 1
+
+| Finding | Change |
+|---|---|
+| 1 major: device name with `(VUT)` | `TableCsvWriter.file_name` builds the name from the device number and serial parsed with `SENSOR_NAME_PATTERN`; a label of the device name is replaced by `(table)` (one label per name is all `SensorId` accepts; `SensorId` unchanged). `8615620 77799986 (VUT)` and `8615620 77678271  (VUT)` (double space) → `MeteoData_8615620 77799986 (table)_<stamp>.csv` / `MeteoData_8615620 77678271 (table)_<stamp>.csv`; tests check `SensorId.parse`, `ExportSourceIds` and `PortalCsvParser` for both real spellings, the plain name and a bare serial. |
+| 2 major: rows lost at the autumn change | Besides the 2 h lower cutoff for a stored time inside the repeated hour, `rows_after` now always anchors: when the oldest written row lies in a repeated hour, the older rows down to the first ordinary row are written too (already stored, skipped by the store); a WARNING when no such row was read. `repeated_shift()` is the shared test for a repeated wall time. Parametrised test: stored 01:40 CEST (reviewer's case), 01:10 CEST, 02:10 CEST, 02:10 CET; every new row reaches the store through `PortalCsvParser`. The reviewer's `probe_dst.py` reports no missing rows in all six cases. |
+| 3 major: all rows malformed looks "up to date" | `TableReader` raises `TableReadError: None of the N rows of table page P could be read (timestamp format …)` when a page has rows and none parses; reader test and a session test (device fails, not up to date). |
+| 4 minor: order not checked | `_RowCollector` checks that the rows go back in time within and across pages (later only when both rows are in a repeated hour); `TableReadError: The table is not sorted newest first: … follows …`. Tests: oldest-first page, an older page starting later. |
+| 5 nit: de-duplication by texts | Only an overlap at the page boundary (at most `MAX_PAGE_OVERLAP_ROWS` = 10 rows, the end of the collected rows equal to the start of the new page) is dropped; equal rows elsewhere, e.g. 02:10 CEST and 02:10 CET with the same values, both stay (test). |
+| out of scope 6: dead chromedriver | `urllib3.exceptions.HTTPError` (base of `MaxRetryError`) is in `session.DEVICE_ERRORS` and in `FetchService`'s catch, so a dead browser fails one source and the next source is tried; test with a source raising `MaxRetryError` followed by the table. |
+| nit 6: when the fallback starts | Unchanged: default `[export, table]` stays (owner decision later; question 2 below). |
+
+`docs/ingest.md` updated (file name, anchor, order check, unreadable page, transport errors,
+symptoms). Gates after the changes: `make lint` clean (311 files), `make type` no issues in 186
+files, `make test` 2152 passed, `make cov` 2152 passed, total 99.81 % (`table.py` 99 %,
+`table_file.py`, `session.py`, `sources.py`, `fetch.py`, `factory.py` 100 %, `table_page.py`
+97 %).
+
 ## Out of scope
 
 - `docs/architecture.md` and `docs/data-format.md` do not mention the table source; a sentence
@@ -128,6 +146,9 @@ an excerpt in its first lines. The saved page itself is not in the repository.
    table-sourced rows replaces their values under `prefer_newest` (each a logged conflict,
    capped by `storage.max_recorded_conflicts`). Keep this, round the table values, or prefer
    the existing values?
+2. **Source order while the export is broken.** With `[export, table]` each failing device first
+   spends `attempts_per_device` × `download_wait_s` (2 × 120 s) on the export, about 16 min for
+   4 devices. `[table, export]` avoids that while the export stays broken. Keep the default?
 
 ## Review
 

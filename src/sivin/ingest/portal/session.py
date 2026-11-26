@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Final
 
 from selenium.common.exceptions import WebDriverException
+from urllib3.exceptions import HTTPError as TransportError
 
 from sivin.core.ids import SensorId
 from sivin.ingest.portal.client import PortalClient
@@ -26,8 +27,10 @@ logger = logging.getLogger(__name__)
 NOT_LISTED_REASON: Final = "not listed in the portal"
 """Failure reason of a requested sensor that the portal does not list."""
 
-DEVICE_ERRORS: Final = (WebDriverException, PortalError, OSError)
-"""Errors that fail one device but not the run."""
+DEVICE_ERRORS: Final = (WebDriverException, PortalError, OSError, TransportError)
+"""Errors that fail one device but not the run. ``TransportError`` is urllib3's base error,
+raised by Selenium's transport when chromedriver has died (e.g. ``MaxRetryError``); the next
+source is still tried."""
 
 SOURCE_SEPARATOR: Final = "; "
 """Separates the failure reasons of several sources in :attr:`DeviceFailure.reason`."""

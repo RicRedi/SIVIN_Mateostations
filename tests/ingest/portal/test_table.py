@@ -7,7 +7,7 @@ The rows are SYNTHETIC, except where they come from the excerpt of a real device
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -28,7 +28,13 @@ from sivin.ingest.parsers.base import parser_registry
 from sivin.ingest.portal.errors import TableReadError
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.settings import PortalTableSettings
-from sivin.ingest.portal.table import RawTable, TableReader, TableRow, TableRowParser
+from sivin.ingest.portal.table import (
+    RawTable,
+    TableReader,
+    TableRow,
+    TableRowParser,
+    repeated_shift,
+)
 from sivin.ingest.portal.table_file import TableCsvWriter
 
 EXPORT_COLUMNS = (
@@ -289,3 +295,107 @@ def test_a_last_time_outside_a_clock_change_is_the_cutoff() -> None:
     reading = TableReader(table, _settings()).read(stored)
 
     assert _local_times(reading.rows) == ["04:00"]
+
+
+def _autumn_rows(newest: datetime, count: int) -> tuple[list[datetime], list[tuple[str, ...]]]:
+    """SYNTHETIC 30-min rows over the 25.10.2026 change, newest first (UTC instants, texts)."""
+    zone = ZoneInfo("Europe/Prague")
+    instants = [newest - i * STEP for i in range(count)]
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", f"10,{i}", "50", "0", "100", "3,5")
+        for i, t in enumerate(instants)
+    ]
+    return instants, rows
+
+
+@pytest.mark.parametrize(
+    ("stored", "anchor"),
+    [
+        # 01:40 CEST, just before the repeated hour (review round 1): anchor 01:40 itself.
+        (datetime(2026, 10, 24, 23, 40, tzinfo=UTC), "01:40"),
+        # 01:10 CEST: the newer 01:40 is ordinary, but the oldest kept row must be ordinary.
+        (datetime(2026, 10, 24, 23, 10, tzinfo=UTC), None),
+        # 02:10 CEST (first pass) and 02:10 CET (second pass): cutoff lowered by 2 h.
+        (datetime(2026, 10, 25, 0, 10, tzinfo=UTC), None),
+        (datetime(2026, 10, 25, 1, 10, tzinfo=UTC), None),
+    ],
+)
+def test_no_new_row_is_lost_around_the_autumn_change(
+    tmp_path: Path, stored: datetime, anchor: str | None
+) -> None:
+    instants, rows = _autumn_rows(datetime(2026, 10, 25, 12, 10, tzinfo=UTC), 40)
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    if anchor is not None:
+        # The oldest written row is the already stored ordinary row before the repeated hour.
+        assert _local_times(reading.rows)[-1] == anchor
+    path = TableCsvWriter(PortalTableSettings(), tmp_path).write(
+        PortalDevice("8615620 77680921"), reading, datetime(2026, 10, 25, 13, 0, tzinfo=UTC)
+    )
+    parsed = parser_registry.for_file(path, make_settings()).parse(path)
+    (series,) = parsed.series
+    written = set(series.frame["timestamp_utc"])
+    new = {pd.Timestamp(t) for t in instants if t > stored}
+    assert new <= written
+
+
+def test_rows_that_all_fail_to_parse_are_an_error() -> None:
+    # SYNTHETIC rows with ISO timestamps while the format is day-first (a format change).
+    rows = [
+        (f"2026-11-20 {hour:02d}:00:00", "1", "2", "0", "100", "3,5") for hour in range(23, 0, -1)
+    ]
+    table = FakeMeteoTable(TableState(rows))
+
+    with pytest.raises(TableReadError, match="None of the 5 rows of table page 1 could be read"):
+        TableReader(table, _settings()).read(datetime(2026, 11, 20, 5, 0, tzinfo=UTC))
+
+
+def test_an_oldest_first_table_is_an_error() -> None:
+    rows = list(reversed(synthetic_rows(NEWEST, 5)))
+
+    with pytest.raises(
+        TableReadError,
+        match="not sorted newest first: 2026-11-20 10:30:00 follows 2026-11-20 10:00:00",
+    ):
+        TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(None)
+
+
+def test_an_older_page_must_not_start_later_than_the_page_before() -> None:
+    rows = synthetic_rows(NEWEST, 6)
+    table = ScriptedTable([raw_table(rows[3:]), raw_table(rows[:3])])
+
+    with pytest.raises(TableReadError, match="not sorted newest first"):
+        TableReader(table, _settings()).read(None)
+
+
+def test_equal_rows_in_the_repeated_hour_are_both_kept() -> None:
+    # 02:10 CEST and 02:10 CET with the same values (rain 0 at night): two measurements.
+    zone = ZoneInfo("Europe/Prague")
+    instants = [datetime(2026, 10, 25, 2, 10, tzinfo=UTC) - i * STEP for i in range(6)]
+    rows = [
+        (f"{t.astimezone(zone):%d.%m.%Y %H:%M:%S}", "8", "90", "0", "100", "3,5") for t in instants
+    ]
+
+    reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(None)
+
+    assert _local_times(reading.rows) == ["03:10", "02:40", "02:10", "02:40", "02:10", "01:40"]
+
+
+def test_repeated_shift() -> None:
+    zone = ZoneInfo("Europe/Prague")
+
+    assert repeated_shift(datetime(2026, 10, 25, 2, 30), zone) == timedelta(hours=1)
+    assert repeated_shift(datetime(2026, 10, 25, 3, 0), zone) is None
+    assert repeated_shift(datetime(2026, 3, 29, 2, 30), zone) is None  # skipped, not repeated
+
+
+def test_a_missing_anchor_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    # Only rows of the repeated hour were read (03:10 CET is ordinary, the rest repeated).
+    _, rows = _autumn_rows(datetime(2026, 10, 25, 2, 10, tzinfo=UTC), 4)
+    stored = datetime(2026, 10, 25, 0, 0, tzinfo=UTC)  # 02:00 CEST, in the repeated hour
+
+    with caplog.at_level(logging.WARNING):
+        reading = TableReader(ScriptedTable([raw_table(rows)]), _settings()).read(stored)
+
+    assert len(reading.rows) == 4
+    assert "No ordinary row was read before the repeated hour" in caplog.text

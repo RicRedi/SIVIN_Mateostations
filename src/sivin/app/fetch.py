@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from selenium.common.exceptions import WebDriverException
+from urllib3.exceptions import HTTPError as TransportError
 
 from sivin.app.outcome import Outcome, SourceUnavailableError
 from sivin.core.ids import SensorId
@@ -201,7 +202,7 @@ class FetchService:
         )
         try:
             result = PortalSession(client, sources).run(sensors)
-        except (PortalError, WebDriverException, OSError) as error:
+        except (PortalError, WebDriverException, OSError, TransportError) as error:
             text = redactor.redact(f"Portal session failed: {type(error).__name__}: {error}")
             raise SourceUnavailableError(text) from None
         return self._report(result, redactor)

@@ -84,8 +84,9 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
       device). If it is not there — e.g. because the tab switch added a history entry — the
       portal is reloaded and the folder opened again. A failure here is logged; the download is
       kept.
-5. **A failing source** (any Selenium exception, a missing button, a download timeout or an
-   incomplete file, an unreadable table, a file system error) is retried after the client has
+5. **A failing source** (any Selenium exception, a lost connection to chromedriver (urllib3
+   errors such as `MaxRetryError`), a missing button, a download timeout or an incomplete
+   file, an unreadable table, a file system error) is retried after the client has
    reloaded `portal_url` and opened the folder again (`return_to_folder()`), up to
    `attempts_per_device` attempts (default 2). Then the next source of `sources` is tried (by
    default the table after the export). Only when every source failed is the device recorded as
@@ -239,6 +240,8 @@ setting in `config/sivin.yaml` (no code change needed):
 | `DownloadTimeoutError` | read the diagnostics block first ([When a download fails](#when-a-download-fails)); then `timeouts.download_wait_s`, Chrome's download preferences, free disk space |
 | `TableReadError: No rows in the table …` | `table.rows_wait_s` (the rows come with a postback), `table.card_xpath_template`, `table.table_xpath`, `export_section_name`; or the device really has no data |
 | `TableReadError: The table has no column 'Datum a čas'` | `table.columns` (the table's header texts) |
+| `TableReadError: None of the N rows of table page P could be read` | `table.timestamp_format`, `table.columns` (the table's format changed) |
+| `TableReadError: The table is not sorted newest first` | the grid's sort order (header links sort it); sort by *Datum a čas*, newest first |
 | `TableReadError: The next table page did not load` | `table.next_page_xpath`, `timeouts.element_wait_s` |
 | WARNING `The page size stayed at …` / `Page size … not reached` | `table.page_size_xpath`, `table.max_page_size_clicks`; harmless: the reader goes on with the size shown |
 
@@ -346,13 +349,23 @@ How a device is read (`TableSource` → `PortalClient.read_table` → `TableRead
    are compared as local wall-clock time of `table.source_timezone` (= `time.source_timezone`).
    When the last stored measurement lies in the repeated hour of the autumn change (the wall
    clock cannot tell its two passes apart), the cutoff is lowered by twice the clock shift
-   (2 h): the repeated hour is read again, with ordinary rows before it so that the CSV parser
-   can resolve it; the rows already stored come back identical and the store skips them.
-   A row repeated on the next page (a measurement arrived while reading) is kept once. A row
-   with the wrong number of cells or an unreadable timestamp is skipped and counted (WARNING);
-   values are copied as shown, so a bad value is judged by the input validation as in an export.
+   (2 h), so the repeated hour is read again. Whenever the oldest written row lies in a
+   repeated hour, the older rows down to the first ordinary row are written too, as an anchor:
+   the CSV parser resolves the repeated hour only between ordinary rows. Rows written again
+   this way are already stored; the store skips them (a row stored from an export may differ in
+   precision, see *Known limits*).
+   Rows a page repeats from the end of the page before (a measurement arrived while reading;
+   at most 10) are kept once; no other rows are merged, so equal rows of the repeated hour stay.
+   The rows must go back in time (later only inside a repeated hour); a table sorted otherwise
+   raises `TableReadError: The table is not sorted newest first …`. A row with the wrong number
+   of cells or an unreadable timestamp is skipped and counted (WARNING); a page on which **no**
+   row can be read raises `TableReadError: None of the N rows of table page P could be read`
+   (a changed timestamp format must not look like "up to date"). Values are copied as shown, so
+   a bad value is judged by the input validation as in an export.
 7. Write the rows into `download_dir` as
-   `MeteoData_<device name> (table)_<YYYYMMDD>_<HHMMSS>.csv` (local time of writing): exactly
+   `MeteoData_<device number> <serial> (table)_<YYYYMMDD>_<HHMMSS>.csv` (local time of writing;
+   a label of the device name such as `(VUT)` is replaced by `(table)`, since a file name may
+   carry one label only), e.g. `MeteoData_8615620 77799986 (table)_20261126_060000.csv`: exactly
    the layout of the portal's CSV export (`Meteo Data;` title row, the export's headers, newest
    first, `;`, CRLF, decimal comma, `YYYY-MM-DD HH:MM:SS`, a last line `;`). The name names the
    sensor for `SensorId`, its time becomes the store's short source identifier and the label

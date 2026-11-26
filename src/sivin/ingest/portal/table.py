@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from typing import Final, Protocol
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,10 @@ from sivin.ingest.portal.errors import TableReadError
 from sivin.ingest.portal.settings import PortalTableSettings
 
 logger = logging.getLogger(__name__)
+
+MAX_PAGE_OVERLAP_ROWS: Final = 10
+"""Most rows a page may repeat from the end of the page before (rows that arrived while the
+pages were read; at the ~1800 s step a read of a few minutes shifts by one row)."""
 
 DST_CUTOFF_SHIFTS: Final = 2
 """Clock shifts by which the cutoff is lowered when the last stored time is in a repeated hour
@@ -303,12 +308,19 @@ class TableReader:
             else self._settings.incremental_page_size
         )
         page: RawTable | None = self._table.change_page_size(page_size, self._table.wait_for_rows())
-        collector = _RowCollector()
+        collector = _RowCollector(self._zone)
         reached = False
         pages = 0
         while page is not None:
             pages += 1
             parsed = self._parser.parse(page)
+            if page.rows and not parsed.rows:
+                raise TableReadError(
+                    f"None of the {len(page.rows)} rows of table page {pages} could be read "
+                    f"(timestamp format {self._settings.timestamp_format!r}, "
+                    f"{len(page.headers)} columns); check ingest.portal.table.timestamp_format "
+                    "and columns."
+                )
             collector.add(parsed)
             reached = since_local is not None and any(
                 row.local_time <= since_local for row in parsed.rows
@@ -333,41 +345,71 @@ class TableReader:
         in the repeated hour of the autumn change, the wall clock alone cannot tell the first
         pass of the hour from the second, so the cutoff is lowered by twice the clock shift
         (2 h): once to read the repeated hour again, once more so that ordinary rows before it
-        are in the file too; the CSV parser trusts repeated-hour rows only between ordinary
-        rows. The rows already stored come back identical and are skipped by the store.
+        are read too. The rows already stored come back identical and are skipped by the store.
         """
         if since_utc.tzinfo is None:
             raise ValueError("since_utc must be timezone-aware.")
-        local = since_utc.astimezone(UTC).astimezone(self._zone)
-        naive = local.replace(tzinfo=None)
-        first = naive.replace(tzinfo=self._zone, fold=0).utcoffset()
-        second = naive.replace(tzinfo=self._zone, fold=1).utcoffset()
-        if first is None or second is None or first == second:
+        naive = since_utc.astimezone(UTC).astimezone(self._zone).replace(tzinfo=None)
+        shift = repeated_shift(naive, self._zone)
+        if shift is None:
             return naive
-        shift = DST_CUTOFF_SHIFTS * abs(first - second)
+        cutoff = naive - DST_CUTOFF_SHIFTS * shift
         logger.info(
             "The last stored time %s lies in the repeated hour of a clock change; reading "
             "back to %s local time.",
             since_utc.isoformat(),
-            naive - shift,
+            cutoff,
         )
-        return (naive - shift).replace(fold=0)
+        return cutoff.replace(fold=0)
+
+
+def repeated_shift(local_naive: datetime, zone: ZoneInfo) -> timedelta | None:
+    """Return the clock shift when a wall-clock time occurs twice (autumn change).
+
+    Parameters
+    ----------
+    local_naive : datetime.datetime
+        Naive wall-clock time of ``zone``.
+    zone : zoneinfo.ZoneInfo
+        The time zone.
+
+    Returns
+    -------
+    datetime.timedelta or None
+        The shift (1 h in Europe/Prague) when the time is in a repeated hour, ``None`` for an
+        ordinary time and for a time skipped by the spring change.
+    """
+    passes = [local_naive.replace(tzinfo=zone, fold=fold) for fold in (0, 1)]
+    offsets = [moment.utcoffset() for moment in passes]
+    if offsets[0] is None or offsets[1] is None or offsets[0] == offsets[1]:
+        return None
+    round_trips = all(
+        moment.astimezone(UTC).astimezone(zone).replace(tzinfo=None) == local_naive
+        for moment in passes
+    )
+    return abs(offsets[0] - offsets[1]) if round_trips else None
 
 
 class _RowCollector:
-    """Rows of several pages, newest first, without exact duplicates.
+    """Rows of several pages, newest first; checks the order and joins the pages.
 
     A measurement that arrives while the pages are read shifts every page by one row, so a page
-    can start with the last row of the page before; such a repeated row is identical and kept
-    once.
+    can start with the last row(s) of the page before; such a repeated overlap at the page
+    boundary (at most :data:`MAX_PAGE_OVERLAP_ROWS` rows) is kept once. Rows are never merged
+    elsewhere, so two rows of the repeated autumn hour with equal texts both stay.
+
+    Parameters
+    ----------
+    zone : zoneinfo.ZoneInfo
+        Zone of the wall-clock times (repeated autumn hour).
     """
 
-    __slots__ = ("_columns", "_malformed", "_rows", "_seen")
+    __slots__ = ("_columns", "_malformed", "_rows", "_zone")
 
-    def __init__(self) -> None:
+    def __init__(self, zone: ZoneInfo) -> None:
+        self._zone = zone
         self._columns: tuple[str, ...] | None = None
         self._rows: list[TableRow] = []
-        self._seen: set[tuple[str, ...]] = set()
         self._malformed = 0
 
     @property
@@ -387,12 +429,58 @@ class _RowCollector:
                 f"{list(page.columns)}."
             )
         self._malformed += page.malformed_rows
-        for row in page.rows:
-            if row.cells not in self._seen:
-                self._seen.add(row.cells)
-                self._rows.append(row)
+        new_rows = list(page.rows[self._overlap(page.rows) :])
+        self._check_order([*self._rows[-1:], *new_rows])
+        self._rows.extend(new_rows)
+
+    def _overlap(self, rows: tuple[TableRow, ...]) -> int:
+        """Return how many leading rows of a page repeat the last collected rows."""
+        longest = min(MAX_PAGE_OVERLAP_ROWS, len(rows), len(self._rows))
+        for count in range(longest, 0, -1):
+            if [row.cells for row in self._rows[-count:]] == [row.cells for row in rows[:count]]:
+                return count
+        return 0
+
+    def _check_order(self, rows: list[TableRow]) -> None:
+        """Raise unless the rows go back in time (equal or later only in a repeated hour)."""
+        for newer, older in pairwise(rows):
+            if older.local_time <= newer.local_time:
+                continue
+            if repeated_shift(older.local_time, self._zone) and repeated_shift(
+                newer.local_time, self._zone
+            ):
+                continue
+            raise TableReadError(
+                f"The table is not sorted newest first: {older.cells[0]} follows "
+                f"{newer.cells[0]}. Sort it by 'Datum a čas', newest first."
+            )
 
     def rows_after(self, since_local: datetime | None) -> tuple[TableRow, ...]:
+        """Return the rows newer than the cutoff, anchored before a repeated hour.
+
+        When the oldest returned row lies in the repeated autumn hour, the older rows down to
+        the first ordinary row (one outside the repeated hour) are returned too: the CSV
+        parser resolves the repeated hour only between ordinary rows. These rows are already
+        stored and are skipped by the store.
+        """
         if since_local is None:
             return tuple(self._rows)
-        return tuple(row for row in self._rows if row.local_time > since_local)
+        kept = [index for index, row in enumerate(self._rows) if row.local_time > since_local]
+        if not kept:
+            return ()
+        selected = [self._rows[index] for index in kept]
+        oldest = kept[-1]
+        if repeated_shift(self._rows[oldest].local_time, self._zone) is not None:
+            selected.extend(self._rows[oldest + 1 : self._anchor_end(oldest + 1)])
+        return tuple(selected)
+
+    def _anchor_end(self, end: int) -> int:
+        """Return the end index that includes the first ordinary row at or after ``end``."""
+        for index in range(end, len(self._rows)):
+            if repeated_shift(self._rows[index].local_time, self._zone) is None:
+                return index + 1
+        logger.warning(
+            "No ordinary row was read before the repeated hour of a clock change; the parser "
+            "may drop the rows of that hour."
+        )
+        return len(self._rows)

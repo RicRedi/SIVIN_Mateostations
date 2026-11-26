@@ -2,7 +2,7 @@
 
 The file goes into the download directory next to the downloaded exports, so the existing
 ingest path (parser, validation, quarantine, store, run record) handles it unchanged. Its name
-``MeteoData_<device> (<label>)_<YYYYMMDD>_<HHMMSS>.csv`` names the sensor for
+``MeteoData_<device number> <serial> (<label>)_<YYYYMMDD>_<HHMMSS>.csv`` names the sensor for
 :class:`~sivin.core.ids.SensorId`, carries the time it was written (the store's short source
 identifier, :class:`~sivin.storage.source.ExportSourceIds`) and the label marks the origin.
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from sivin.core.ids import SensorId
+from sivin.core.ids import SENSOR_NAME_PATTERN
 from sivin.ingest.portal.errors import TableReadError
 from sivin.ingest.portal.models import PortalDevice
 from sivin.ingest.portal.settings import PortalTableSettings
@@ -116,29 +116,29 @@ class TableCsvWriter:
         Returns
         -------
         str
-            ``MeteoData_<device> (<label>)_<YYYYMMDD>_<HHMMSS>.csv``.
+            ``MeteoData_<device number> <serial> (<label>)_<YYYYMMDD>_<HHMMSS>.csv``. A label
+            of the device name (``8615620 77799986 (VUT)``) is replaced by ``file_label``:
+            ``SensorId`` accepts one label only.
 
         Raises
         ------
         TableReadError
-            If the name would not name the device's sensor.
+            If the device name names no sensor.
         ValueError
             If ``now_utc`` is naive.
         """
         if now_utc.tzinfo is None:
             raise ValueError("now_utc must be timezone-aware.")
         stamp = now_utc.astimezone(UTC).astimezone(self._zone).strftime(FILE_TIME_FORMAT)
-        name = f"{FILE_PREFIX}{device.name} ({self._settings.file_label})_{stamp}{FILE_SUFFIX}"
-        try:
-            named = SensorId.parse(name)
-        except ValueError:
-            named = None
-        if device.sensor_id is None or named != device.sensor_id:
+        parts = SENSOR_NAME_PATTERN.fullmatch(device.name.strip())
+        if parts is None or device.sensor_id is None:
             raise TableReadError(
                 f"The device name {device.name!r} does not name a sensor, so a table file "
                 "cannot be attributed to one."
             )
-        return name
+        device_number = parts["device"]
+        base = f"{device_number} {parts['serial']}" if device_number else parts["serial"]
+        return f"{FILE_PREFIX}{base} ({self._settings.file_label})_{stamp}{FILE_SUFFIX}"
 
     def _free_path(self, name: str) -> Path:
         """Return a path that does not exist yet, adding `` (n)`` like a browser does."""

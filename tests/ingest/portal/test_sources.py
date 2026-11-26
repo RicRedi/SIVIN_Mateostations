@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 from tests.ingest.portal.conftest import FakeClock, FakeDriverFactory
 from tests.ingest.portal.table_fakes import TablePortalDriver, TableState, synthetic_rows
+from urllib3.exceptions import MaxRetryError
 
 from sivin.core.ids import SensorId
 from sivin.ingest.parsers.base import parser_registry
@@ -355,3 +356,47 @@ class TestSettings:
         settings = PortalSettings.model_validate({"sources": ["table"]})
 
         assert settings.sources == (PortalSource.TABLE,)
+
+
+class _DeadBrowserSource(DeviceSource):
+    """A source whose browser connection is dead (urllib3 MaxRetryError)."""
+
+    name = "dead"
+
+    def deliver(self, client: PortalClient, device: PortalDevice) -> Path | None:
+        raise MaxRetryError(None, "/session/1/url", "connection refused")  # type: ignore[arg-type]
+
+
+def test_a_dead_browser_fails_the_source_not_the_run(
+    table_settings: PortalSettings, credentials: PortalCredentials, viewmodel_json: str
+) -> None:
+    driver = TablePortalDriver(table_settings, viewmodel_json, tables=_tables())
+    client = PortalClient(
+        table_settings, credentials, FakeDriverFactory(table_settings, driver), clock=FakeClock()
+    )
+    context = SourceContext(clock=lambda: RUN_AT)
+    session = PortalSession(client, (_DeadBrowserSource(context), TableSource(context)))
+
+    result = session.run([SensorId("77678271")])
+
+    (download,) = result.downloads
+    assert download.source == "table"
+
+
+def test_unreadable_table_rows_fail_the_device(
+    table_settings: PortalSettings, credentials: PortalCredentials, viewmodel_json: str
+) -> None:
+    iso_rows = [(f"2026-11-20 {hour:02d}:00:00", "1", "2", "0", "100", "3,5") for hour in (3, 2)]
+    session, _ = _session(
+        table_settings,
+        credentials,
+        viewmodel_json,
+        tables={FIRST: TableState(iso_rows)},
+        sources=(PortalSource.TABLE,),
+    )
+
+    result = session.run([SensorId("77678271")])
+
+    assert result.up_to_date == ()
+    (failure,) = result.failures
+    assert failure.reason.startswith("TableReadError: None of the 2 rows of table page 1")

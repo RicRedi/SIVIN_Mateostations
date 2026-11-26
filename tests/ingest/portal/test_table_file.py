@@ -118,3 +118,28 @@ def test_too_many_files_of_the_same_name(tmp_path: Path, monkeypatch: pytest.Mon
 
     with pytest.raises(TableReadError, match="Too many files"):
         writer.write(DEVICE, _reading(1), WRITTEN_AT)
+
+
+@pytest.mark.parametrize(
+    ("device_name", "expected"),
+    [
+        # Real spellings of the portal (Actions log): a label, and a double space before it.
+        ("8615620 77799986 (VUT)", "MeteoData_8615620 77799986 (table)_20261126_060000.csv"),
+        ("8615620 77678271  (VUT)", "MeteoData_8615620 77678271 (table)_20261126_060000.csv"),
+        ("8615620 77680921", NAME),
+        ("77680921", "MeteoData_77680921 (table)_20261126_060000.csv"),
+    ],
+)
+def test_real_device_names_give_a_recognised_name(
+    tmp_path: Path, device_name: str, expected: str
+) -> None:
+    device = PortalDevice(device_name)
+
+    path = _writer(tmp_path).write(device, _reading(3), WRITTEN_AT)
+
+    assert path.name == expected
+    assert SensorId.parse(path.name) == device.sensor_id
+    assert ExportSourceIds().of(path.name) == "20261126T060000"
+    parsed = parser_registry.for_file(path, make_settings()).parse(path)
+    assert parsed.is_accepted, parsed.report.summary()
+    assert parsed.series[0].sensor_id == device.sensor_id
