@@ -18,6 +18,7 @@ a person would make. The code is in `src/sivin/ingest/portal/`; it replaces the 
 | `PortalSettings` (+ `PortalSelectors`, `PortalTimeouts`) | `settings.py` | URL, folder and tab names, HTML selectors, waiting times, browser options. Frozen pydantic models, unknown keys are rejected. |
 | `PortalCredentials`, `Secret` | `credentials.py` | User name and password, read **only** from the environment (`from_env()`). The password is a `Secret`: masked in `repr`/`str`/`asdict`, not picklable. |
 | `WebDriverFactory`, `ChromeDriverFactory`, `driver_factory_registry` | `driver.py` | Start the browser with download preferences. New browsers are new registered subclasses. |
+| `CdpDownloadPermission` | `driver.py` | Allows downloads into `download_dir` through the Chrome DevTools Protocol once the browser runs (see step 1 below). |
 | `PortalClient` | `client.py` | Context manager owning one browser: `login()`, `list_devices()`, `download_export(device)`, `back_to_device_list()`, `return_to_folder()`. Single-threaded use only. |
 | `PortalPage` | `page.py` | Locators, explicit waits and clicks on the portal's pages (used by the client). |
 | `ViewModelParser` | `viewmodel.py` | Pure parser of the DotVVM viewmodel JSON into `PortalDevice` objects. |
@@ -35,7 +36,18 @@ Import `PortalClient`, `PortalSession` and the driver factories from their modul
    1920×1080) with the preferences `download.default_directory = <download_dir>`,
    `download.prompt_for_download = false`, `download.directory_upgrade = true` and
    `profile.default_content_setting_values.automatic_downloads = 1` (several downloads without
-   asking).
+   asking). Right after the start, `CdpDownloadPermission` also allows downloads explicitly
+   through the Chrome DevTools Protocol, in headless **and** windowed mode: first
+   `Browser.setDownloadBehavior` with `behavior: "allow"`, `downloadPath: <download_dir>`,
+   `eventsEnabled: false`; if that command fails, `Page.setDownloadBehavior` with
+   `behavior: "allow"` and the same path. The profile preferences stay. Headless Chrome is known
+   to drop downloads that only the preferences allow; on GitHub Actions every export since
+   October 2026 timed out with an empty download directory (WP-1.3.2). Whether the CDP command
+   fixes this is **not verified** against the real portal. When the driver cannot send CDP
+   commands, or both commands fail, a WARNING (`Could not allow downloads via CDP (...)` or
+   `The browser driver cannot send CDP commands`) is logged and the run continues with the
+   preferences only; the INFO line `Downloads allowed into ... via Browser.setDownloadBehavior`
+   confirms success.
 2. **Log in.** Open `portal_url`, wait for `#username`, type the user name, type the password into
    `#password`, click `input[type='submit']`. The login counts as successful when the link of the
    folder (`SIVIN VUT`) appears; otherwise `PortalLoginError` (wrong credentials or a changed page)
@@ -111,7 +123,7 @@ section-scoped button wait they can probably be shortened.
 
 Proposed configuration section: `ingest.portal` in `config/sivin.yaml` (wired into
 `SivinConfig` by the integration workpackage). All fields have defaults equal to the legacy
-values.
+values, except `timeouts.download_wait_s` (120 s instead of 30 s).
 
 | Key | Default | Unit | Meaning |
 |---|---|---|---|
@@ -132,7 +144,7 @@ values.
 | `selectors.notification_css` | `[role='alert'], [role='status'], .alert, .toast, .notification` | CSS | Visible error/notification messages whose text is logged when a download fails; generic, not taken from the portal's HTML ([to be verified]). Empty disables the search. |
 | `selectors.section_button_xpath_template` | heading containing `{text}` → nearest ancestor with an Excel button → its Excel buttons | XPath | Excel button of the export section ([to be verified] against the real HTML). |
 | `timeouts.element_wait_s` | 15 | s | Maximum wait for an element or the spinner. |
-| `timeouts.download_wait_s` | 30 | s | Maximum wait for the export file. |
+| `timeouts.download_wait_s` | 120 | s | Maximum wait for the export file (legacy 30 s; raised in WP-1.3.2 because the headless runs on GitHub Actions timed out at 30 s). |
 | `timeouts.poll_interval_s` | 0.5 | s | Polling interval of waits and of the download watcher. |
 | `timeouts.device_settle_s` | 3.0 | s | Fixed pause after opening a device (legacy value, [to be tuned]). |
 | `timeouts.tab_settle_s` | 2.0 | s | Fixed pause after switching to the tab (legacy value, [to be tuned]). |
@@ -249,7 +261,11 @@ are still there. Collecting never replaces the download error. Credentials, cook
 - **Download still running or slow:** an `unfinished` file in `download dir`, growing between
   retries — raise `timeouts.download_wait_s`, check disk space.
 - **Our side, download preferences ignored:** the new export is in `Chrome default dir`, not in
-  `download dir` — check `ChromeDriverFactory.download_preferences` and `download_dir`.
+  `download dir` — check `ChromeDriverFactory.download_preferences` and `download_dir`, and
+  whether the log at the browser start says `Could not allow downloads via CDP`.
+- **Headless only:** both directories empty in the scheduled (headless) run, but the export
+  arrives in a manual run with the workflow input `headed` (`docs/operations.md`) — headless
+  Chrome drops the download; check the CDP lines at the browser start.
 - **Our side, export opened a tab:** `windows 2` or more, or the URL is no longer the portal page
   — the export was opened instead of downloaded.
 - **Empty export:** a file marked `too small`, e.g. `0 B` (with `DownloadIncompleteError`) — the portal
@@ -264,8 +280,9 @@ known.
 
 ## Troubleshooting
 
-- **Watch it.** Run with `headless=False` to see the browser, and with `logging` at DEBUG for
-  the client's own messages.
+- **Watch it.** Run with `headless=False` (`sivin fetch --headed`) to see the browser, and with
+  `logging` at DEBUG for the client's own messages. On GitHub Actions the workflow input
+  `headed` does the same on a virtual display (`xvfb-run`).
 - **`session not created: This version of ChromeDriver only supports Chrome version N`** —
   chromedriver and the browser have different major versions. Point `chromedriver_path` to a
   matching driver, or remove the mismatched one from `PATH` so webdriver-manager fetches one.

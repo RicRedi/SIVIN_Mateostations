@@ -3,7 +3,8 @@
 # Once a day at 06:00 Europe/Prague: download the exports from the portal, ingest, quality
 # control, indices and site data (`sivin run`), commit the results to the `data` branch, build
 # the web portal with those data and deploy it to GitHub Pages. Also runs on demand
-# (Actions -> pipeline -> Run workflow).
+# (Actions -> pipeline -> Run workflow); a manual run can show the browser window on a virtual
+# display (input `headed`) to compare with the headless scheduled runs.
 
 name: pipeline
 
@@ -21,6 +22,10 @@ on:
         default: false
       full_site_build:
         description: "Rebuild all site data, ignoring the incremental build state."
+        type: boolean
+        default: false
+      headed:
+        description: "Run the browser with a window on a virtual display (xvfb-run) instead of headless."
         type: boolean
         default: false
 
@@ -158,13 +163,24 @@ jobs:
           SIVIN_PASSWORD: ${{ secrets.SIVIN_PASSWORD }}
           SKIP_FETCH: ${{ inputs.skip_fetch }}
           FULL_SITE_BUILD: ${{ inputs.full_site_build }}
+          HEADED: ${{ inputs.headed }}
         run: |
           set +e -uo pipefail
+          if [ "$HEADED" = "true" ] && ! command -v xvfb-run > /dev/null; then
+            echo "::error::Input 'headed' needs xvfb-run, which this runner image does not have."
+            exit 1
+          fi
           echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           args=(--log-level INFO run)
           if [ "$SKIP_FETCH" = "true" ]; then args+=(--skip-fetch); fi
           if [ "$FULL_SITE_BUILD" = "true" ]; then args+=(--skip-site); fi
-          sivin "${args[@]}"
+          if [ "$HEADED" = "true" ]; then
+            # A windowed browser needs a display; xvfb-run -a starts a virtual one on a free number.
+            args+=(--headed)
+            xvfb-run -a sivin "${args[@]}"
+          else
+            sivin "${args[@]}"
+          fi
           code=$?
           if [ "$FULL_SITE_BUILD" = "true" ] && { [ "$code" -eq 0 ] || [ "$code" -eq 1 ] || [ "$code" -eq 4 ]; }; then
             sivin --log-level INFO build-site --full
@@ -192,6 +208,30 @@ jobs:
             printf '## SIVIN pipeline run\n\nNo summary available (exit code of the run: %s); see the job log.\n' "${CODE:-none}" > "$summary"
           fi
           cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      # Exit code 1 still publishes, so a run in which the portal gave no export for some
+      # devices would stay green; this step makes that visible as a warning annotation.
+      - name: Warn about devices without a download
+        if: always() && steps.run.outputs.code == '1'
+        env:
+          STARTED: ${{ steps.run.outputs.started }}
+        run: |
+          set +e -uo pipefail
+          # The newest run record started after the pipeline step began (fractions of a second
+          # dropped); its failures "fetch <device>: <reason>" are the devices without a download.
+          failed=$(jq -nR --arg started "$STARTED" '
+            def utc: sub("\\.[0-9]+"; "") | fromdateiso8601;
+            [inputs | fromjson? | objects
+              | select(try ((.started_at | utc) >= ($started | utc)) catch false)]
+            | sort_by(.started_at) | last
+            | if . == null then empty
+              else [(.failures // [])[] | strings | select(startswith("fetch "))] | length end
+          ' data/runs/*.jsonl 2> /dev/null)
+          if [ -z "$failed" ]; then
+            echo "::warning::Partial failure (exit code 1); the run record could not be read to count devices without a download. See the job summary."
+          elif [ "$failed" -gt 0 ]; then
+            echo "::warning::No export was downloaded for $failed device(s); the run stays green but those devices got no new data. See the job summary and the download diagnostics in the log."
+          fi
 
       - name: Judge the exit code
         id: judge

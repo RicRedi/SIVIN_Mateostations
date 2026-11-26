@@ -7,6 +7,7 @@ repository; nothing is contacted over the network.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -22,9 +23,11 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pipe
 
 BASH = shutil.which("bash")
 GIT = shutil.which("git")
+JQ = shutil.which("jq")
 
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash is not available")
 needs_git = pytest.mark.skipif(BASH is None or GIT is None, reason="bash or git not available")
+needs_jq = pytest.mark.skipif(BASH is None or JQ is None, reason="bash or jq not available")
 
 
 @pytest.fixture(scope="module")
@@ -78,7 +81,7 @@ class TestTriggers:
         on = triggers(workflow)
         assert sorted(item["cron"] for item in on["schedule"]) == ["0 4 * * *", "0 5 * * *"]
         inputs = on["workflow_dispatch"]["inputs"]
-        assert set(inputs) == {"skip_fetch", "full_site_build"}
+        assert set(inputs) == {"skip_fetch", "full_site_build", "headed"}
         assert all(
             item["type"] == "boolean" and item["default"] is False for item in inputs.values()
         )
@@ -228,6 +231,143 @@ class TestExitCodes:
         assert '--since "$STARTED"' in script
         assert '--outcome "$CODE"' in script
         assert '>> "$GITHUB_STEP_SUMMARY"' in script
+
+
+@needs_bash
+class TestHeadedRun:
+    """Input ``headed`` runs ``sivin run --headed`` under ``xvfb-run -a``; otherwise headless."""
+
+    @pytest.fixture
+    def fake_bin(self, tmp_path: Path) -> Path:
+        """A ``sivin`` and an ``xvfb-run`` that append their arguments to CALLS."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        for name in ("sivin", "xvfb-run"):
+            fake = bin_dir / name
+            fake.write_text(
+                f'#!/bin/sh\necho "{name} $*" >> "$CALLS"\n'
+                'if [ "$1" = -a ]; then shift; exec "$@"; fi\nexit 1\n',
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+        return bin_dir
+
+    def _run(
+        self, workflow: dict[Any, Any], tmp_path: Path, path: str, headed: str
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], list[str]]:
+        calls = tmp_path / "calls.txt"
+        env = {
+            "SKIP_FETCH": "false",
+            "FULL_SITE_BUILD": "false",
+            "HEADED": headed,
+            "CALLS": str(calls),
+            "PATH": path,
+        }
+        script = step(workflow, "collect", "Run the pipeline")["run"]
+        process, outputs = run_script(script, tmp_path, env, workflow)
+        lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+        return process, outputs, lines
+
+    def test_input_is_passed_to_the_run_step(self, workflow: dict[Any, Any]) -> None:
+        inputs = triggers(workflow)["workflow_dispatch"]["inputs"]
+        assert inputs["headed"]["default"] is False
+        env = step(workflow, "collect", "Run the pipeline")["env"]
+        assert env["HEADED"] == "${{ inputs.headed }}"
+
+    def test_headed_runs_under_xvfb(
+        self, workflow: dict[Any, Any], tmp_path: Path, fake_bin: Path
+    ) -> None:
+        path = f"{fake_bin}{os.pathsep}{os.environ['PATH']}"
+        process, outputs, calls = self._run(workflow, tmp_path, path, "true")
+        assert calls == [
+            "xvfb-run -a sivin --log-level INFO run --headed",
+            "sivin --log-level INFO run --headed",
+        ]
+        assert outputs["code"] == "1"
+        assert "Pipeline exit code: 1" in process.stdout
+
+    @pytest.mark.parametrize("headed", ["false", ""], ids=["manual", "scheduled"])
+    def test_default_and_scheduled_runs_stay_headless(
+        self, workflow: dict[Any, Any], tmp_path: Path, fake_bin: Path, headed: str
+    ) -> None:
+        path = f"{fake_bin}{os.pathsep}{os.environ['PATH']}"
+        _, outputs, calls = self._run(workflow, tmp_path, path, headed)
+        assert calls == ["sivin --log-level INFO run"]
+        assert outputs["code"] == "1"
+
+    def test_headed_without_xvfb_fails_clearly(
+        self, workflow: dict[Any, Any], tmp_path: Path, fake_bin: Path
+    ) -> None:
+        (fake_bin / "xvfb-run").unlink()
+        process, outputs, calls = self._run(workflow, tmp_path, str(fake_bin), "true")
+        assert process.returncode == 1
+        assert "::error::Input 'headed' needs xvfb-run" in process.stdout
+        assert calls == []
+        assert outputs == {}
+
+
+@needs_jq
+class TestDownloadWarning:
+    """Exit code 1 with devices that downloaded nothing gets a ``::warning::`` annotation."""
+
+    NAME = "Warn about devices without a download"
+    STARTED = "2026-11-26T05:00:05Z"
+
+    def _record(self, started_at: str, failures: list[str]) -> str:
+        return json.dumps({"started_at": started_at, "failures": failures})
+
+    def _warn(
+        self, workflow: dict[Any, Any], tmp_path: Path, lines: list[str] | None
+    ) -> subprocess.CompletedProcess[str]:
+        if lines is not None:
+            runs = tmp_path / "data" / "runs"
+            runs.mkdir(parents=True)
+            (runs / "2026-11-26.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        script = step(workflow, "collect", self.NAME)["run"]
+        process, _ = run_script(script, tmp_path, {"STARTED": self.STARTED}, workflow)
+        assert process.returncode == 0, process.stderr
+        return process
+
+    def test_only_on_exit_code_one(self, workflow: dict[Any, Any]) -> None:
+        item = step(workflow, "collect", self.NAME)
+        assert item["if"] == "always() && steps.run.outputs.code == '1'"
+        names = [entry.get("name") for entry in workflow["jobs"]["collect"]["steps"]]
+        assert names.index("Run the pipeline") < names.index(self.NAME)
+        assert names.index(self.NAME) < names.index("Judge the exit code")
+
+    def test_counts_the_fetch_failures_of_this_run(
+        self, workflow: dict[Any, Any], tmp_path: Path
+    ) -> None:
+        earlier = self._record("2026-11-26T04:00:00Z", ["fetch a: x", "fetch b: x", "fetch c: x"])
+        this_run = self._record(
+            "2026-11-26T05:00:05.250000Z",
+            [
+                "fetch 8615620 77678271: DownloadTimeoutError: synthetic (2 attempts)",
+                "fetch 8615620 77680921: DownloadTimeoutError: synthetic (2 attempts)",
+                "x.csv: rejected: synthetic",
+                "qc 77678271: synthetic",
+            ],
+        )
+        process = self._warn(workflow, tmp_path, [earlier, "{broken", this_run])
+        assert process.stdout.strip() == (
+            "::warning::No export was downloaded for 2 device(s); the run stays green but those "
+            "devices got no new data. See the job summary and the download diagnostics in the log."
+        )
+
+    def test_silent_when_every_device_was_downloaded(
+        self, workflow: dict[Any, Any], tmp_path: Path
+    ) -> None:
+        this_run = self._record(self.STARTED, ["x.csv: rejected: synthetic", "fetch: other"])
+        assert self._warn(workflow, tmp_path, [this_run]).stdout == ""
+
+    @pytest.mark.parametrize("lines", [None, [], ['{"started_at": "2026-11-26T04:59:59Z"}']])
+    def test_unreadable_record_still_warns(
+        self, workflow: dict[Any, Any], tmp_path: Path, lines: list[str] | None
+    ) -> None:
+        process = self._warn(workflow, tmp_path, lines)
+        assert process.stdout.startswith(
+            "::warning::Partial failure (exit code 1); the run record could not be read"
+        )
 
 
 class TestSafety:

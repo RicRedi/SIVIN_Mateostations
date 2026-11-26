@@ -111,10 +111,11 @@ class PortalTimeouts(_Settings):
         description="Maximum wait for an element or the spinner (s); legacy value 15 s.",
     )
     download_wait_s: float = Field(
-        30.0,
+        120.0,
         gt=0,
         description="Maximum wait for an export to appear in the download directory (s); "
-        "legacy value 30 s.",
+        "legacy value 30 s, raised to 120 s after the headless runs on GitHub Actions timed out "
+        "at 30 s (WP-1.3.2).",
     )
     poll_interval_s: float = Field(
         0.5,
