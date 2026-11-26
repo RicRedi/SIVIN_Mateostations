@@ -1,9 +1,9 @@
 import type { DailyFile, DailyValueColumn } from '../contract';
+import { TimeSeries } from './TimeSeries';
+import type { TimeZone } from './TimeZone';
 
 /** Optional daily columns (WP-1.9) that can be drawn; a file without one reads as `null`. */
 export type OptionalDailyColumn = 'precip_sum_mm' | 'battery_min_v';
-import { TimeSeries } from './TimeSeries';
-import type { TimeZone } from './TimeZone';
 
 /** Local hour at which a daily value is drawn: noon, the centre of the day (like hourly means). */
 export const DAILY_STAMP_HOUR = 12;

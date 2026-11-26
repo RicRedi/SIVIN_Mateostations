@@ -44,16 +44,47 @@ describe('auxiliary raw columns', () => {
     expect(resampler.raw(raw, 'temp_c').values).toEqual([10, null, null, null]);
   });
 
-  it('sums precipitation per hour and averages battery voltage', () => {
+  it('averages battery voltage per hour', () => {
     const raw = RawSeries.merge(ID, [rawFile]);
-    // Hour 0: 0.2 + 0.4 = 0.6 mm; hour 1: only 1.0 (the PRE_DEPLOYMENT sample is excluded).
-    const sums = resampler.hourlySums(raw, 'precip_mm', H0, H0 + 7200);
-    expect(sums.t).toEqual([H0 + 1800, H0 + 5400]);
-    expect(sums.values[0]).toBeCloseTo(0.6, 10);
-    expect(sums.values[1]).toBe(1.0);
     expect(resampler.hourlyMeans(raw, 'battery_v', H0, H0 + 7200).values).toEqual([3.55, 3.3]);
-    // An hour without a valid value is null, not 0.
-    expect(resampler.hourlySums(raw, 'precip_mm', H0 + 7200, H0 + 10_800).values).toEqual([null]);
+  });
+});
+
+describe('Resampler.hourlyPrecipitation', () => {
+  // Synthetic grid of 1830 s from 00:15 with 0.1 … 0.5 mm (invented values).
+  const times = [900, 2730, 4560, 6390, 8220].map((s) => H0 + s);
+  const precip = [0.1, 0.2, 0.3, 0.4, 0.5];
+  function file(keep: readonly number[], qc: Readonly<Record<number, number>> = {}) {
+    return RawSeries.merge(ID, [{
+      sensor_id: ID,
+      t: keep.map((i) => times[i] ?? 0),
+      temp_c: keep.map(() => 10),
+      rh_pct: keep.map(() => 80),
+      precip_mm: keep.map((i) => precip[i] ?? null),
+      qc: keep.map((i) => qc[i] ?? 0),
+    }]);
+  }
+
+  it('counts each amount in the hour of the midpoint of its interval (t_prev, t]', () => {
+    // Midpoints: 00:15 − 915 s = 23:59:45 (before the window), 00:30:15 → hour 0,
+    // 01:00:45 and 01:31:15 → hour 1, 02:01:45 → hour 2. Binning by the sample's own time would
+    // have put 0.1 mm into hour 0 as well.
+    const hourly = resampler.hourlyPrecipitation(file([0, 1, 2, 3, 4]), H0, H0 + 3 * 3600);
+    expect(hourly.t).toEqual([H0 + 1800, H0 + 5400, H0 + 9000]);
+    expect(hourly.values[0]).toBe(0.2);
+    expect(hourly.values[1]).toBeCloseTo(0.3 + 0.4, 10);
+    expect(hourly.values[2]).toBe(0.5);
+  });
+
+  it('shows an hour with a missed or masked sample as null, not as a partial sum', () => {
+    // Without sample 3 the last sample covers 3660 s > 2745 s: hour 1 (midpoint 01:46:30)
+    // is incomplete although it holds the valid 0.3 mm; hour 2 has no sample.
+    expect(resampler.hourlyPrecipitation(file([0, 1, 2, 4]), H0, H0 + 3 * 3600).values).toEqual([0.2, null, null]);
+    // A MANUAL_EXCLUDE sample makes its hour incomplete; MISSING (temperature/humidity) does not.
+    const masked = file([0, 1, 2, 3, 4], { 1: QcFlag.MANUAL_EXCLUDE, 4: QcFlag.MISSING });
+    const [h0, h1, h2] = resampler.hourlyPrecipitation(masked, H0, H0 + 3 * 3600).values;
+    expect([h0, h2]).toEqual([null, 0.5]);
+    expect(h1).toBeCloseTo(0.7, 10);
   });
 });
 
@@ -87,7 +118,8 @@ describe('ChartDataLoader with auxiliary columns', () => {
     expect(raw.sensors[0]?.precip_mm.values).toEqual([0.2, 0.4, null, 1.0]);
     const hourly = await loader.load([ID], new TimeWindow(H0, H0 + 7200, 'hourly'));
     expect(hourly.sensors[0]?.battery_v.values).toEqual([3.55, 3.3]);
-    expect(hourly.sensors[0]?.precip_mm.values[1]).toBe(1.0);
+    // Hour 0 holds the masked (PRE_DEPLOYMENT) third sample → incomplete; hour 1 = 1.0 mm.
+    expect(hourly.sensors[0]?.precip_mm.values).toEqual([null, 1.0]);
     const daily = await loader.load([ID], new TimeWindow(zone.startOfDate('2026-07-01'), zone.startOfDate('2026-07-03'), 'daily'));
     expect(daily.sensors[0]?.precip_mm.values).toEqual([1.6, 0]);
     expect(daily.sensors[0]?.battery_v.values).toEqual([3.3, null]);

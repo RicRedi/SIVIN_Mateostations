@@ -42,7 +42,8 @@ interface PointerStart {
  * Mouse and touch navigation on the time axis of a uPlot chart, inside the loaded window only:
  *
  * - **wheel** zooms in or out around the time under the cursor (applied once per animation
- *   frame, so fast wheels stay smooth),
+ *   frame, so fast wheels stay smooth); a wheel that cannot zoom any further is not consumed,
+ *   so the page scrolls,
  * - **drag** with the left button (or one finger) pans,
  * - **Shift + drag** selects a range and zooms to it (uPlot's selection, which therefore needs
  *   the modifier: a plain drag pans),
@@ -190,9 +191,13 @@ export class ZoomPanPlugin {
     if (plot === null) {
       return;
     }
-    event.preventDefault();
     const unitPx = event.deltaMode === DOM_DELTA_LINE ? WHEEL_LINE_PX : event.deltaMode === DOM_DELTA_PAGE ? WHEEL_PAGE_PX : 1;
-    this.pendingFactor *= wheelZoomFactor(event.deltaY * unitPx);
+    const factor = this.pendingFactor * wheelZoomFactor(event.deltaY * unitPx);
+    if (!this.canZoom(factor)) {
+      return;
+    }
+    event.preventDefault();
+    this.pendingFactor = factor;
     this.pendingAnchorT = plot.posToVal(this.localX(plot, event.clientX), 'x');
     this.frame ??= this.frames.request(() => {
       this.frame = null;
@@ -200,6 +205,21 @@ export class ZoomPanPlugin {
       this.pendingFactor = 1;
       this.apply(this.current.zoom(this.pendingAnchorT, factor, this.bounds, this.minSpanS));
     });
+  }
+
+  /**
+   * False if a zoom by `factor` would change nothing: zooming out of the whole window or in
+   * below the minimum span. The wheel event then stays unhandled, so the page or the side panel
+   * scrolls as usual.
+   */
+  private canZoom(factor: number): boolean {
+    if (factor > 1) {
+      return !this.current.covers(this.bounds);
+    }
+    if (factor < 1) {
+      return this.current.spanS > Math.min(this.minSpanS, this.bounds.spanS);
+    }
+    return false;
   }
 
   private onPointerDown(event: PointerEvent): void {

@@ -22,7 +22,8 @@ export const FAO56_B_C = 237.3;
 
 /**
  * Specific gas constant of water vapour, J kg⁻¹ K⁻¹ (461.5; e.g. Wallace & Hobbs, *Atmospheric
- * Science*, 2nd ed., 2006, give 461.51). Used in the ideal-gas law for absolute humidity.
+ * Science*, 2nd ed., 2006, give 461.51 [source not verified]). Used in the ideal-gas law for
+ * absolute humidity.
  */
 export const WATER_VAPOUR_GAS_CONSTANT_J_KG_K = 461.5;
 /** 0 °C in kelvin. */

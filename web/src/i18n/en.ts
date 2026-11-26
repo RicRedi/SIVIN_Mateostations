@@ -98,6 +98,8 @@ export const en: Dictionary = {
   chartDialogTitle: 'Chart',
   chartDialogClose: 'Close',
   chartSettings: 'Chart settings',
+  quantityNotDaily: '– raw data and hourly means only',
+  chartDialogEmpty: 'No sensor selected. Choose sensors in the chart settings (Sensors).',
   chartResetZoom: 'Whole window',
   chartDownloadCsv: 'Download CSV',
   chartZoomHint: 'Mouse wheel zooms, dragging pans, double-click shows the whole window, Shift + drag selects a range. Touch: two fingers zoom, one pans.',

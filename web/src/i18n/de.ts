@@ -99,6 +99,8 @@ export const de: Dictionary = {
   chartDialogTitle: 'Diagramm',
   chartDialogClose: 'Schließen',
   chartSettings: 'Diagrammeinstellungen',
+  quantityNotDaily: '– nur für Rohdaten und Stundenmittel',
+  chartDialogEmpty: 'Kein Sensor ausgewählt. Wählen Sie Sensoren in den Diagrammeinstellungen (Sensoren).',
   chartResetZoom: 'Ganzes Fenster',
   chartDownloadCsv: 'CSV herunterladen',
   chartZoomHint: 'Mausrad zoomt, Ziehen verschiebt, Doppelklick zeigt das ganze Fenster, Umschalt + Ziehen wählt einen Abschnitt. Touch: zwei Finger zoomen, einer verschiebt.',

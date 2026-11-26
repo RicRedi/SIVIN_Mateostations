@@ -4,12 +4,11 @@ import type { TimeZone } from '../domain/TimeZone';
 import { MS_PER_SECOND } from '../domain/units';
 import type { ViewRange } from '../domain/ViewRange';
 import type { I18n } from '../i18n/I18n';
-import type { Language } from '../i18n/languages';
 import type { ChartModel } from './ChartModel';
 import type { QuantityLabels } from './QuantityLabels';
 
-/** Decimal mark of the export per UI language: comma where Excel's locale expects it. */
-const DECIMAL_MARK: Readonly<Record<Language, string>> = { cs: ',', de: ',', en: '.' };
+/** Decimal mark of the export: a comma in every UI language (owner decision 2026-11-26). */
+const DECIMAL_MARK = ',';
 
 /** A file ready to be saved. */
 export interface CsvFile {
@@ -28,7 +27,7 @@ function pad2(value: number): string {
  * Columns: local time of the display zone (`YYYY-MM-DD HH:MM:SS`), UTC (ISO 8601), then one
  * column per sensor and quantity with label and unit in the header. Rows without any shown
  * value (gap breaks of the chart) are left out; an empty field is a missing or masked value.
- * The file is UTF-8 with BOM, `;`-separated, CRLF; the decimal mark follows the UI language.
+ * The file is UTF-8 with BOM, `;`-separated, CRLF, with a decimal comma in every language.
  */
 export class ChartCsv {
   constructor(
@@ -50,7 +49,7 @@ export class ChartCsv {
   }
 
   content(model: ChartModel, view: ViewRange): string {
-    const writer = new CsvWriter(csvFormat(DECIMAL_MARK[this.i18n.language]));
+    const writer = new CsvWriter(csvFormat(DECIMAL_MARK));
     const resolution = model.window.resolution;
     const header = [
       this.i18n.t('csvLocalTime', { zone: this.zone.name }),

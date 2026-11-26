@@ -96,6 +96,8 @@ export const cs = {
   chartDialogTitle: 'Graf',
   chartDialogClose: 'Zavřít',
   chartSettings: 'Nastavení grafu',
+  quantityNotDaily: '– jen pro surová data a hodinové průměry',
+  chartDialogEmpty: 'Není vybráno žádné čidlo. Vyberte čidla v nastavení grafu (Čidla).',
   chartResetZoom: 'Celé okno',
   chartDownloadCsv: 'Stáhnout CSV',
   chartZoomHint: 'Kolečko myši přiblíží, tažení posune, dvojklik vrátí celé okno, Shift + tažení vybere úsek. Dotyk: dva prsty přiblíží, jeden posune.',

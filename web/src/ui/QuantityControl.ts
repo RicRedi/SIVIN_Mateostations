@@ -20,12 +20,13 @@ const NO_EXTRA_AXIS = 'none';
  * Chooses the chart quantities: check boxes for those on the temperature and humidity axes or
  * drawn as a band (temperature, humidity, dew point, leaf wetness), and radio buttons for the
  * single third axis (none, VPD, absolute humidity, precipitation, battery voltage), so that at
- * most one extra axis is visible at a time.
+ * most one extra axis is visible at a time. A quantity not available at the shown resolution
+ * (leaf wetness at daily resolution) is disabled with a short note; its selection is kept.
  */
 export class QuantityControl {
   private readonly legend = el('legend', { class: 'panel__heading' });
   private readonly extraLegend = el('legend', { class: 'quantity-control__subheading' });
-  private readonly boxes = new Map<QuantityId, { input: HTMLInputElement; text: HTMLSpanElement }>();
+  private readonly boxes = new Map<QuantityId, { input: HTMLInputElement; text: HTMLSpanElement; note: HTMLSpanElement }>();
   private readonly radios = new Map<string, { input: HTMLInputElement; text: HTMLSpanElement }>();
   private current: QuantityControlState = { quantities: [], resolution: 'raw' };
 
@@ -52,8 +53,9 @@ export class QuantityControl {
         this.onChange(toggleQuantity(this.current.quantities, id));
       });
       const text = el('span');
-      this.boxes.set(id, { input, text });
-      baseList.append(el('label', { class: 'quantity-control__option' }, [input, text]));
+      const note = el('span', { class: 'quantity-control__note', hidden: true });
+      this.boxes.set(id, { input, text, note });
+      baseList.append(el('label', { class: 'quantity-control__option' }, [input, text, note]));
     }
     const extraList = el('div', { class: 'quantity-control__list' });
     for (const value of [NO_EXTRA_AXIS, ...EXTRA_AXIS_QUANTITIES]) {
@@ -79,9 +81,14 @@ export class QuantityControl {
     this.current = state;
     this.legend.textContent = this.i18n.t('quantitiesHeading');
     this.extraLegend.textContent = this.i18n.t('extraAxisHeading');
-    for (const [id, { input, text }] of this.boxes) {
+    for (const [id, { input, text, note }] of this.boxes) {
+      const quantity = this.registry.get(id);
+      const available = quantity.availableAt(state.resolution);
       input.checked = state.quantities.includes(id);
-      text.textContent = this.label(this.registry.get(id), state.resolution);
+      input.disabled = !available;
+      text.textContent = this.label(quantity, state.resolution);
+      note.textContent = available ? '' : this.i18n.t('quantityNotDaily');
+      note.hidden = available;
     }
     const extra = extraAxisOf(state.quantities) ?? NO_EXTRA_AXIS;
     for (const [value, { input, text }] of this.radios) {

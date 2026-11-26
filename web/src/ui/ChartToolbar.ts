@@ -63,9 +63,16 @@ export class ChartToolbar {
     this.render();
   }
 
-  /** Change part of the state (e.g. only `maximised`); the rest stays. */
+  /**
+   * Change part of the state (e.g. only `maximised`); the rest stays. Nothing is touched when the
+   * state does not change, so a zoom gesture does not re-render the buttons on every frame.
+   */
   update(change: Partial<ChartToolbarState>): void {
-    this.state = { ...this.state, ...change };
+    const next = { ...this.state, ...change };
+    if (next.zoomed === this.state.zoomed && next.exportable === this.state.exportable && next.maximised === this.state.maximised) {
+      return;
+    }
+    this.state = next;
     this.render();
   }
 

@@ -153,6 +153,72 @@ In `/home/user/wt/wp-3.7/web` (Node 22):
    OK?
 5. WP-3.7 still needs an entry in MIGRATION_PLAN §4 (orchestrator).
 
+## Changes after review round 1
+
+1. **major, CSV formula injection** (`app/CsvWriter.ts`): text fields starting with `=`, `+`,
+   `-`, `@`, tab or CR are prefixed with `'`; fields that are plain numbers (`-0,25`, `-5`) are
+   left alone so they stay numeric. Test with `=HYPERLINK("http://x","c")`, `-5 m`,
+   `+cmd|calc`, `@SUM(A1)`, tab and CR (`tests/ui/ChartCsv.test.ts`). Documented in
+   `docs/web.md` (CSV export).
+2. **minor, citation**: the Wallace & Hobbs (2006) value for `R_v` is marked
+   "[source not verified]" in `domain/psychrometry.ts` and `docs/web.md`; the value 461.5 is
+   kept (open question 3).
+3. **minor, wheel**: `ZoomPanPlugin` no longer consumes a wheel that cannot zoom (out of the
+   whole window, or in at the minimum span); the event bubbles, so the side panel scrolls. Test
+   in `tests/ui/ZoomPanPlugin.test.ts`.
+4. **minor, hourly precipitation**: `Resampler.hourlySums` replaced by
+   `Resampler.hourlyPrecipitation`. Each amount is counted in the hour of the midpoint of its
+   interval `(t_prev, t]`; an hour is `null` unless complete (every counted sample valid and
+   covering ≤ 1.5 nominal steps = 2745 s). Hand-computed tests in `tests/auxiliary.test.ts`
+   (0.2 / 0.7 / 0.5 mm on a synthetic 1830 s grid; a missed sample or a MANUAL_EXCLUDE sample
+   makes the hour `null`; MISSING does not). Documented in `docs/web.md`.
+5. **minor, performance**: measured with the reviewer's script
+   (`/tmp/claude-0/review-3.7/perf.mjs`, 8 sensors × 29 days raw, dialog 1280 px, wheel event →
+   second animation frame, 30 steps), same sandbox:
+   - before (ff0f2e0): temp + RH median 66 / 73 ms (p90 77 / 84), five quantities median
+     113 / 120 ms (p90 147 / 151) — two runs;
+   - after: temp + RH median 63 / 65 / 76 ms (p90 84 / 89 / 86), five quantities median
+     132 / 110 / 109 ms (p90 152 / 147 / 137) — three runs.
+
+   No measurable change. Derived series were already not recomputed on zoom (a zoom step is
+   only `setScale` on the x axis). A CPU profile and a Chromium trace of 20 wheel steps show
+   about 13 ms of JavaScript per step (≈ 260 ms for 20) and about 95 ms per step in the
+   compositor "Commit" (1909 ms for 20) — Chromium's software rasterisation of the large canvas
+   in this GPU-less sandbox. Hiding the backdrop/shadow, the legend or all line dashes did not
+   change the numbers. The only change kept: `ChartToolbar.update` skips re-rendering when its
+   state did not change (no effect on the numbers). Cutting the raster cost would need fewer
+   drawn points or series (e.g. decimation), which changes what the chart shows; not done.
+   `docs/web.md` now quotes these numbers and the dependence on the number of quantities.
+6. **nits**: `dailyColumnSeries.ts` imports before the type declaration; the zoom is kept when
+   the new window is **equal** (`TimeWindow.equals`: bounds and resolution, tested in
+   `tests/TimeWindow.test.ts`) instead of the same object; with no sensor selected the dialog's
+   chart area shows "Není vybráno žádné čidlo. Vyberte čidla v nastavení grafu (Čidla)." (new key
+   `chartDialogEmpty` cs/de/en; shown by CSS `:has()` while the chart section is hidden).
+
+### Owner decisions of 2026-11-26 (open questions 1, 2, 4), implemented in this round
+
+- **(a) CSV decimal mark: a comma in every UI language** (cs/de/en); separator stays `;`.
+  `ChartCsv` uses a fixed `DECIMAL_MARK = ','`; the English test now expects `20,00`;
+  `docs/web.md` updated.
+- **(b) No leaf-wetness estimate at daily resolution.** `ChartQuantity.availableAt(resolution)`
+  (default: every resolution; `LeafWetnessQuantity`: not `daily`). `ChartModel.build` leaves
+  unavailable quantities out, so at daily resolution the band is not drawn and the column not
+  exported. `QuantityControl` disables the check box and shows "– jen pro surová data a hodinové
+  průměry" (new key `quantityNotDaily`, cs/de/en); the selection is kept and applies again at
+  raw/hourly. Tests in `tests/quantities.test.ts`, `tests/ui/ChartCsv.test.ts`,
+  `tests/ui/chartChrome.test.ts`; documented in `docs/web.md`.
+- **(c) The open dialog is not in the URL** — kept as it is.
+
+Open question 3 (absolute-humidity source) remains open; open question 5 is the orchestrator's.
+
+Gates after the changes, re-run after rebasing onto `origin/main` (8fd1797), in `web/`:
+`npm run lint` clean, `npm run typecheck` clean, `npm test` 31 files / 314 tests passed,
+coverage lines 99.49 % (1983/1993), statements 99.47 %, branches 93.59 %, functions 99.46 %;
+`npm run build` OK. Browser checks (Playwright, Chromium 1243): at daily resolution the legend
+has no leaf-wetness series; a wheel down over the fully zoomed-out small chart scrolls the side
+panel (scrollTop 100 → 300); after removing every sensor in the dialog the empty-state note is
+displayed; no page errors.
+
 ## Review
 
 Verdict: CHANGES_REQUESTED (round 1)

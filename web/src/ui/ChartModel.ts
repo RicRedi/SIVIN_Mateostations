@@ -43,9 +43,11 @@ export class ChartModel {
 
   /**
    * @param data - Loaded chart data (window, sensors, events).
-   * @param quantities - Quantities to show, in display order.
+   * @param quantities - Quantities to show, in display order; those not available at the
+   *   window's resolution (leaf wetness at daily resolution) are left out.
    */
-  static build(data: ChartData, quantities: readonly ChartQuantity[]): ChartModel {
+  static build(data: ChartData, shown: readonly ChartQuantity[]): ChartModel {
+    const quantities = shown.filter((quantity) => quantity.availableAt(data.window.resolution));
     const events = data.sensors.flatMap((s) => s.events.map((event) => ({ event, sensorId: s.sensorId })));
     const bands = offSiteBands(events, data.window.startT, data.window.endT);
     const halfWidthS = RESOLUTION_STEP_S[data.window.resolution] * HALF;

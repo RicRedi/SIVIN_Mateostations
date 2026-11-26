@@ -108,6 +108,7 @@ describe('ChartDialog', () => {
     dialog.render();
     expect(document.querySelector('.chart-dialog__close')?.getAttribute('aria-label')).toBe('Close');
     expect(document.querySelector('summary')?.textContent).toBe('Chart settings');
+    expect(document.querySelector('.chart-dialog__empty')?.textContent).toBe('No sensor selected. Choose sensors in the chart settings (Sensors).');
     i18n.setLanguage('cs');
   });
 });
@@ -207,10 +208,22 @@ describe('QuantityControl', () => {
     expect([input('temp_c').checked, input('dew_point_c').checked, input('vpd_kpa').checked, input('none').checked]).toEqual([true, false, true, false]);
     const labels = [...root.querySelectorAll('label')].map((l) => l.textContent);
     expect(labels).toContain('Teplota (°C)');
-    expect(labels).toContain('Ovlhčení listů – odhad (RH ≥ 90 %)');
+    // Rendered at daily resolution: leaf wetness carries the "not daily" note.
+    expect(labels).toContain('Ovlhčení listů – odhad (RH ≥ 90 %)– jen pro surová data a hodinové průměry');
     expect(labels).toContain('Denní srážky (mm)');
     expect(labels).toContain('Denní minimum napětí baterie (V)');
     expect(labels).toContain('Žádná');
+  });
+
+  it('disables leaf wetness at daily resolution with a note and enables it again at hourly', () => {
+    control.render({ quantities: ['temp_c', 'leaf_wetness'], resolution: 'daily' });
+    const note = input('leaf_wetness').closest('label')?.querySelector<HTMLElement>('.quantity-control__note');
+    expect([input('leaf_wetness').disabled, input('leaf_wetness').checked, note?.hidden, note?.textContent]).toEqual([
+      true, true, false, '– jen pro surová data a hodinové průměry',
+    ]);
+    expect(input('dew_point_c').disabled).toBe(false);
+    control.render({ quantities: ['temp_c', 'leaf_wetness'], resolution: 'hourly' });
+    expect([input('leaf_wetness').disabled, note?.hidden]).toEqual([false, true]);
   });
 
   it('reports toggled quantities and a changed third axis', () => {

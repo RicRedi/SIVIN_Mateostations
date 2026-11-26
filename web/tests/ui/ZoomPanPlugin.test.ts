@@ -87,6 +87,24 @@ describe('ZoomPanPlugin', () => {
     expect(s.plugin.xRange()).toEqual([start, end]);
   });
 
+  it('does not consume a wheel that cannot zoom, so the page can scroll', () => {
+    // Whole window shown: zooming out changes nothing.
+    const out = new WheelEvent('wheel', { deltaY: 100, clientX: LEFT_PX + 500, cancelable: true });
+    s.over.dispatchEvent(out);
+    expect(out.defaultPrevented).toBe(false);
+    expect(s.frames.callbacks).toHaveLength(0);
+    // At the minimum span (10 s): zooming in changes nothing, zooming out does.
+    s.plugin.configure(BOUNDS, 10, new ViewRange(500, 510));
+    const zoomIn = new WheelEvent('wheel', { deltaY: -100, clientX: LEFT_PX + 500, cancelable: true });
+    s.over.dispatchEvent(zoomIn);
+    expect(zoomIn.defaultPrevented).toBe(false);
+    const zoomOut = new WheelEvent('wheel', { deltaY: 100, clientX: LEFT_PX + 500, cancelable: true });
+    s.over.dispatchEvent(zoomOut);
+    expect(zoomOut.defaultPrevented).toBe(true);
+    s.over.dispatchEvent(new WheelEvent('wheel', { deltaY: 0, clientX: LEFT_PX + 500, cancelable: true }));
+    expect(s.frames.callbacks).toHaveLength(1);
+  });
+
   it('combines wheel events of one frame and scales line and page deltas', () => {
     s.over.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1, clientX: LEFT_PX, cancelable: true }));
     s.over.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: LEFT_PX, cancelable: true }));

@@ -68,6 +68,9 @@ describe('ChartQuantities', () => {
     expect(registry.get('leaf_wetness').display.axis).toBe('band');
     expect(registry.get('leaf_wetness').labelParams()).toEqual({ threshold: 90 });
     expect(registry.get('temp_c').labelParams()).toEqual({});
+    // Owner decision 2026-11-26: no leaf-wetness estimate at daily resolution.
+    expect(['raw', 'hourly', 'daily'].map((r) => registry.get('leaf_wetness').availableAt(r as 'raw'))).toEqual([true, true, false]);
+    expect(registry.get('temp_c').availableAt('daily')).toBe(true);
     expect(registry.get('precip_mm').display).toMatchObject({ unit: 'mm', axis: 'extra', style: 'bars' });
     expect(registry.get('precip_mm').labelKey('raw')).toBe('quantityPrecip');
     expect(registry.get('precip_mm').labelKey('hourly')).toBe('quantityPrecipHourly');

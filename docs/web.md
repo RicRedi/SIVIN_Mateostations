@@ -76,7 +76,7 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `state/GroupSelection` | Tri-state of a group (`none` / `some` / `all`) and the group checkbox within the comparison limit: a group with **any** selected sensor is cleared (so a partly selected group can always be cleared, also at the limit); a group without one is added in group order up to 8 and the rest is reported (`groupNotice`: "only n added", or the plain limit message when nothing fit). |
 | `app/ChartDataLoader` | Loads raw / hourly / daily series and in-window events **per sensor** (`Promise.allSettled`): a sensor whose series fail becomes a failure entry shown as a per-sensor error above the chart, the other sensors still render. A missing or invalid events file degrades to "no events" with a `console.warn`. |
 | `app/ChartQuantities` | `ChartQuantity` (abstract: id, unit, axis, line style, decimals, label key per resolution, `series(sensor)`) with `MeasuredQuantity`, `PsychrometricQuantity`, `LeafWetnessQuantity`, and the `QuantityRegistry` filled by `createQuantityRegistry`. A new quantity is a new registered instance. |
-| `app/CsvWriter` | CSV text: UTF-8 BOM, `;`, CRLF, RFC 4180 quoting, numbers with fixed decimals and the decimal mark of the language. |
+| `app/CsvWriter` | CSV text: UTF-8 BOM, `;`, CRLF, RFC 4180 quoting, numbers with fixed decimals and a decimal comma. |
 | `app/ChartPresenter` | Resolves the window from the state (falling back to the default window if a spec cannot be resolved), shows "loading", the data or an error; drops responses of superseded requests. |
 | `state/Store`, `AppState`, `HashStateCodec` | Observable immutable state (selection, window, resolution, shown chart quantities, language) and its URL-hash form, e.g. `#s=77678271,77680921&w=7d&r=hourly&lang=cs`, `#w=season&y=2026`, `#w=custom&from=2026-06-01&to=2026-06-15`, `#…&q=temp_c,dew_point_c,vpd_kpa`. `r` is omitted for automatic resolution, `q` for the default temperature + humidity (`q=` = nothing shown). Store notifications are not re-entrant: an update made inside a listener is applied at once but notified after the current change. The codec accepts only real calendar dates (they must round-trip through `Date`) and years 2000–2100; anything else in the hash is ignored. |
 | `i18n/I18n`, `LanguagePreference` | UI strings cs (default) / de / en, manifest labels, number/date formatting. Lookup: language → Czech → key. The language is stored in `localStorage` (every access in `try/catch`). Priority at start: URL hash → stored preference → Czech. |
@@ -302,7 +302,9 @@ phones, where the chart needs the room). The dialog has `role="dialog"`, `aria-m
 title; the rest of the page is `inert` and Tab is trapped (the picker's `ModalSheet` is reused);
 ✕ and Escape close it (an Escape the open sensor picker handles only closes the picker) and the
 focus returns to the ⤢ button. In the dialog the plot takes the remaining height (the legend
-scrolls above 8.5 rem). Whether the dialog is open is not part of the URL.
+scrolls above 8.5 rem). Whether the dialog is open is not part of the URL. If the last sensor is
+removed inside the dialog, the chart area says that no sensor is selected and points to the
+sensor picker in the settings.
 
 ### Zoom and pan
 
@@ -322,14 +324,21 @@ the resolution (4 × 1830 s raw, 4 h hourly, 4 days daily). The plain drag used 
 selection zoom; by owner request **pan wins**, the selection now needs Shift. The zoom is kept
 when quantities or the language change and reset when new data are loaded (another window,
 resolution or selection). Event markers outside the visible range are hidden, and bands and lines
-are clipped to the plot. The wheel over the plot does not scroll the page. Touch was checked with
+are clipped to the plot. A wheel that zooms is not passed on to the page; a wheel that cannot
+zoom (zooming out of the whole window, or in at the minimum span) is left alone, so the side
+panel scrolls as usual. Touch was checked with
 Chromium's touch emulation (CDP), not on a real phone.
 
 **Performance** (headless Chromium 1243 without GPU in the agent sandbox, 1280 px dialog,
-8 sensors × 30 days raw ≈ 8 × 1420 samples): one wheel step until the next frame after it took a
-median of 33 ms with temperature + humidity (two frame intervals, i.e. the redraw fits in one
-frame) and 54 ms (p95 117 ms) with four quantities (32 series). A desktop browser with GPU
-canvas should be faster; this was not measured.
+8 sensors × 30 days raw ≈ 8 × 1420 samples, time from one wheel event to the second animation
+frame after it, i.e. at least 33 ms): median 63–76 ms (p90 84–89 ms) with temperature +
+humidity and 109–132 ms (p90 137–152 ms) with five quantities (40 series); the numbers vary
+between runs and machines. It grows with the number of shown quantities and sensors. A zoom
+step only rescales the x axis and redraws; derived series are computed once per data load or
+quantity change, not per zoom step. A CPU profile shows about 13 ms of JavaScript per step;
+the rest is Chromium's software rasterisation of the canvas (the trace's "Commit"), so a
+desktop browser with GPU canvas should be much faster — not measured. Wheel events are combined
+per animation frame, so fast wheeling skips frames instead of queueing them.
 
 ### Quantities
 
@@ -341,10 +350,10 @@ per sensor:
 | Temperature | °C | left, solid | measured |
 | Relative humidity | % | right, dashed | measured |
 | Dew point | °C | left, dotted | derived |
-| Leaf wetness – estimate | 0/1 | band along the bottom, one lane per sensor | derived |
+| Leaf wetness – estimate | 0/1 | band along the bottom, one lane per sensor; raw and hourly only | derived |
 | VPD | kPa | third axis, dash-dot | derived |
 | Absolute humidity | g/m³ | third axis, dash-dot | derived |
-| Precipitation | mm per interval (raw), per hour (sum), per day (`precip_sum_mm`) | third axis, bars | measured |
+| Precipitation | mm per interval (raw), per complete hour (sum, below), per day (`precip_sum_mm`) | third axis, bars | measured |
 | Battery voltage | V (raw, hourly mean, daily minimum `battery_min_v`) | third axis, dash-dot | measured |
 
 Derived quantities are off by default. **At most one quantity with an axis of its own** is shown
@@ -362,17 +371,20 @@ Formulas (`domain/psychrometry.ts`), the same as the Python indices:
 - **Absolute humidity**, ideal-gas law for water vapour:
   $\rho_v = e_a / (R_v\,(T + 273.15))$ with $e_a$ as for the VPD (in Pa) and
   $R_v = 461.5$ J kg⁻¹ K⁻¹ (standard value, e.g. Wallace & Hobbs, *Atmospheric Science*, 2nd
-  ed., 2006, 461.51), in g/m³. At 20 °C / 50 % this gives 8.64 g/m³.
+  ed., 2006, 461.51 [source not verified]), in g/m³. At 20 °C / 50 % this gives 8.64 g/m³.
 - **Leaf wetness (estimate)**: $RH \ge 90$ %, the default `wet_rh_threshold_pct` of the
   botrytis index ([botrytis_broome.md](indices/botrytis_broome.md); a proxy, not a measured
-  wetness). A wet point's band reaches half the point spacing to each side.
+  wetness). A wet point's band reaches half the point spacing to each side. **Not at daily
+  resolution** (owner decision 2026-11-26): a daily mean humidity says nothing about hours of
+  wet leaves, so the check box is disabled there with the note "jen pro surová data a hodinové
+  průměry", no band is drawn and no column exported; the selection is kept and applies again at
+  raw or hourly resolution.
 
 `RH <= 0 %` (a sensor artefact) gives no derived value, like the Python `NaN`. Derived values
 are computed from the temperature and humidity **as shown**: at raw resolution per sample, at
 hourly and daily resolution from the means (hourly means, `temp_mean`/`rh_mean` of `daily.json`).
 Because the formulas are non-linear, e.g. the dew point of mean values differs slightly from the
-mean of per-sample dew points; for daily values and the leaf-wetness estimate in particular, use
-raw or hourly resolution. QC-masked rows have no temperature or humidity and so no derived value;
+mean of per-sample dew points; for daily values use raw or hourly resolution where possible. QC-masked rows have no temperature or humidity and so no derived value;
 in an off-site period every series of that sensor is blanked.
 
 Precipitation and battery voltage are masked with `AUXILIARY_DISPLAY_EXCLUDE_MASK` =
@@ -380,6 +392,15 @@ PRE_DEPLOYMENT | MANUAL_EXCLUDE (288), the pipeline's `DEFAULT_AUXILIARY_EXCLUDE
 decision Q9 the row validity rule concerns temperature and humidity only, so rain in a row whose
 humidity is missing is still shown. The demo fixture has no precipitation or battery columns, so
 these show no values there.
+
+**Hourly precipitation** (`Resampler.hourlyPrecipitation`): a sample's `precip_mm` is the rain
+since the previous sample, i.e. of the interval `(t_prev, t]`, so it is counted in the hour that
+contains the interval's midpoint (the first loaded sample is assumed to cover one nominal step).
+An hour is shown only if it is complete: every sample counted in it has a valid value (not
+`null`, not masked by PRE_DEPLOYMENT / MANUAL_EXCLUDE) and covers at most 1.5 nominal steps
+(2745 s; a longer interval means a missed sample). Otherwise the hour is `null` (a gap), so a
+partial sum never looks like a complete one. Daily sums come from `precip_sum_mm` as published
+(`precip_n_samples` tells how complete a day is; not shown).
 
 ### CSV export
 
@@ -391,8 +412,8 @@ at the loaded resolution, for the selected sensors and shown quantities, derived
 - name `sivin_<sensor ids joined by ->_<from>_<to>.csv`, the visible range in local time,
   `YYYYMMDDTHHMM`, end exclusive, e.g. `sivin_77678271-77799986_20260924T0200_20261001T0200.csv`;
 - UTF-8 **with BOM** (Excel otherwise guesses a legacy code page), CRLF, separator `;`;
-- **decimal mark of the UI language**: comma in Czech and German (what Excel in those locales
-  expects together with `;`), point in English; no thousands separator;
+- **decimal comma in every UI language** (owner decision 2026-11-26; what Excel in Czech and
+  German locales expects together with `;`); no thousands separator;
 - columns: `Místní čas (Europe/Prague)` as `YYYY-MM-DD HH:MM:SS` in the display zone, `Čas UTC
   (ISO 8601)` as `YYYY-MM-DDTHH:MM:SSZ`, then one column per sensor and quantity, header
   `<sensor> – <quantity> (<unit>)`;
@@ -401,7 +422,11 @@ at the loaded resolution, for the selected sensors and shown quantities, derived
   all (the chart's gap breaks) are left out. Hourly values are stamped at hh:30, daily at local
   noon, as drawn;
 - decimals: measured values 0.01 (the published precision), dew point and absolute humidity
-  0.01, VPD 0.001, leaf wetness 0/1.
+  0.01, VPD 0.001, leaf wetness 0/1;
+- **formula injection** (OWASP "CSV injection"): a text field that starts with `=`, `+`, `-`,
+  `@`, tab or carriage return — e.g. a sensor label `=HYPERLINK(…)` or `-5 m` in the header —
+  is prefixed with `'`, so Excel shows it as text instead of running it; plain numbers such as
+  `-0,25` stay numbers.
 
 ## Data loading (contract §2.6)
 

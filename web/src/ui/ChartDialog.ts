@@ -20,7 +20,8 @@ const TITLE_ID = 'chart-dialog-title';
  *
  * `role="dialog"`, `aria-modal="true"`, the rest of the page `inert` and Tab trapped inside
  * (`ModalSheet`); ✕ and Escape close it and focus returns to where it was. The controls are in a
- * `<details>` that starts open, except on phones, where the chart gets the room.
+ * `<details>` that starts open, except on phones, where the chart gets the room. Without a
+ * selected sensor (the panel hides the chart section) the chart area says how to select one.
  */
 export class ChartDialog {
   readonly element = el('div', { class: 'chart-dialog', hidden: true });
@@ -30,6 +31,8 @@ export class ChartDialog {
   private readonly settings = el('details', { class: 'chart-dialog__controls' });
   private readonly settingsSummary = el('summary');
   private readonly chartArea = el('div', { class: 'chart-dialog__chart' });
+  /** Shown by CSS only while the chart section is hidden (no sensor selected). */
+  private readonly emptyNote = el('p', { class: 'chart-dialog__empty' });
   private readonly modal: ModalSheet;
   private readonly markers = new Map<HTMLElement, Comment>();
   private returnFocus: HTMLElement | null = null;
@@ -50,6 +53,7 @@ export class ChartDialog {
     private readonly onOpenChange: (open: boolean) => void,
   ) {
     this.settings.append(this.settingsSummary);
+    this.chartArea.append(this.emptyNote);
     this.window.append(
       el('div', { class: 'chart-dialog__bar' }, [this.title, this.closeButton]),
       el('div', { class: 'chart-dialog__body' }, [this.settings, this.chartArea]),
@@ -76,6 +80,7 @@ export class ChartDialog {
     this.closeButton.setAttribute('aria-label', this.i18n.t('chartDialogClose'));
     this.closeButton.title = this.i18n.t('chartDialogClose');
     this.settingsSummary.textContent = this.i18n.t('chartSettings');
+    this.emptyNote.textContent = this.i18n.t('chartDialogEmpty');
   }
 
   open(): void {

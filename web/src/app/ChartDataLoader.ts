@@ -14,7 +14,8 @@ export const DAILY_GAP_THRESHOLD_S = 1.5 * SECONDS_PER_DAY;
 /**
  * Chart input for one sensor, at the window's resolution. Precipitation is per sample (raw),
  * summed per hour (hourly) or the daily sum (daily); battery voltage is per sample, the hourly
- * mean or the daily minimum. Both are empty-valued (`null`) where the data have no such column.
+ * mean or the daily minimum. An hourly precipitation sum is `null` unless the hour is complete
+ * (`Resampler.hourlyPrecipitation`). Both are empty-valued (`null`) where the data have no such column.
  */
 export interface SensorChartData {
   readonly sensorId: string;
@@ -129,7 +130,7 @@ export class ChartDataLoader {
         return {
           temp_c: this.resampler.hourlyMeans(raw, 'temp_c', startT, endT),
           rh_pct: this.resampler.hourlyMeans(raw, 'rh_pct', startT, endT),
-          precip_mm: this.resampler.hourlySums(raw, 'precip_mm', startT, endT),
+          precip_mm: this.resampler.hourlyPrecipitation(raw, startT, endT),
           battery_v: this.resampler.hourlyMeans(raw, 'battery_v', startT, endT),
         };
       }

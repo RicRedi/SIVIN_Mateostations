@@ -16,13 +16,24 @@ export const NOMINAL_STEP_S = 1830;
  */
 export const RAW_GAP_THRESHOLD_S = 3 * NOMINAL_STEP_S;
 
-const HALF_HOUR_S = SECONDS_PER_HOUR / 2;
+/**
+ * A precipitation sample whose predecessor lies farther back than this covers at least one
+ * missed sample (1.5 nominal steps leaves room for clock jitter); its hour is incomplete.
+ */
+export const MAX_PRECIP_INTERVAL_S = 1.5 * NOMINAL_STEP_S;
 
-/** How the values of one hour are combined. */
-type HourlyAggregate = 'mean' | 'sum';
+const HALF_HOUR_S = SECONDS_PER_HOUR / 2;
+const HALF = 0.5;
+
+/** UTC hour bins `[h, h + 3600)` covering a window, stamped at their centres. */
+interface HourBins {
+  readonly firstHourT: number;
+  readonly count: number;
+}
 
 /**
- * Turns raw samples into chart series: QC-masked raw values, hourly means or hourly sums. Daily
+ * Turns raw samples into chart series: QC-masked raw values, hourly means or hourly
+ * precipitation sums. Daily
  * values are not computed here; they come from `daily.json` (see {@link dailyColumnSeries}).
  *
  * Temperature and humidity are masked with `mask`; the auxiliary precipitation and battery
@@ -56,15 +67,62 @@ export class Resampler {
    * @param endT - Window end (exclusive), Unix seconds UTC.
    */
   hourlyMeans(series: RawSeries, variable: RawColumn, startT: number, endT: number): TimeSeries {
-    return this.hourly(series, variable, startT, endT, 'mean');
+    const values = this.masked(series, variable);
+    const bins = Resampler.bins(startT, endT);
+    const sums = new Array<number>(bins.count).fill(0);
+    const counts = new Array<number>(bins.count).fill(0);
+    values.t.forEach((t, i) => {
+      const value = values.values[i];
+      const bin = Math.floor((t - bins.firstHourT) / SECONDS_PER_HOUR);
+      if (value === null || value === undefined || t < startT || t >= endT || bin >= bins.count) {
+        return;
+      }
+      sums[bin] = (sums[bin] ?? 0) + value;
+      counts[bin] = (counts[bin] ?? 0) + 1;
+    });
+    return Resampler.stamped(bins, sums.map((sum, bin) => {
+      const count = counts[bin] ?? 0;
+      return count === 0 ? null : sum / count;
+    }));
   }
 
   /**
-   * Hourly sums over UTC hours, stamped like {@link hourlyMeans}; for precipitation per hour (mm).
-   * An hour without a valid value is `null`, not 0, so missing data stay visible.
+   * Precipitation per UTC hour (mm), stamped like {@link hourlyMeans}.
+   *
+   * A sample's `precip_mm` is the rain **since the previous sample**, i.e. of the interval
+   * `(t_prev, t]`; it is counted in the hour that contains the interval's midpoint
+   * `t − (t − t_prev)/2` (the first loaded sample is assumed to cover one nominal step). An hour
+   * is shown only if it is **complete**: every sample counted in it has a valid (non-null, not
+   * masked) value and covers at most {@link MAX_PRECIP_INTERVAL_S}. Otherwise — and for an hour
+   * without samples — it is `null`, so a partial sum never looks like a complete one.
+   *
+   * @param series - Raw samples.
+   * @param startT - Window start, Unix seconds UTC.
+   * @param endT - Window end (exclusive), Unix seconds UTC.
    */
-  hourlySums(series: RawSeries, variable: RawColumn, startT: number, endT: number): TimeSeries {
-    return this.hourly(series, variable, startT, endT, 'sum');
+  hourlyPrecipitation(series: RawSeries, startT: number, endT: number): TimeSeries {
+    const values = this.masked(series, 'precip_mm');
+    const bins = Resampler.bins(startT, endT);
+    const sums = new Array<number>(bins.count).fill(0);
+    const counts = new Array<number>(bins.count).fill(0);
+    const incomplete = new Array<boolean>(bins.count).fill(false);
+    values.t.forEach((t, i) => {
+      const previous = values.t[i - 1];
+      const intervalS = previous === undefined ? NOMINAL_STEP_S : t - previous;
+      const midT = t - intervalS * HALF;
+      const bin = Math.floor((midT - bins.firstHourT) / SECONDS_PER_HOUR);
+      if (midT < startT || midT >= endT || bin < 0 || bin >= bins.count) {
+        return;
+      }
+      const value = values.values[i] ?? null;
+      if (value === null || intervalS > MAX_PRECIP_INTERVAL_S) {
+        incomplete[bin] = true;
+        return;
+      }
+      sums[bin] = (sums[bin] ?? 0) + value;
+      counts[bin] = (counts[bin] ?? 0) + 1;
+    });
+    return Resampler.stamped(bins, sums.map((sum, bin) => ((counts[bin] ?? 0) === 0 || incomplete[bin] === true ? null : sum)));
   }
 
   private masked(series: RawSeries, variable: RawColumn): TimeSeries {
@@ -72,35 +130,15 @@ export class Resampler {
     return series.variable(variable, isAuxiliary ? this.auxiliaryMask : this.mask);
   }
 
-  private hourly(
-    series: RawSeries,
-    variable: RawColumn,
-    startT: number,
-    endT: number,
-    aggregate: HourlyAggregate,
-  ): TimeSeries {
-    const values = this.masked(series, variable);
+  private static bins(startT: number, endT: number): HourBins {
     const firstHourT = Math.floor(startT / SECONDS_PER_HOUR) * SECONDS_PER_HOUR;
-    const hourCount = Math.max(0, Math.ceil((endT - firstHourT) / SECONDS_PER_HOUR));
-    const sums = new Array<number>(hourCount).fill(0);
-    const counts = new Array<number>(hourCount).fill(0);
-    values.t.forEach((t, i) => {
-      const value = values.values[i];
-      const bin = Math.floor((t - firstHourT) / SECONDS_PER_HOUR);
-      if (value === null || value === undefined || t < startT || t >= endT || bin >= hourCount) {
-        return;
-      }
-      sums[bin] = (sums[bin] ?? 0) + value;
-      counts[bin] = (counts[bin] ?? 0) + 1;
-    });
-    const t = sums.map((_, bin) => firstHourT + bin * SECONDS_PER_HOUR + HALF_HOUR_S);
-    const aggregated = sums.map((sum, bin) => {
-      const count = counts[bin] ?? 0;
-      if (count === 0) {
-        return null;
-      }
-      return aggregate === 'sum' ? sum : sum / count;
-    });
-    return TimeSeries.of(t, aggregated);
+    return { firstHourT, count: Math.max(0, Math.ceil((endT - firstHourT) / SECONDS_PER_HOUR)) };
+  }
+
+  private static stamped(bins: HourBins, values: readonly (number | null)[]): TimeSeries {
+    return TimeSeries.of(
+      values.map((_, bin) => bins.firstHourT + bin * SECONDS_PER_HOUR + HALF_HOUR_S),
+      values,
+    );
   }
 }

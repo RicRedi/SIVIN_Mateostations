@@ -2,7 +2,7 @@ import type { VariableSpec } from '../contract';
 import { combineSeries, leafWetnessIndicator } from '../domain/derivedSeries';
 import { absoluteHumidityGM3, dewPointC, LEAF_WET_RH_THRESHOLD_PCT, vapourPressureDeficitKpa } from '../domain/psychrometry';
 import type { QuantityId } from '../domain/quantities';
-import type { Resolution } from '../domain/TimeWindow';
+import { RESOLUTIONS, type Resolution } from '../domain/TimeWindow';
 import type { TimeSeries } from '../domain/TimeSeries';
 import type { MessageKey } from '../i18n/cs';
 import type { SensorChartData } from './ChartDataLoader';
@@ -50,6 +50,14 @@ export abstract class ChartQuantity {
   labelKey(resolution: Resolution): MessageKey {
     const labels = this.display.labels;
     return (resolution === 'daily' ? labels.daily : resolution === 'hourly' ? labels.hourly : undefined) ?? labels.default;
+  }
+
+  /**
+   * False if the quantity is not offered at `resolution` (not drawn, not exported); by default
+   * every resolution.
+   */
+  availableAt(resolution: Resolution): boolean {
+    return RESOLUTIONS.includes(resolution);
   }
 
   /** Placeholder values of the label, e.g. a threshold. */
@@ -111,6 +119,14 @@ export class LeafWetnessQuantity extends ChartQuantity {
 
   override labelParams(): Readonly<Record<string, number>> {
     return { threshold: this.thresholdPct };
+  }
+
+  /**
+   * Not at daily resolution (owner decision 2026-11-26): a daily mean humidity says nothing about
+   * hours of wet leaves.
+   */
+  override availableAt(resolution: Resolution): boolean {
+    return resolution !== 'daily';
   }
 
   series(sensor: SensorChartData): TimeSeries {

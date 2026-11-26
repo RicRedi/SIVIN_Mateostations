@@ -77,6 +77,12 @@ describe('ChartModel', () => {
     ]);
   });
 
+  it('leaves leaf wetness out at daily resolution (chart and CSV)', () => {
+    const daily = ChartModel.build({ ...DATA, window: new TimeWindow(T0, T0 + 4 * STEP, 'daily') }, registry.select(['temp_c', 'leaf_wetness']));
+    expect(daily.columns.map((c) => c.quantity.id)).toEqual(['temp_c', 'temp_c']);
+    expect(daily.wetLanes).toEqual([]);
+  });
+
   it('lists rows inside a view that have a value', () => {
     // Row 3 (77799986 off site, 77678271 without a sample) has no value and is skipped.
     expect(model.rowsWithin(new ViewRange(T0 + STEP, T0 + 2 * STEP + 61))).toEqual([2, 4, 5]);
@@ -92,6 +98,15 @@ describe('CsvWriter', () => {
     expect(writer.write(['a;b', 'say "x"', 'plain'], [['1,5', 'two\nlines', '']])).toBe(
       `${UTF8_BOM}"a;b";"say ""x""";plain\r\n1,5;"two\nlines";\r\n`,
     );
+  });
+
+  it('neutralises text that a spreadsheet would run as a formula, but keeps numbers numeric', () => {
+    const writer = new CsvWriter(csvFormat(','));
+    const header = ['=HYPERLINK("http://x","c") – Teplota (°C)', '-5 m', '+cmd|calc', '@SUM(A1)', '\tx', '\rx', 'Teplota'];
+    const content = writer.write(header, [[writer.number(-0.25, 2), writer.number(-5, 0), '-1.5', 'a-b']]);
+    const [head, row] = content.slice(1).split('\r\n');
+    expect(head).toBe(`"'=HYPERLINK(""http://x"",""c"") – Teplota (°C)";'-5 m;'+cmd|calc;'@SUM(A1);'\tx;"'\rx";Teplota`);
+    expect(row).toBe('-0,25;-5;-1.5;a-b');
   });
 
   it('formats numbers with fixed decimals, the decimal mark and no negative zero', () => {
@@ -134,12 +149,12 @@ describe('ChartCsv', () => {
     expect(csv.file(model, model.bounds).fileName).toBe('sivin_77678271-77799986_20260701T1200_20260701T1402.csv');
   });
 
-  it('uses a decimal point in English and resolution-specific labels', () => {
+  it('uses a decimal comma in English too (owner decision 2026-11-26) and resolution-specific labels', () => {
     const english = new I18n({ cs, de, en }, 'en');
     const enCsv = new ChartCsv(english, catalog, zone, new QuantityLabels(english, manifest.variables));
     const daily: ChartData = { ...DATA, window: new TimeWindow(T0, T0 + 4 * STEP, 'daily') };
     const content = enCsv.content(ChartModel.build(daily, registry.select(['temp_c', 'precip_mm'])), new ViewRange(T0, T0 + 1));
     expect(content.split('\r\n')[0]).toContain('77678271 (VUT) – Temperature (°C);77678271 (VUT) – Daily precipitation (mm)');
-    expect(content.split('\r\n')[1]).toBe('2026-07-01 12:00:00;2026-07-01T10:00:00Z;20.00;;;');
+    expect(content.split('\r\n')[1]).toBe('2026-07-01 12:00:00;2026-07-01T10:00:00Z;20,00;;;');
   });
 });

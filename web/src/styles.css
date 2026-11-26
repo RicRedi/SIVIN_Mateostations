@@ -772,6 +772,20 @@ input {
   cursor: pointer;
 }
 
+.quantity-control__note {
+  font-size: 0.8rem;
+  color: var(--ink-secondary);
+}
+
+.quantity-control__note[hidden] {
+  display: none;
+}
+
+.quantity-control__option:has(input:disabled) {
+  color: var(--ink-muted);
+  cursor: default;
+}
+
 .quantity-control__option input {
   margin: 0;
   accent-color: var(--accent);
@@ -869,6 +883,16 @@ input {
   min-width: 0;
   min-height: 0;
   padding: 0.6rem 0.75rem;
+}
+
+.chart-dialog__empty {
+  display: none;
+  margin: 1rem 0;
+  color: var(--ink-secondary);
+}
+
+.chart-dialog__chart:has(> .chart[hidden]) .chart-dialog__empty {
+  display: block;
 }
 
 .chart-dialog__chart > .chart {

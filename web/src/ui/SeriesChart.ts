@@ -60,7 +60,7 @@ export class SeriesChart implements ChartView {
   private data: ChartData | null = null;
   private model: ChartModel | null = null;
   private quantities: readonly QuantityId[] = DEFAULT_QUANTITIES;
-  /** The window whose zoom {@link zoomPan} holds; a new window resets the zoom. */
+  /** The window whose zoom {@link zoomPan} holds; another window (bounds or resolution) resets the zoom. */
   private zoomedWindow: TimeWindow | null = null;
 
   /**
@@ -144,7 +144,7 @@ export class SeriesChart implements ChartView {
     this.message.textContent = model.hasValues ? '' : this.i18n.t('noData');
     this.message.hidden = model.hasValues || data.sensors.length === 0;
     if (data.sensors.length > 0) {
-      const keep = this.zoomedWindow === data.window ? this.zoomPan.view : undefined;
+      const keep = this.zoomedWindow?.equals(data.window) === true ? this.zoomPan.view : undefined;
       this.zoomPan.configure(model.bounds, minViewSpanS(data.window.resolution), keep);
       this.zoomedWindow = data.window;
       this.markers.setEvents(model.events);
