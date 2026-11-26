@@ -131,7 +131,120 @@ an excerpt in its first lines. The saved page itself is not in the repository.
 
 ## Review
 
-Verdict: (pending)
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent of the worker; diff `origin/wp/1.3.2-download-headless...HEAD`
+(f86568e, f48183e). Probes were throwaway scripts outside the repository; the owner's saved
+page was read only with `python3 -I`; nothing connected to the portal.
+
+### Gates (run by the reviewer in the worktree)
+
+- `make lint`: ruff check clean, 311 files formatted.
+- `make type`: mypy strict, no issues in 186 source files.
+- `make cov`: 2136 passed, total 99.81 % (85 % required). Changed modules 97-100 %.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | `src/sivin/ingest/portal/table_file.py:131-140` | A device name that ends in `(VUT)` makes every table read fail | open |
+| major | `src/sivin/ingest/portal/table.py:339-354` | The repeated autumn hour is lost when the last stored row lies just before it | open |
+| major | `src/sivin/ingest/portal/sources.py:287-289`, `table.py:313-327` | If every row is malformed, the device is reported as "up to date" | open |
+| minor | `src/sivin/ingest/portal/table.py:313-316` | The newest-first order is assumed, not checked | open |
+| nit | `src/sivin/ingest/portal/table.py:390-393` | Rows are de-duplicated by their cell texts, timestamp included | open |
+| nit | `src/sivin/ingest/portal/session.py` (`_fetch`) | The fallback starts only after the export has used all its attempts | open |
+
+**1. major: a device name with `(VUT)` makes the table source fail.** Input:
+`PortalDevice("8615620 77680921 (VUT)")`. The file name becomes
+`MeteoData_8615620 77680921 (VUT) (table)_20261025_140000.csv`, and `SensorId.parse` rejects
+it. `file_name` then raises `TableReadError("... does not name a sensor ...")`, so every table
+read of that device fails. Evidence that real names look like this: in the owner's saved page
+the device's `Name` and `Title` are `8615620 77680921 (VUT)`, and the real exports are named
+`MeteoData_<that name>_<stamp>` (`MeteoData_8615620 77678271 (VUT)_20260301_223857.csv`).
+MIGRATION_PLAN §4 and the test fakes use `8615620 77678271` without the suffix, and the fake
+export adds ` (VUT)` by itself. Which name the device list (`DeviceName`) gives is therefore
+not settled. If it carries `(VUT)`, the fallback cannot work for any device. No test uses a
+device name with a suffix. Fix: use a name that parses for both spellings, for example the
+brief's `MeteoData_<name>_table_<stamp>.csv` or the label in front of the name. Otherwise make
+`SensorId`/`ExportSourceIds` accept a trailing `(label)`. Add tests for both device-name
+spellings.
+
+**2. major: data loss at the autumn clock change.** Input: the last stored row is 25.10.2026
+01:40 CEST (23:40Z), and the table has SYNTHETIC 30-min rows through the change. The cutoff
+is lowered only when the stored time itself lies in the repeated hour. Here the file starts
+directly with the four repeated-hour rows (02:10/02:40 CEST, 02:10/02:40 CET) and has no
+ordinary row before them. `PortalCsvParser` flags them `TIMESTAMP_SUSPECT` and drops them as
+"4 unresolved row(s)". The next run's cutoff is after them, so the table path never fetches
+them again. The probe also covered a stored time of 01:10 CEST, the first pass, the second
+pass, spring and the turn of the year: no loss in those cases. Fix: apply the lowered cutoff
+whenever the read window touches a repeated hour, not only when the stored time is inside it.
+Simpler: always write at least one already-stored ordinary row at or before the cutoff as an
+anchor (the store skips it as identical). Add a test that starts 20-60 min before the change.
+
+**3. major: a format change is reported as success.** Input: SYNTHETIC rows with ISO
+timestamps (`2026-11-20 23:00:00`) where the configured format is `%d.%m.%Y %H:%M:%S`. Every
+row is malformed, so the stop rule never fires. The reader pages through `max_pages` pages and
+returns `rows=()`. `TableSource.deliver` returns `None`, and the session reports the device as
+"up to date (table source)" with no failure. Only a WARNING per page shows the problem, so data
+would stop arriving silently. Fix: raise `TableReadError` when a page has rows and none of them
+parses, or when `malformed_rows > 0` and nothing was reached or kept. Add a test.
+
+**4. minor: the sort order is not checked.** The header cells of the real table are DotVVM
+sort links (`sortBinding` postbacks). If the grid is ever shown oldest first, page 1 already
+holds rows at or before the stored time. The stop rule then fires and the rows are filtered
+away, and the device is again reported as "up to date". Fix: check that the parsed timestamps
+of a page do not increase, and raise `TableReadError` if they do.
+
+**5. nit: de-duplication by cell texts.** `_RowCollector` treats two rows as equal when all
+their texts are equal, timestamp included. In the repeated autumn hour, 02:10 CEST and
+02:10 CET with identical values would be merged into one row. That is unlikely with four
+decimals, but it is not impossible at night (rain 0, same counter and battery). Fix: compare
+consecutive page boundaries only, or count duplicates per page.
+
+**6. nit: when the fallback starts.** With `[export, table]` and an export that has been broken
+since October, each device first spends `attempts_per_device` (2) × `download_wait_s` (120 s)
+on the export before the table is read. That is about 16 min for 4 devices, within the
+pipeline's 45 min. This is an owner decision, not a defect: `[table, export]` is possible
+while the export is broken.
+
+### Checked without findings
+
+- Brief tasks: the incremental stop, full history at 5000, the page-size change, the source
+  modes, the combined failure reason and the reuse of the diagnostics are all implemented and
+  tested. `StoreLastTimestamps` is read-only and reuses `MeasurementStore.time_range`. Storage
+  is unchanged and append-only.
+- Stop rule probes (SYNTHETIC): store newer than the table → 1 page, no rows. Store older than
+  the whole table → every page, all rows. Equal timestamp with a different value → dropped
+  (append-only). A row inserted at the top while paging → no duplicates, no loss.
+- The written file matches the real export byte for byte in the title and header lines
+  (compared with `tests/fixtures/exports/real/…csv`). It uses CRLF, the `;` trailer and UTF-8
+  without a BOM.
+- Locators against the saved page: the card heading `<b>Historie meteorologických dat</b>`
+  occurs once, and the events card is a separate `.card`. `fa-step-forward` is a `<button>`
+  with `dotvvm-enable`, so it is `disabled` on the last page and `is_enabled()` works. The
+  paging text matches `paging_text_pattern`. In the saved page, "shown" is
+  min(total, page size), not the row count of the page, but it is not used for decisions.
+- The fixture `tests/ingest/portal/data/meteo_table_excerpt.html` (20 kB) has no script,
+  `onclick`, input, viewmodel, token, URL or user field. The only matches are in the
+  explanatory comment. The saved page and `vm.json` are not in the repository.
+- Credentials: the new code logs device names and times only.
+- Scope: changes stay in the brief's files plus `app/factory.py` (allowed in round 2).
+  `driver.py`, `.github/**` and `storage/` are untouched, and `download_wait_s` is unchanged.
+  The WP-1.3.2 tests were switched to export-only settings with unchanged assertions (one log
+  text). `open_meteo_tab` is the same sequence of steps as before. README is updated.
+
+### Deviations
+
+- `(table)` label instead of `_table_`, list-form `sources`, `factory.py` wiring and
+  `prefer_newest`: these are orchestrator decisions, and the label is behind finding 1.
+- DST cutoff of 2 h: correct when the stored time lies in the repeated hour, but incomplete
+  (finding 2).
+- Unverified live behaviour (page-size button, wait times, `JS_READ_TABLE`): declared openly
+  in the hand-off note and acceptable for a fallback, but it should be checked on the first
+  real run.
+
+### Out of scope (pre-existing, not this WP)
+
+- `diagnostics.py` notes that a dead chromedriver raises urllib3 `MaxRetryError`, which is
+  not in `session.DEVICE_ERRORS` or in `FetchService`'s catch. With a dead browser the run
+  stops before the table fallback is tried. Worth a look in WP-1.3.x.
