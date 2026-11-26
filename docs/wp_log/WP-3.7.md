@@ -155,7 +155,112 @@ In `/home/user/wt/wp-3.7/web` (Node 22):
 
 ## Review
 
-Verdict: _pending_
+Verdict: CHANGES_REQUESTED (round 1)
+
+Reviewer: independent reviewer agent, 2026-11-26. Diff `origin/main...HEAD` (ff0f2e0, 9999b94).
+
+### Gates (run by the reviewer in `web/`, Node 22)
+
+- `npm run lint` → clean.
+- `npm run typecheck` → clean.
+- `npm test` → 31 files, 307 tests passed; coverage of `src/**` lines 99.58 %, statements
+  99.56 %, branches 93.75 %, functions 99.46 % (matches the hand-off note). `SeriesChart.ts`
+  stays excluded from coverage (pre-existing exclusion), although it gained the zoom-keeping
+  logic of this WP.
+- `npm run build` → built (JS 328.56 kB, gzip 106.34 kB).
+
+### What the reviewer verified independently
+
+Browser checks with `vite preview` + Playwright (Chromium 1243, headless, tiles blocked); scripts
+outside the repository; synthetic demo data only.
+
+- **Wheel zoom around the cursor:** 5 notches at 25 % of the plot width: span 8 d → 90.7 h, the
+  anchor time stayed at 25.3 % of the new view (rounding of the minute-resolution file name).
+  Zoom out never leaves the loaded window.
+- **Drag pan:** 100 px drag → shift −31.47 h vs. expected −31.45 h, span unchanged, uPlot's
+  select box stays at width 0 (no conflict). **Shift + drag** zooms to the selection (expected
+  span 31.46 h, got 31.45 h). **Double-click** resets to the window and disables "Celé okno".
+- **Touch** (CDP `Input.dispatchTouchEvent`, 390 px, `hasTouch`): pinch 80 → 240 px gave span
+  ratio exactly 1/3; a 100 px one-finger swipe panned −21.38 h vs. expected −21.37 h.
+- **Dialog:** `role="dialog"`, `aria-modal="true"`, focus on ✕ on open; header/main/status are
+  `inert`; 60 × Tab stays inside; the sensor picker, time window, resolution and quantity
+  control are inside; toggling dew point + VPD in the dialog changes the hash (`q=…`), the CSV
+  and, after closing, the panel check boxes (one store). Escape closes, focus returns to ⤢, no
+  `inert` left, the panel order of sections is restored, the zoom is kept across open and close.
+  At 390 px the dialog is full screen (390 × 844), plot 374 × 653, controls collapsed, no
+  horizontal scroll (scrollWidth 390) before and after. Removing the last sensor inside the
+  dialog keeps it open with only the picker (acceptable, see nit).
+- **CSV:** BOM `EF BB BF`, `;`, CRLF, decimal comma (cs), both time columns, header with units;
+  rows equal the zoomed view (686 rows for 8 days → 294 after zoom, first/last rows inside the
+  view), columns = 2 + sensors × quantities (42 for 8 sensors × 5 quantities incl. the 0/1 leaf
+  wetness). DST end 2026-10-25: local times 02:30, 02:00, 02:30 are disambiguated by the UTC
+  column; year boundary 2026-12-31T23:30Z → local 2027-01-01 00:30 and file name
+  `…_20261025T0230_20270101T0200.csv` correct.
+- **Formulas** against `docs/indices/dew_point.md` / `vpd.md`: constants identical
+  (17.625 / 243.04 °C; 0.6108 / 17.27 / 237.3 °C); `RH <= 0` → no value as in Python. Hand
+  check of an exported demo row (19.9 °C / 67.9 %): dew point 13.796 → `13,80`, VPD 0.746 →
+  `0,746` — match. Absolute humidity ρ_v = e_a/(R_v·T): 20 °C/50 % = 8.64 g/m³, 30 °C/100 % =
+  30.33 g/m³ (standard tables ≈ 30.4), plausible; the formula is the standard ideal-gas form.
+  R_v = 461.5 J kg⁻¹ K⁻¹ is the usual value; the Wallace & Hobbs page/value could **not** be
+  verified by the reviewer either (no access in the sandbox).
+- **QC masking:** derived quantities use the masked temperature/humidity (`combineSeries`), the
+  off-site blanking is applied per sensor after derivation (`withoutBands`); precipitation and
+  battery use mask 288 as documented (owner decision Q9).
+- **Performance** (8 sensors × 29 days raw, dialog 1280 px, wheel event → second animation
+  frame, headless software rendering in this sandbox): median 62 ms (temp + RH) and 112 ms
+  (p90 144 ms) with five quantities. Slower than the worker's numbers (machine variance); wheel
+  events are coalesced per frame, so it stays usable, but with several quantities it is not
+  60 fps here.
+- **Security / scope:** no credentials, tokens or portal content in the diff; every changed file
+  is in the Files scope (`web/src/**`, `web/tests/**`, `docs/web.md`, README, this note,
+  `docs/wp_log/img/WP-3.7-*.png`); no new npm dependency. README *What it does* updated.
+
+### Findings
 
 | Severity | File:line | Finding | Status |
 |---|---|---|---|
+| major | web/src/app/CsvWriter.ts:51 | CSV formula injection: header fields starting with `=`, `+`, `-`, `@` (sensor label first) are written as is; quoting does not stop Excel from evaluating them. | open |
+| minor | web/src/domain/psychrometry.ts:24, docs/web.md:364 | Citation "Wallace & Hobbs 2006, 461.51" is stated as fact in code and docs but is from memory (hand-off note says so); not marked as unverified. | open |
+| minor | web/src/ui/ZoomPanPlugin.ts:193 | Wheel over the small chart always `preventDefault`s, so scrolling the (scrollable) side panel with the wheel stops whenever the cursor passes over the chart, even when fully zoomed out and wheeling outwards. | open |
+| minor | web/src/domain/Resampler.ts:89 | Hourly precipitation sums: a sample's "rain since the previous sample" is binned by its own time stamp, and a partial hour (masked/missing samples) gives a partial sum indistinguishable from a complete one (daily data have `precip_n_samples` for this). | open |
+| minor | docs/web.md (performance), hand-off note | Performance with several quantities measured at 112 ms median per wheel step here (vs. 54 ms in the note); the claim "smooth" holds only for temp + RH in this sandbox. | open |
+| nit | web/src/domain/dailyColumnSeries.ts:3-4 | `export type OptionalDailyColumn` sits between the import statements. | open |
+| nit | web/src/ui/SeriesChart.ts:147 | Zoom keeping depends on `TimeWindow` object identity; untested because `SeriesChart.ts` is excluded from coverage. | open |
+| nit | web/src/ui/ChartDialog.ts | After removing the last sensor inside the dialog the chart area is hidden and the dialog shows only the picker; acceptable, but could show the "select a sensor" hint. | open |
+
+Details (input → wrong behaviour → suggested fix):
+
+1. **major, CSV formula injection.** A sensor label such as `=HYPERLINK("http://x","c")` or
+   `+cmd|calc` (probe with a stub catalog) is exported as
+   `"=HYPERLINK(""http://x"",""c"") – Teplota (°C)"` / `+cmd|calc – Teplota (°C)`; Excel
+   interprets such cells as formulas (DDE / hyperlink). Labels come from the registry, so the
+   risk is low, but the export is meant to be opened in Excel by the public and the fix is cheap.
+   Fix: in `CsvWriter.field` prefix text fields starting with `=`, `+`, `-`, `@`, tab or CR with
+   `'` (OWASP CSV injection), applied to text cells only (not to numbers written by `number()`,
+   so negative values stay numeric); add a test.
+2. **minor, unverified citation.** Mark it as unverified in the code comment and `docs/web.md`
+   (e.g. "[citation not verified]") until the owner confirms the source (open question 3), per
+   CLAUDE.md "never invent citations".
+3. **minor, wheel captures page scroll.** Wheel down over a fully zoomed-out chart → panel does
+   not scroll. Fix: do not `preventDefault` when the view already covers the window and the
+   wheel zooms out (let the event scroll the panel), or document the behaviour.
+4. **minor, hourly precipitation.** Either bin a sample into the hour of `t − ε` (rain fell
+   before its time stamp) or document the up-to-one-sample shift; consider documenting that
+   hourly sums ignore coverage.
+5. **minor, performance.** Record the reviewer's numbers or note the dependence on the number
+   of quantities in `docs/web.md`; no code change required.
+
+### Deviations assessment
+
+- Sensor picker in the dialog: reasonable reading of "which curves are shown"; same component,
+  moved — accepted.
+- Derived values from hourly/daily means: documented, honest; owner question 2 is the right
+  place — accepted.
+- Precipitation/battery with mask 288: consistent with the pipeline and Q9 — accepted.
+- Precipitation/battery drawn here instead of WP-3.4: the brief asked for it — accepted.
+- `q=` in the hash, markers hidden/clipped outside the zoom, tick decimals: small, needed, in
+  scope — accepted.
+- Zoom hint always visible: harmless — accepted.
+
+Re-review after round 1 needs only finding 1 fixed (and ideally 2); the rest may go to *Out of
+scope* if the worker prefers.
