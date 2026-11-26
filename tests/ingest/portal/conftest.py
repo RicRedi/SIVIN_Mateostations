@@ -23,7 +23,12 @@ from sivin.ingest.portal.credentials import PortalCredentials, Secret
 from sivin.ingest.portal.diagnostics import JS_READY_STATE
 from sivin.ingest.portal.driver import WebDriverFactory
 from sivin.ingest.portal.page import JS_CLICK, xpath_literal
-from sivin.ingest.portal.settings import TEXT_PLACEHOLDER, PortalSettings, PortalTimeouts
+from sivin.ingest.portal.settings import (
+    TEXT_PLACEHOLDER,
+    PortalSettings,
+    PortalSource,
+    PortalTimeouts,
+)
 
 FIXTURES = Path(__file__).parent / "data"
 
@@ -343,11 +348,16 @@ def viewmodel_json() -> str:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> PortalSettings:
-    """Settings with short waits and an absolute download directory."""
+    """Settings with short waits, an absolute download directory and the export tried first.
+
+    The fake portal of these tests models the export; the order is explicit because the default
+    became ``[table, export]`` (owner decision 2026-11-26).
+    """
     download_dir = tmp_path / "downloads"
     download_dir.mkdir()
     return PortalSettings(
         download_dir=download_dir,
+        sources=(PortalSource.EXPORT, PortalSource.TABLE),
         timeouts=PortalTimeouts(
             element_wait_s=0.2,
             download_wait_s=3.0,

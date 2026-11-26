@@ -327,7 +327,7 @@ class TestSettings:
     def test_defaults(self) -> None:
         settings = PortalSettings()
 
-        assert settings.sources == (PortalSource.EXPORT, PortalSource.TABLE)
+        assert settings.sources == (PortalSource.TABLE, PortalSource.EXPORT)
         assert settings.table.incremental_page_size == 500
         assert settings.table.full_history_page_size == 5000
         assert next(iter(settings.table.columns)) == "Datum a čas"

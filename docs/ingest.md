@@ -170,7 +170,7 @@ values, except `timeouts.download_wait_s` (120 s instead of 30 s).
 | `chrome_arguments` | `["--window-size=1920,1080"]` | flags | Extra Chrome arguments; add `--no-sandbox` only when running as root in a container. |
 | `partial_download_suffixes` | `[".crdownload", ".tmp"]` | suffixes | Unfinished downloads. |
 | `ignored_download_prefixes` | `["."]` | prefixes | Hidden temporary files. |
-| `sources` | `[export, table]` | list | Sources tried per device, in order: `[export, table]` (export, the table as the fallback), `[table]` (table only), `[export]` (export only). |
+| `sources` | `[table, export]` | list | Sources tried per device, in order: `[table, export]` (table, the export as the fallback; default since 2026-11-26), `[export, table]` (the reverse), `[table]` (table only), `[export]` (export only). |
 | `table.*` | see [Fallback: the device table](#fallback-the-device-table) | | Locators, page sizes and waits of the table reader. |
 
 ### Environment variables
@@ -304,8 +304,12 @@ known.
 Since October 2026 the Excel export has not produced a file in the daily runs (WP-1.3.1
 diagnostics). The device page shows the same data in the table *Historie meteorologických
 dat* of the tab *Meteorologická data*, so the table is the **fallback source** (WP-1.10, owner
-decision 2026-11-26): with the default `sources: [export, table]`, a device whose export failed
-after its attempts is read from the table instead. The locators below come from a page the owner
+decision 2026-11-26): with `sources: [export, table]`, a device whose export failed after its
+attempts is read from the table instead. The first live run (2026-11-26) read the
+whole history of all four sensors from the table while the export still timed out, so the
+default is now **`sources: [table, export]`** (owner decision 2026-11-26): the table is read
+first and the export is tried only if the table fails. This saves the export's waits (about
+16 min per run with four sensors). The locators below come from a page the owner
 saved in a browser (a trimmed excerpt without anything account-related is
 `tests/ingest/portal/data/meteo_table_excerpt.html`); **they have not been tried in a live
 browser.**

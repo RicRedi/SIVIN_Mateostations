@@ -11,9 +11,9 @@ Research Center, Brno. GitHub: [RicRedi](https://github.com/RicRedi)
 
 ## How it works
 
-The data provider (`lemon.e-service.cz`) has no API, so the measurements are downloaded as
-Excel/CSV exports with an automated browser; when the export of a sensor fails, its data are read
-from the table on the device page instead. There is no server and no database:
+The data provider (`lemon.e-service.cz`) has no API, so an automated browser reads the
+measurements from the data table on each sensor's page (the Excel export of the portal, tried as
+the fallback, has produced no file in the live runs so far). There is no server and no database:
 
 ```
 provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store (CSV on branch `data`)
@@ -31,10 +31,11 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
 ## What it does
 
 - **Ingest:** Excel and CSV exports of the provider, validated (schema, timestamps, local time
-  Europe/Prague converted to UTC); rejected files go to quarantine with a report. Fallback when
-  an export fails: the device page's data table, written as a file in the export's CSV layout
-  (`ingest.portal.sources`, [docs/ingest.md](docs/ingest.md#fallback-the-device-table); not yet
-  tried against the live portal). Only rows newer than the last stored measurement are read.
+  Europe/Prague converted to UTC); rejected files go to quarantine with a report. Source: the
+  device page's data table, written as a file in the export's CSV layout, with the Excel export
+  as the fallback (`ingest.portal.sources: [table, export]`,
+  [docs/ingest.md](docs/ingest.md#fallback-the-device-table)). Only rows newer than the last
+  stored measurement are read.
 - **Quality control:** missing values, range, spike, step, stuck sensor, sampling, precipitation
   and battery checks; a manually kept off-site log (`sensors/offsite_log.yaml`) marks periods
   when a sensor was not in the vineyard. A row missing temperature or humidity is invalid as a whole.

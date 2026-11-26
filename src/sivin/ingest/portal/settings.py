@@ -64,8 +64,9 @@ class PortalSource(StrEnum):
     """Read the table *Historie meteorologických dat* of the device page (WP-1.10)."""
 
 
-DEFAULT_SOURCES: Final = (PortalSource.EXPORT, PortalSource.TABLE)
-"""Export first, the table as the fallback (owner decision 2026-11-26)."""
+DEFAULT_SOURCES: Final = (PortalSource.TABLE, PortalSource.EXPORT)
+"""Table first, the export as the fallback: the export has produced no file in any live run
+(owner decision 2026-11-26, after the first run read all four sensors from the table)."""
 
 
 class _Settings(BaseModel):
@@ -467,8 +468,8 @@ class PortalSettings(_Settings):
         min_length=1,
         description=(
             "How a device's data are fetched, tried in this order until one succeeds (list of "
-            "'export', 'table'): [export, table] = export, the table as the fallback; [table] "
-            "= table only; [export] = export only."
+            "'export', 'table'): [table, export] = table, the export as the fallback; [export, "
+            "table] = the reverse; [table] = table only; [export] = export only."
         ),
     )
     table: PortalTableSettings = Field(
