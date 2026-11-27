@@ -30,9 +30,12 @@ from sivin.storage.store import MeasurementStore
 
 logger = logging.getLogger(__name__)
 
-SITE_OUTPUT_FORMAT: Final = 1
+SITE_OUTPUT_FORMAT: Final = 2
 """Version of the files the builder writes; raise it when the output of the same data changes,
-so the next build is a full one."""
+so the next build is a full one (it is part of the shared fingerprint, so a sensor that fails in
+that build keeps the files of its last successful build).
+
+2 (WP-3.4): index entries of the risk indices carry the optional ``daily`` block."""
 
 FINGERPRINT_EXCLUDED_SECTIONS: Final = frozenset({"paths", "ingest"})
 """Configuration sections that do not change the site data (locations, portal, parsers)."""

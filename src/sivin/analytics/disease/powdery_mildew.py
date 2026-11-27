@@ -10,14 +10,15 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from sivin.analytics.base import IndexContext, IndexResult, index_registry
+from sivin.analytics.base import DailyLevels, IndexContext, IndexResult, index_registry
 from sivin.analytics.disease.gubler_thomas import (
     DayAssessment,
     GublerThomasModel,
     GublerThomasParams,
     GublerThomasState,
+    RiskClass,
 )
-from sivin.analytics.disease.result import DiseaseIndex
+from sivin.analytics.disease.result import DiseaseIndex, daily_levels_series
 from sivin.analytics.disease.sampling import RunFinder, SampleTiming
 from sivin.core.schema import Column
 from sivin.core.timeutil import LocalTimeConverter
@@ -120,7 +121,9 @@ class PowderyMildewGublerThomas(DiseaseIndex[GublerThomasParams]):
     Result: ``value`` is the season maximum of the index and ``classification`` its risk
     class; ``daily`` is the index at the end of each day from the first to the last day with
     samples in the period (the model waits for onset before the first sample); ``details``
-    holds the onset date, the current index and its class (``current_class``) and day counts.
+    holds the onset date, the current index and its class (``current_class``) and day counts;
+    ``daily_levels`` is the risk class of each day's index, ``None`` on a day whose temperature
+    coverage is below ``ctx.min_daily_coverage`` (its index is only carried over).
     ``coverage``/``complete`` follow ``ClimateIndex._season_days`` (temperature coverage).
     """
 
@@ -164,7 +167,27 @@ class PowderyMildewGublerThomas(DiseaseIndex[GublerThomasParams]):
                 **_details(states, assessments),
                 "current_class": str(model.classify(current.index_points)),
             },
+            daily_levels=self._daily_levels(ctx, model, states, days),
         )
+
+    def _daily_levels(
+        self,
+        ctx: IndexContext,
+        model: GublerThomasModel,
+        states: Sequence[GublerThomasState],
+        days: Sequence[date],
+    ) -> DailyLevels:
+        """Risk class of each day's index; ``None`` on days without enough temperature data."""
+        coverage = ctx.daily.frame["temp_coverage"]
+        labels = [
+            str(model.classify(state.index_points))
+            if float(coverage.get(day, 0.0)) >= ctx.min_daily_coverage
+            else None
+            for day, state in zip(days, states, strict=True)
+        ]
+        first, last = self.params.season.to_season().dates(ctx.year)
+        levels = tuple(str(risk) for risk in RiskClass)
+        return DailyLevels(levels, first, last, daily_levels_series(days, labels))
 
 
 def _details(

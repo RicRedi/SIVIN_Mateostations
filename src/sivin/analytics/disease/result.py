@@ -9,7 +9,13 @@ from typing import ClassVar, Final
 import numpy as np
 import pandas as pd
 
-from sivin.analytics.base import ClimateIndex, IndexContext, IndexParams, IndexResult
+from sivin.analytics.base import (
+    ClimateIndex,
+    DailyLevels,
+    IndexContext,
+    IndexParams,
+    IndexResult,
+)
 from sivin.core.season import Season
 from sivin.core.timeutil import LocalTimeConverter
 
@@ -73,6 +79,7 @@ class DiseaseIndex[P: IndexParams](ClimateIndex[P]):
         classification: str | None = None,
         daily: pd.Series | None = None,
         details: dict[str, float | int | str] | None = None,
+        daily_levels: DailyLevels | None = None,
     ) -> IndexResult:
         """Build the result of this index for ``ctx`` (``complete`` is ``False`` by default)."""
         return IndexResult(
@@ -87,4 +94,25 @@ class DiseaseIndex[P: IndexParams](ClimateIndex[P]):
             daily=daily,
             details=details or {},
             estimated=self.estimated,
+            daily_levels=daily_levels,
         )
+
+
+def daily_levels_series(days: Sequence[date], labels: Sequence[str | None]) -> pd.Series:
+    """Build the :attr:`DailyLevels.by_date` series (object dtype, indexed by local date).
+
+    Parameters
+    ----------
+    days : sequence of datetime.date
+        Increasing local dates.
+    labels : sequence of str or None
+        Level per day; ``None`` for a day without enough data.
+
+    Returns
+    -------
+    pandas.Series
+        The labels indexed by date.
+    """
+    return pd.Series(
+        list(labels), index=pd.Index(list(days), dtype=object, name=DATE_INDEX_NAME), dtype=object
+    )

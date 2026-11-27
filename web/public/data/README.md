@@ -11,7 +11,9 @@ real; their municipality, track and variety are null. The other 16 sensors (ids 
 and all varieties are **fictional**; they exist to exercise the sensor picker and marker
 clustering at a larger network size and have data only for September 2026. Placement dates,
 events and index values are placeholders. The placeholder indices use simplified formulas
-(Huglin without the latitude coefficient) and are marked `complete: false`.
+(Huglin without the latitude coefficient, BEDD as a scaled GDD sum, daily risk levels from
+daily values instead of the hourly models, a fixed placeholder wetness value) and are marked
+`complete: false`; the phenology models have no estimate (not configured).
 
 The layout follows the static site data contract, MIGRATION_PLAN.md §2.6
 (`schema_version: 1`). Regenerate with `npm run fixture` in `web/`.

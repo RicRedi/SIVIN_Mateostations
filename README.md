@@ -50,14 +50,21 @@ provider portal ─► sivin fetch ─► ingest (parse, validate) ─► store 
   zoomed with the mouse wheel and panned by dragging (pinch and swipe on touch screens), show
   derived quantities on demand (dew point, VPD, absolute humidity, estimated leaf wetness) as
   well as precipitation and battery voltage, and export exactly what it shows as CSV for Excel.
+- **Indicators on the map portal:** for the selected sensors and season, season index cards side
+  by side (GDD/Winkler, Huglin, BEDD, GST, Cool Night Index, orientational phenology dates) with
+  unit, class, coverage and a "how it is computed" link to `docs/indices`; a daily risk strip
+  in traffic-light colours for grey mould, powdery mildew and frost (grey = no data); records
+  and extremes (season minimum and maximum, daily means, daily precipitation, last spring and
+  first autumn frost) from complete days only.
 
-Not yet done (see [MIGRATION_PLAN.md](MIGRATION_PLAN.md) §4): indices on the web portal
-(WP-3.4), admin mode for editing the registry and the off-site log on the web (WP-3.3),
+Not yet done (see [MIGRATION_PLAN.md](MIGRATION_PLAN.md) §4): season comparison (when there are
+more seasons of data), admin mode for editing the registry and the off-site log on the web (WP-3.3),
 publication plots and animations (WP-5.1) and removal of the legacy scripts (WP-5.2).
 
 ## Climate indices
 
-Computed per sensor and season from the quality-checked data (`sivin indices`). Each index has a
+Computed per sensor and season from the quality-checked data (`sivin indices`) and shown in the
+"Ukazatele" section of the map portal ([docs/web.md](docs/web.md#indicators-wp-34)). Each index has a
 page with its formula, period, interpretation, limitations and literature; the overview with a
 short explanation of every index is [docs/indices/README.md](docs/indices/README.md).
 

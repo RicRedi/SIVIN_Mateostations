@@ -170,6 +170,14 @@ def test_index_on_hand_built_hourly_days(make_context: ContextFactory) -> None:
         "onset_date": "2026-06-03",
         "current_class": "high",  # current index 70 >= 60
     }
+    levels = result.daily_levels
+    assert levels is not None
+    assert levels.levels == ("low", "moderate", "high")
+    assert (levels.period_start, levels.period_end) == (date(2026, 6, 1), date(2026, 6, 30))
+    # Class of each day's index; Jun 6 and Jun 7 have temperature coverage < 0.9: no level.
+    assert levels.by_date.tolist() == [
+        "low", "low", "high", "high", "high", None, None, "high", "high", "high",
+    ]  # fmt: skip
 
 
 def test_legacy_sampling_needs_twelve_samples_for_six_hours(make_context: ContextFactory) -> None:

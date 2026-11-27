@@ -52,6 +52,11 @@ export interface Manifest {
    * staleness against the current time with it, so a stopped pipeline shows up as stale.
    */
   readonly stale_after_s?: number;
+  /**
+   * Optional (WP-3.4): share (0-1) of a day covered by valid samples for the day to be complete
+   * (`analytics.min_daily_coverage`); the web uses only complete days for records.
+   */
+  readonly min_daily_coverage?: number;
   readonly variables: readonly VariableSpec[];
   readonly sensors: Readonly<Record<string, ManifestSensor>>;
   readonly seasons: readonly number[];
@@ -214,6 +219,23 @@ export interface EventsFile {
 }
 
 /**
+ * Optional daily risk block of an index entry (WP-3.4), for the indices that define a level per
+ * day (botrytis, powdery mildew, frost). `levels` lists the possible levels from the lowest to
+ * the highest risk; `start`..`end` is the index period (local dates, inclusive). The columns
+ * `date`, `value` (daily value in the unit of the index) and `level` have equal length; a day
+ * without enough data has `level` and `value` `null`, a day of the period that is not listed has
+ * no data either.
+ */
+export interface IndexDaily {
+  readonly levels: readonly string[];
+  readonly start: string;
+  readonly end: string;
+  readonly date: readonly string[];
+  readonly value: readonly (number | null)[];
+  readonly level: readonly (string | null)[];
+}
+
+/**
  * One index result in `indices/<season>.json`. Optional (WP-3.2): `estimated` is true when the
  * index relies on a proxy, e.g. leaf wetness estimated from humidity; `status` is `"ok"` or
  * `"no_data"` (coverage 0: `value` and `class` are `null`), `detail` explains it.
@@ -227,6 +249,7 @@ export interface IndexValue {
   readonly estimated?: boolean;
   readonly status?: string;
   readonly detail?: string;
+  readonly daily?: IndexDaily;
 }
 
 /** `indices/<season>.json`: sensor id → index id → result. */

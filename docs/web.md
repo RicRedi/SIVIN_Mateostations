@@ -38,15 +38,18 @@ main.ts  (composition root: builds every object, injects collaborators through c
   ├─ data/      DataClient ── fetch + cache + validate ──► contract/ (types + validators)
   ├─ domain/    TimeSeries, RawSeries, Resampler, QcMask, TimeZone,
   │             TimeWindow, WindowSpec, TimeWindowFactory, ResolutionPolicy, alignSeries,
-  │             psychrometry, derivedSeries, quantities, ViewRange
+  │             psychrometry, derivedSeries, quantities, ViewRange,
+  │             isoDates, RiskStrip, SensorRecords
   ├─ app/       SensorCatalog, SensorGrouping, SensorQuery,
-  │             ChartDataLoader, ChartPresenter, ChartQuantities, CsvWriter   (no DOM)
+  │             ChartDataLoader, ChartPresenter, ChartQuantities, CsvWriter,
+  │             AnalyticsCatalog, AnalyticsLoader, AnalyticsPresenter, IndexDocs   (no DOM)
   ├─ state/     Store<T>, AppState, GroupSelection, QuantitySelection, HashStateCodec (no DOM)
-  ├─ i18n/      I18n, LanguagePreference, cs/de/en dictionaries
+  ├─ i18n/      I18n, LanguagePreference, cs/de/en dictionaries, analyticsTerms
   └─ ui/        App, HeaderView, MapView, ClusterIcon, SensorPanel, TimeWindowControl,
                 SeriesChart, ChartModel, ZoomPanPlugin, WetnessBands, EventMarkers,
                 ChartToolbar, ChartDialog, QuantityControl, QuantityLabels, ChartCsv,
-                FileDownload, SensorColors, HashSync, palette, dom
+                FileDownload, SensorColors, HashSync, palette, dom,
+                AnalyticsSection, IndexCardsView, RiskStripView, RecordsView, IndexFormat
                 picker/  SensorPicker, PickerTree, SensorChips
 ```
 
@@ -103,6 +106,12 @@ globals or singletons; `main.ts` is the only place that touches `window`, `fetch
 | `ui/HeaderView` | Title, "demo data" badge, language switch. |
 | `ui/App` | Coordinates store and views: user actions update the store, changes re-render views and reload the chart. |
 | `ui/HashSync` | Two-way binding between store and `location.hash` (`replaceState`, no history spam). |
+| `app/AnalyticsCatalog` | Which manifest indices appear as season cards (`heat`, `ripening`, `phenology`) and as daily risk strips, in display order (`SEASON_CARD_INDICES`, `RISK_STRIP_INDICES`); an index the manifest does not list is not shown. |
+| `app/AnalyticsLoader`, `AnalyticsPresenter` | Load `indices/<season>.json` once and `daily.json` per selected sensor (`Promise.allSettled`: a failing file degrades only its part); show "loading", drop superseded responses. |
+| `app/IndexDocs` | "Jak se počítá" links: the manifest's `doc` path under one base URL (`DOCS_BASE_URL` in `main.ts`, overridable with `VITE_DOCS_BASE_URL`). |
+| `domain/isoDates`, `RiskStrip`, `SensorRecords` | Pure functions of the indicators: calendar arithmetic on `YYYY-MM-DD`; the strip of one index and sensor over its period (tone per level rank, grey days, counts); records and extremes from complete days (`RecordsCalculator`). |
+| `i18n/analyticsTerms` | Labels of the class and daily-level ids per index and language (`AnalyticsTerms`). |
+| `ui/AnalyticsSection` | The "Ukazatele" section: season selector, loads only when the sensors or season change, redraws on a language change; contains `IndexCardsView`, `RiskStripView`, `RecordsView` (formatting by `IndexFormat`). |
 
 ### Sensor picker
 
@@ -264,7 +273,8 @@ need an integer `t_end` ≥ `t`, are drawn like a point event at `t` (dashed lin
 "Möglicher nicht eingetragener Zeitraum außerhalb des Weinbergs" / "Possible unlogged off-site
 period", then "<from> – <to>"), and **hide no data**. An event of any **other type is skipped
 with a console warning** — the file is not rejected — so a pipeline that publishes a new kind
-never breaks the chart. Bigger presentation work (e.g. a band for `unlogged_off_site`) is WP-3.4.
+never breaks the chart. Bigger presentation work (e.g. a band for `unlogged_off_site`) was
+planned for WP-3.4 but is not in its approved scope; it remains open.
 
 `SeriesChart` draws every period that overlaps the window as a translucent grey band across the
 plotting area (uPlot `drawClear` hook, under grid and lines; an open period runs to the window
@@ -431,6 +441,66 @@ at the loaded resolution, for the selected sensors and shown quantities, derived
   is prefixed with `'`, so Excel shows it as text instead of running it; plain numbers such as
   `-0,25` stay numbers.
 
+## Indicators (WP-3.4)
+
+The "Ukazatele" section below the chart shows, for the selected sensors (up to 8) and a season
+(selector with the manifest's seasons, the latest by default; independent of the chart's time
+window), three parts. Screenshots on the **synthetic** demo data (placeholder values, not
+measurements): `docs/wp_log/img/WP-3.4-{cards,risk,records}-{desktop,mobile}.png`
+(`node scripts/screenshot-analytics.mjs` with `npm run preview` running).
+
+**Season index cards** — a comparison table, one row per index, one column per sensor (it
+scrolls sideways inside its box on a phone, the page does not): GDD/Winkler, Huglin, BEDD, GST,
+Cool Night Index, then budburst, GFV and GSR marked **orientační** (orientational; the day of
+the year is shown as a date of the season). Each cell: value with unit (decimals by unit), the
+class only when the pipeline published one (it does so only for a complete season), otherwise
+"neúplná data – bez třídy" for an incomplete heat or ripening index, the coverage in %, and
+"odhad" for an index based on a proxy. `status: no_data` shows "bez dat"; a sensor missing from
+the file "v sezóně bez dat"; a phenology model without a date "bez odhadu" (not configured or
+stage not reached). Each row links "Jak se počítá" to `docs/indices/<id>.md` on GitHub. The
+flowering date of GFV is not shown (the site publishes only the véraison value); the GFV row
+and value are labelled "zaměkání" (véraison).
+
+**Daily risk strip** — per risk index (grey mould / Broome, powdery mildew / Gubler-Thomas,
+frost) and sensor, one cell per day of the index period from the optional `daily` block of
+`indices/<season>.json` ([site.md](site.md#indicesseasonjson)). Colour by the level's rank:
+lowest **green** `#3d9a50`, highest of three or more **red** `#7a1b1b`, others **amber**
+`#a5550a`; a day without data — not listed or `level: null` — is light **grey** `#f0efea`
+(striped), never green. The tones also differ in **lightness**, so they stay apart in
+greyscale and for red-green colour blindness: green 3.1:1 against the grey and 3.5:1 against
+white, amber 1.5:1 darker than green, red 2.0:1 darker than amber. A raised day also has a
+black **tick above the strip** (2 px elevated, 4 px high), visible on a 2 px wide day at
+390 px. Colour is not the only cue: below each strip a text summary (days per level, last day with data), which is also
+the strip's accessible name (`role="img"`); every day has a tooltip (date, level, daily value);
+a legend lists the levels; month ticks mark the time axis. "Pásma a vstupy" explains the bands
+and inputs of the index (texts from `docs/indices/*`), the grey rule, and for an index marked
+`estimated` (Broome: wetness from RH) that its input is an estimate ("odhad"). Without bands
+configured the grey-mould strip has only "bez ovlhčení" (green) and "ovlhčení (odhad)"
+(amber): the literature gives no class limits. The strip is not aligned under the chart's
+time axis (the chart's window and the index period differ; not simple enough).
+
+**Records and extremes** — per sensor, for the season (calendar year) and for all its data,
+computed in the browser from `daily.json` (`RecordsCalculator`): lowest daily minimum, highest
+daily maximum, highest and lowest daily mean, highest daily precipitation sum (each with its
+date, the earliest on ties), last spring frost (last day with `T_min ≤ 0 °C` from Jan 1 to
+Jun 30) and first autumn frost (first such day from Jul 1 to Dec 31; season only). Only
+**complete days** count for temperatures — coverage ≥ the manifest's `min_daily_coverage`
+(0.9 when absent). Per sensor a note names the **period** and how many of its days were
+complete, with the first and last of them ("Sezóna 2026: 1. 1. 2026 – 31. 12. 2026: 121 úplných
+dní z 365, první 1. 6. 2026, poslední 30. 9. 2026"; all data: first to last day of `daily.json`),
+so a sensor with a partial season is visible as such. The daily precipitation sum does not
+follow the temperature coverage (WP-1.9): a day counts for the precipitation record when its
+`precip_n_samples` × 1830 s reach `min_daily_coverage` × 86 400 s (≥ 43 values at 0.9); data
+without `precip_n_samples` give no precipitation record.
+
+The frost dates distinguish what the data support (`FrostFinding`): a half season (spring
+Jan 1 – Jun 30, autumn Jul 1 – Dec 31) is **observed** when complete days cover at least 90 %
+of its days (`HALF_OBSERVED_SHARE`, the default `analytics.min_season_coverage`). Only then
+does the UI say "žádný" (no frost). Otherwise it says "žádný v úplných dnech 1. 6. – 30. 6.
+(30 z 181 dní)", "bez dat" without any complete day, or the frost date with "(úplné dny jen
+… – …)" when the half was not observed and an earlier or later frost may be missing. A frost on
+a missing day of an observed half can still be missed; the note under the records says so.
+
 ## Data loading (contract §2.6)
 
 On start the app loads `manifest.json`, `sensors.geojson` and `latest.json` in parallel. Each
@@ -446,7 +516,7 @@ this is the interpretation the web implements and the `SiteBuilder` (WP-3.2) fol
 matches §1.5 "internally always UTC"; owner decision 2026-10-05). Months in Europe/Prague time would make up to two hours
 at each month boundary silently disappear from the chart. Listed as a contract clarification
 for the owner. `indices/<season>.json` is typed, validated and
-available through `DataClient.getIndices` but not displayed yet (WP-3.4).
+available through `DataClient.getIndices` and shown in the "Ukazatele" section (WP-3.4, below).
 
 ## Synthetic fixture and real data
 
@@ -459,9 +529,13 @@ clustering at scale (WP-3.5) it has **16 more synthetic sensors** (ids `9xxxxxxx
 the fictional municipalities "Obec A/B/C" with tracks "Trať 1–6" (one without a track, one
 without any grouping, one `inactive`, one `retired`), and the **four real sensor ids with
 municipality, track and variety `null`**, so the demo makes no fictional claim about real
-devices (≈ 1.4 MB in total). Names, ids and varieties of the synthetic sensors are invented. The registry in the fixture is the public projection (`notes`
+devices (≈ 1.5 MB in total). Names, ids and varieties of the synthetic sensors are invented. The registry in the fixture is the public projection (`notes`
 and `note` are `null`), like the pipeline's output. It is
 not a measurement; `public/data/README.md` says so and the UI shows a "demo data" badge.
+Its `indices/2026.json` holds **placeholder** index values (simplified formulas, all
+`complete: false`, phenology without an estimate) and placeholder daily risk blocks computed
+from daily values (`generate-fixture.mjs` documents the rules); they only exercise the
+"Ukazatele" section.
 
 The badge is controlled at build time by `VITE_DEMO_DATA`: any value other than `false`
 (including unset) shows it. Nothing in the contract marks data as synthetic.
@@ -490,7 +564,7 @@ What the real data look like to the portal:
 - `manifest.json` lists four variables (`temp_c`, `rh_pct`, `precip_mm`, `battery_v`) and an
   optional `status` per sensor (`active`, `inactive`, `retired`; a retired sensor keeps its
   history); a sensor whose last pipeline build failed has `data_status: "error"` and
-  `last_built_at`. The UI does not use them yet (WP-3.4); the picker takes the status from
+  `last_built_at`. The UI does not use them yet (not in the approved scope of WP-3.4); the picker takes the status from
   `sensors.geojson`.
 - `sensors.geojson` is the **public projection** of the registry: `notes` and every placement's
   `note` are `null` (owner decision 2026-10-05). `municipality` and `track` group the picker;
@@ -550,7 +624,8 @@ from coverage, because they are thin glue over Leaflet, uPlot/canvas or the page
 are checked in a real browser instead: `src/main.ts`, `src/ui/MapView.ts` (including the
 clustering glue), `src/ui/SeriesChart.ts`. The chart's logic lives in tested classes
 (`ChartModel`, `ZoomPanPlugin` with a fake uPlot, `ViewRange`, `ChartCsv`, `WetnessBands`,
-`ChartDialog`, `ChartToolbar`, `QuantityControl`). The picker logic (`SensorGrouping`, `SensorQuery`,
+`ChartDialog`, `ChartToolbar`, `QuantityControl`); the indicators are tested in
+`tests/analytics.test.ts` (domain, hand-computed) and `tests/ui/analytics.test.ts` (jsdom). The picker logic (`SensorGrouping`, `SensorQuery`,
 `GroupSelection`) has unit tests; `SensorPicker`, `PickerTree`, `SensorChips` and `ClusterIcon`
 are tested under jsdom on the 20-sensor fixture. `App` (with stub views), `EventMarkers` (with a fake uPlot) and the
 other DOM components are tested under jsdom.

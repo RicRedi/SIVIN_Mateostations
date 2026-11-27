@@ -6,6 +6,7 @@ are added by later workpackages.
 
 from sivin.analytics.base import (
     ClimateIndex,
+    DailyLevels,
     IndexContext,
     IndexParams,
     IndexRegistry,
@@ -16,6 +17,7 @@ from sivin.analytics.base import (
 
 __all__ = [
     "ClimateIndex",
+    "DailyLevels",
     "IndexContext",
     "IndexParams",
     "IndexRegistry",

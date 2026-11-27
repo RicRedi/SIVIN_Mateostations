@@ -383,7 +383,11 @@ class ServiceFactory:
             self.quality_service(dry_run=True),
             SiteIndices(self.indices_service(dry_run=True), index_registry),
             sensor_builder,
-            default_site_writers(config.site.stale_after_s, redactor=self._redactor),
+            default_site_writers(
+                config.site.stale_after_s,
+                redactor=self._redactor,
+                min_daily_coverage=analytics.min_daily_coverage,
+            ),
             StoreFingerprints(self._workspace.data_dir / RAW_DIR),
             StateDirectory(self._workspace.site_state_file.parent, self._workspace.site_data_dir),
             self._clock,

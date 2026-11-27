@@ -13,18 +13,22 @@ from tests.app.conftest import make_factory
 from tests.app.project import (
     OUTDOOR_SENSOR,
     REAL_SENSOR,
+    TEST_CONFIG,
     Project,
     make_project,
     write_synthetic_export,
 )
 
 from sivin.analytics.base import index_registry
+from sivin.app import site as site_module
 from sivin.app.factory import ServiceFactory
 from sivin.app.outcome import Outcome
 from sivin.app.site import SiteIndices, SiteService
 from sivin.core.ids import SensorId
 from sivin.core.schema import MeasurementSeries
+from sivin.quality.pipeline import QualityResult
 from sivin.site.indices import IndexBatch
+from sivin.site.sensor_builder import SensorSiteBuilder
 from sivin.site.state import STATE_FILE
 
 RETIRED_SENSOR = "77680921"
@@ -103,6 +107,46 @@ def test_site_of_the_real_and_a_synthetic_sensor(project: Project) -> None:
     assert not (root / STATE_FILE).exists()  # the build state is not published
     state = (project.root / "data" / "derived" / STATE_FILE).read_text(encoding="utf-8")
     assert str(project.root) not in state
+
+
+def test_output_format_change_keeps_the_files_of_a_failing_sensor(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new SITE_OUTPUT_FORMAT forces a full build; a sensor failing in it keeps its files."""
+    site = project.root / "site" / "data"
+    make_factory(project).site_service().build()
+    before = tree(site)
+    original = SensorSiteBuilder.build
+
+    def failing(self: SensorSiteBuilder, sensor_id: SensorId, result: QualityResult) -> object:
+        if str(sensor_id) == OUTDOOR_SENSOR:
+            raise ValueError("synthetic failure")
+        return original(self, sensor_id, result)
+
+    monkeypatch.setattr(site_module, "SITE_OUTPUT_FORMAT", site_module.SITE_OUTPUT_FORMAT + 1)
+    monkeypatch.setattr(SensorSiteBuilder, "build", failing)
+    report = make_factory(project).site_service().build()
+    assert report.full
+    assert report.failures == (f"site {OUTDOOR_SENSOR}: synthetic failure",)
+    after = tree(site)
+    kept = [
+        path
+        for path in before
+        if path.startswith((f"series/{OUTDOOR_SENSOR}/", f"events/{OUTDOOR_SENSOR}"))
+    ]
+    assert kept
+    assert all(after[path] == before[path] for path in kept)
+    manifest = json.loads(after["manifest.json"])
+    assert manifest["sensors"][OUTDOOR_SENSOR]["data_status"] == "error"
+    indices = json.loads(after["indices/2026.json"])["sensors"]
+    assert "daily" in indices[OUTDOOR_SENSOR]["frost"]  # the entry of the last successful build
+
+
+def test_manifest_carries_the_configured_complete_day_rule(project: Project) -> None:
+    project.write_config(TEST_CONFIG + "analytics:\n  min_daily_coverage: 0.75\n")
+    make_factory(project).site_service().build()
+    manifest = json.loads((project.root / "site/data/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["min_daily_coverage"] == 0.75
 
 
 def test_retired_sensor_is_published_with_its_status(project: Project) -> None:

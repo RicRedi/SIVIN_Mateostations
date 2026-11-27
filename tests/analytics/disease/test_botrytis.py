@@ -104,6 +104,35 @@ def test_index_on_two_hand_built_nights(make_context: ContextFactory) -> None:
     assert not any(key.startswith("event_") for key in details)
 
 
+def test_daily_levels_without_risk_bands(make_context: ContextFactory) -> None:
+    times, temps, rh = two_nights()
+    # Jun 3: covered, RH 70 % all day (no wetness); Jun 4: no samples until 12:00 (not covered).
+    times += [f"2026-06-03 {h:02d}:00" for h in range(24)] + ["2026-06-04 12:00"]
+    temps += [18.0] * 25
+    rh += [70.0] * 25
+    params = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 5))
+    levels = BotrytisBroome(params).compute(make_context(times, temps, rh)).daily_levels
+    assert levels is not None
+    assert levels.levels == ("no_wetness", "wetness")
+    assert (levels.period_start, levels.period_end) == (date(2026, 6, 1), date(2026, 6, 5))
+    assert list(levels.by_date.index) == [date(2026, 6, d) for d in (1, 2, 3, 4)]
+    assert levels.by_date.tolist() == ["wetness", "wetness", "no_wetness", None]
+
+
+def test_daily_levels_follow_configured_risk_bands(make_context: ContextFactory) -> None:
+    times, temps, rh = two_nights()
+    bands = (
+        RiskBand(label="low", min_probability=0.0),
+        RiskBand(label="elevated", min_probability=0.15),
+    )
+    params = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2), risk_bands=bands)
+    levels = BotrytisBroome(params).compute(make_context(times, temps, rh)).daily_levels
+    assert levels is not None
+    assert levels.levels == ("low", "elevated")
+    # Jun 1: Y = 0.131 < 0.15 -> low; Jun 2: Y = 0.168 -> elevated.
+    assert levels.by_date.tolist() == ["low", "elevated"]
+
+
 def test_events_carry_the_period(make_context: ContextFactory) -> None:
     times, temps, rh = two_nights()
     params = BotrytisBroomeParams(sampling=HOURLY, season=window(1, 2))

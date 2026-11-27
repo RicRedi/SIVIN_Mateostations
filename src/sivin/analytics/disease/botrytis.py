@@ -18,16 +18,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import pairwise
-from typing import Self
+from typing import Final, Self
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sivin.analytics.base import IndexContext, IndexParams, IndexResult, index_registry
+from sivin.analytics.base import (
+    DailyLevels,
+    IndexContext,
+    IndexParams,
+    IndexResult,
+    index_registry,
+)
 from sivin.analytics.disease.period import SeasonWindow
-from sivin.analytics.disease.result import DiseaseIndex
+from sivin.analytics.disease.result import DiseaseIndex, daily_levels_series
 from sivin.analytics.disease.sampling import (
     SECONDS_PER_HOUR,
     RunFinder,
@@ -39,6 +45,14 @@ from sivin.core.schema import Column, MeasurementSeries
 from sivin.core.timeutil import LocalTimeConverter
 
 logger = logging.getLogger(__name__)
+
+NO_WETNESS_LEVEL: Final = "no_wetness"
+"""Daily level without configured ``risk_bands``: the day is covered and no estimated wetness
+period ends on it. Not a risk class: no class limits are taken from literature."""
+
+WETNESS_LEVEL: Final = "wetness"
+"""Daily level without configured ``risk_bands``: an estimated wetness period (with its
+infection probability) ends on the day."""
 
 
 class BroomeCoefficients(BaseModel):
@@ -332,9 +346,12 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
     wetness period was estimated), ``daily`` the daily maximum of ``Y`` by the local date on
     which a period ends, from the first to the last day with samples in the period (0 on
     covered days without a period, ``NaN`` on other days), ``details`` summary keys and the
-    event with the highest ``Y`` (the full list comes from :meth:`infection_events`), and
-    ``estimated`` is always ``True``. Coverage counts the days of
-    the period on which **both** temperature and humidity reach ``ctx.min_daily_coverage``.
+    event with the highest ``Y`` (the full list comes from :meth:`infection_events`),
+    ``daily_levels`` the level of each day (the configured ``risk_bands`` of the daily ``Y``,
+    or without bands :data:`WETNESS_LEVEL` / :data:`NO_WETNESS_LEVEL`; ``None`` on days that
+    are neither covered nor have a period), and ``estimated`` is always ``True``. Coverage
+    counts the days of the period on which **both** temperature and humidity reach
+    ``ctx.min_daily_coverage``.
     """
 
     index_id = "botrytis_broome"
@@ -404,6 +421,7 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
             classification=self._classify(value),
             daily=daily,
             details=self._details(events),
+            daily_levels=self._daily_levels(events, days, covered_days, ctx.year),
         )
 
     def _classify(self, probability: float) -> str | None:
@@ -429,6 +447,38 @@ class BotrytisBroome(DiseaseIndex[BotrytisBroomeParams]):
                 else max(current, event.infection_probability)
             )
         return self._daily_series(days, [values[day] for day in days])
+
+    def _daily_levels(
+        self,
+        events: Sequence[InfectionEvent],
+        days: Sequence[date],
+        covered_days: set[date],
+        year: int,
+    ) -> DailyLevels:
+        """Level per model day: an event day by its ``Y``, a covered day as ``Y = 0``."""
+        max_probability: dict[date, float] = {}
+        for event in events:
+            day = event.period.end_date
+            max_probability[day] = max(max_probability.get(day, 0.0), event.infection_probability)
+        labels = [self._day_level(day, max_probability, covered_days) for day in days]
+        first, last = self.params.season.to_season().dates(year)
+        return DailyLevels(self._levels(), first, last, daily_levels_series(days, labels))
+
+    def _levels(self) -> tuple[str, ...]:
+        bands = self.params.risk_bands
+        if bands:
+            return tuple(band.label for band in bands)
+        return (NO_WETNESS_LEVEL, WETNESS_LEVEL)
+
+    def _day_level(
+        self, day: date, max_probability: dict[date, float], covered_days: set[date]
+    ) -> str | None:
+        probability = max_probability.get(day)
+        if probability is None and day not in covered_days:
+            return None
+        if self.params.risk_bands:
+            return self._classify(0.0 if probability is None else probability)
+        return NO_WETNESS_LEVEL if probability is None else WETNESS_LEVEL
 
     def _model_wetness_h(self, duration_h: float) -> float:
         """Return the wetness duration W in hours used in the model (capped if configured)."""

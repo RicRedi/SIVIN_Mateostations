@@ -67,7 +67,9 @@ seconds (rounded down; the store keeps whole seconds); `generated_at` and `compu
 
 `schema_version` (1), `generated_at`, `display_timezone`, **`stale_after_s`** (the staleness
 threshold, so the web can judge staleness against the current time; optional in the web
-contract), then:
+contract), **`min_daily_coverage`** (WP-3.4: the complete-day share 0-1 of the indices, so the
+web computes the records of a sensor from the same complete days; optional in the web
+contract, which falls back to 0.9; the value of `analytics.min_daily_coverage`), then:
 
 - `variables`: `temp_c` (°C), `rh_pct` (%), `precip_mm` (mm) and `battery_v` (V) with labels
   `cs`/`de`/`en` (`sivin.site.labels.VARIABLES`). The web looks labels up by id; extra entries
@@ -191,11 +193,56 @@ that failed for a sensor is left out of its entry and reported as a failure (exi
   count would be misleading, so an incomplete result keeps its `value` (with `complete: false`
   and its `coverage`) but `class: null`.
 
+**Daily risk block (WP-3.4).** An index that defines a risk level per day
+(`IndexResult.daily_levels`: `botrytis_broome`, `powdery_mildew_gt`, `frost`) gets the optional
+key **`daily`** in its entry (`sivin.site.indices.daily_block`), unless the entry is
+`no_data`:
+
+```jsonc
+"powdery_mildew_gt": { "value": 80.0, "unit": "points", …, "status": "ok",
+  "daily": { "levels": ["low", "moderate", "high"], "start": "2026-04-01", "end": "2026-10-31",
+             "date": ["2026-05-30", "2026-05-31"], "value": [0.0, 60.0], "level": ["low", "high"] } }
+```
+
+- `levels`: the possible levels, lowest risk first; `start`/`end`: the index period (local
+  dates, inclusive). The web colours by rank (lowest green, highest of three or more red, the
+  rest amber) and shows every day of the period, so a day that is not listed is "no data".
+- `date`, `value`, `level`: one row per day the index computed (local date, increasing); `value`
+  is the index's daily value (`IndexResult.daily`, rounded to 0.01 in the unit of the index);
+  a day without enough data has `level: null` **and** `value: null`.
+- The levels are only the classes the indices define (no new thresholds):
+  - `powdery_mildew_gt`: the class (`low` / `moderate` / `high`, UC IPM) of the index at the end
+    of the day; `null` on a day whose temperature coverage is below `min_daily_coverage` (its
+    index is only carried over);
+  - `frost`: `hard_frost` with hours at or below `hard_frost_c` (−2 °C), else `frost` with hours
+    at or below `frost_c` (0 °C), else `none`; only complete days (others are not listed);
+  - `botrytis_broome`: with configured `risk_bands` the band of the day's highest infection
+    probability (`Y = 0` on a covered day without a wetness period); without bands (the
+    default — the literature gives no class limits) `wetness` when an estimated wetness period
+    ends on the day and `no_wetness` on a covered day without one. `null` on a day that is
+    neither covered (temperature and humidity) nor has a period.
+- The daily levels are published for incomplete seasons too: they describe single days, while
+  the seasonal `class` stays `null` for an incomplete result.
+
+**Why in `indices/<season>.json`** and not in a new per-sensor file: the change is additive
+(`schema_version` stays 1; older web code ignores the key), the web already loads this file for
+the season cards, and the incremental build needs no new file kind (the entries are part of the
+build state and of the reuse rule). Cost: about 6 KB per risk index, sensor and season, so
+about 20 KB per sensor and season; with many sensors a split into
+`risk/<season>/<sensor_id>.json` would load less per selection (proposal, not done).
+
 **Seasons:** `--season YEAR` (repeatable) sets them; by default every calendar year (display
 time zone) from the first to the last sample of any published sensor. The output holds exactly
 these seasons; indices files of other seasons are removed.
 
 ## Incremental build
+
+**One-time full rebuild after WP-3.4:** `SITE_OUTPUT_FORMAT` is 2 (the index entries of the
+risk indices carry the daily block). It is part of the shared fingerprint, so the first build
+after the update rebuilds every sensor. The state itself is still read: a sensor that fails in
+that build keeps the files, summary and index entries of its last successful build (an entry
+from before WP-3.4 has no `daily` block, which the web tolerates)
+(`tests/site/test_service.py::test_output_format_change_keeps_the_files_of_a_failing_sensor`).
 
 The build state `<paths.derived_dir>/site-build-state.json` (outside the published directory)
 holds a fingerprint of the shared inputs, the seasons,
@@ -254,7 +301,8 @@ fixed to 2026-10-05T04:00:00Z.
   checks the values.
 
 Regenerate after a change of the output (and bump `SITE_OUTPUT_FORMAT` in
-`src/sivin/app/site.py` so existing sites are rebuilt in full):
+`src/sivin/app/site.py` so existing sites are rebuilt in full; WP-3.4 raised it to 2 for the daily
+risk block):
 
 ```bash
 .venv/bin/python -m tests.site.python_site

@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Any, Final
 
+from sivin.core.defaults import DEFAULT_MIN_DAILY_COVERAGE
 from sivin.redaction import SecretRedactor
 from sivin.registry.geojson import FILE_ENCODING, render_json
 from sivin.site.columns import iso_utc_seconds, unix_second
@@ -77,7 +78,8 @@ class ManifestWriter(SiteFileWriter):
     retired sensors whose history is still published. A sensor whose build failed (its files
     are from an earlier build) also has ``data_status: "error"`` and ``last_built_at``. The
     manifest also carries ``stale_after_s``, so the web can judge staleness against the
-    current time.
+    current time, and ``min_daily_coverage``, so the web uses the same complete-day rule as the
+    indices for the records of a sensor (WP-3.4).
 
     Parameters
     ----------
@@ -85,24 +87,29 @@ class ManifestWriter(SiteFileWriter):
         Labels and documentation links of the indices.
     stale_after_s : float
         Staleness threshold in seconds (``site.stale_after_s``).
+    min_daily_coverage : float, optional
+        Share (0-1) of a day covered by valid samples for it to be complete
+        (``analytics.min_daily_coverage``); the project default when omitted.
     variables : sequence of VariableSpec, optional
         The variables; :data:`~sivin.site.labels.VARIABLES` when omitted.
     redactor : SecretRedactor, optional
         Applied to every string written.
     """
 
-    __slots__ = ("_catalog", "_stale_after_s", "_variables")
+    __slots__ = ("_catalog", "_min_daily_coverage", "_stale_after_s", "_variables")
 
     def __init__(
         self,
         catalog: IndexCatalog,
         stale_after_s: float,
+        min_daily_coverage: float = DEFAULT_MIN_DAILY_COVERAGE,
         variables: Sequence[VariableSpec] = VARIABLES,
         redactor: SecretRedactor | None = None,
     ) -> None:
         super().__init__(redactor)
         self._catalog = catalog
         self._stale_after_s = stale_after_s
+        self._min_daily_coverage = min_daily_coverage
         self._variables = tuple(variables)
 
     def files(self, snapshot: SiteSnapshot) -> list[SiteFile]:
@@ -135,6 +142,7 @@ class ManifestWriter(SiteFileWriter):
             "generated_at": iso_utc_seconds(snapshot.generated_at),
             "display_timezone": snapshot.display_timezone,
             "stale_after_s": self._stale_after_s,
+            "min_daily_coverage": self._min_daily_coverage,
             "variables": [variable.as_dict() for variable in self._variables],
             "sensors": sensors,
             "seasons": list(snapshot.seasons),
@@ -282,6 +290,7 @@ def default_site_writers(
     stale_after_s: float,
     catalog: IndexCatalog | None = None,
     redactor: SecretRedactor | None = None,
+    min_daily_coverage: float = DEFAULT_MIN_DAILY_COVERAGE,
 ) -> tuple[SiteFileWriter, ...]:
     """Return the site-wide writers of the contract: manifest, public registry, latest, indices.
 
@@ -293,6 +302,9 @@ def default_site_writers(
         Index labels; the built-in ones when omitted.
     redactor : SecretRedactor, optional
         Applied to every string written.
+    min_daily_coverage : float, optional
+        Complete-day threshold (0-1) published in the manifest; the project default when
+        omitted.
 
     Returns
     -------
@@ -301,7 +313,10 @@ def default_site_writers(
     """
     return (
         ManifestWriter(
-            catalog if catalog is not None else IndexCatalog(), stale_after_s, redactor=redactor
+            catalog if catalog is not None else IndexCatalog(),
+            stale_after_s,
+            min_daily_coverage,
+            redactor=redactor,
         ),
         PublicRegistryWriter(redactor=redactor),
         LatestWriter(stale_after_s, redactor),

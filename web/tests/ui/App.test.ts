@@ -40,6 +40,7 @@ function fakeViews() {
   const log = {
     map: [] as (readonly string[])[], panel: [] as string[][], picker: [] as [readonly string[], LimitNotice | null][],
     header: 0, chart: 0, fitted: 0, quantities: [] as (readonly string[])[], quantityControl: [] as (readonly string[])[],
+    analytics: [] as (readonly string[])[],
   };
   const views: AppViews = {
     header: { render: () => { log.header += 1; } },
@@ -49,6 +50,7 @@ function fakeViews() {
     windowControl: { render: () => undefined },
     quantityControl: { render: (state) => { log.quantityControl.push(state.quantities); } },
     chart: { render: () => { log.chart += 1; }, setQuantities: (ids) => { log.quantities.push(ids); } },
+    analytics: { render: (ids) => { log.analytics.push(ids); } },
   };
   return { views, log };
 }
@@ -111,6 +113,7 @@ describe('App', () => {
     expect(store.state.selectedSensorIds).toEqual(many.slice(0, 8));
     expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'group', added: 8 });
     expect(log.panel.at(-1)).toEqual(many.slice(0, 8));
+    expect(log.analytics.at(-1)).toEqual(many.slice(0, 8));
     app.onGroupToggle(['90000401']);
     expect(log.picker.at(-1)?.[1]).toEqual({ kind: 'full' });
     app.onSensorToggle('90000402');

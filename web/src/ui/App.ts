@@ -20,6 +20,8 @@ export interface AppViews {
   readonly quantityControl: { render(state: QuantityControlState): void };
   /** `render` redraws in the current language; `setQuantities` shows other quantities (no reload). */
   readonly chart: { render(): void; setQuantities(quantities: readonly QuantityId[]): void };
+  /** The indicators of the selected sensors; reloads only when the selection changed. */
+  readonly analytics: { render(selectedIds: readonly string[]): void };
 }
 
 /**
@@ -140,6 +142,7 @@ export class App {
     this.views.map.render(state.selectedSensorIds);
     this.views.picker.render(state.selectedSensorIds, this.notice);
     this.views.panel.render(selected);
+    this.views.analytics.render(selected.map((sensor) => sensor.id));
     const window = this.presenter.windowFor(state);
     this.views.windowControl.render({ spec: state.window, resolution: state.resolution, window });
     this.views.quantityControl.render({ quantities: state.quantities, resolution: window.resolution });

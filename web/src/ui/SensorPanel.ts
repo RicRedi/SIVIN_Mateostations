@@ -12,7 +12,7 @@ const ELEVATION_DECIMALS = 0;
 
 /**
  * Side panel (a bottom sheet on phones): sensor picker, metadata and latest values of the selected
- * sensors, time-window controls, chart quantities and the chart. The picker, controls and chart
+ * sensors, time-window controls, chart quantities, the chart and the indicators. The picker, controls and chart
  * are separate components rendered into the slots this panel exposes (the chart dialog moves the
  * picker, control and chart slots into itself while it is open).
  */
@@ -21,6 +21,8 @@ export class SensorPanel {
   readonly windowSlot = el('section', { class: 'panel__section' });
   readonly quantitySlot = el('section', { class: 'panel__section' });
   readonly chartSlot = el('section', { class: 'panel__section chart' });
+  /** The "Ukazatele" section (season indices, daily risk, records; WP-3.4). */
+  readonly analyticsSlot = el('section', { class: 'panel__section' });
   private readonly toggle = el('button', {
     type: 'button',
     class: 'panel__toggle',
@@ -55,7 +57,15 @@ export class SensorPanel {
       this.renderToggle();
       onToggle();
     });
-    this.body.append(this.pickerSlot, this.hint, this.details, this.windowSlot, this.quantitySlot, this.chartSlot);
+    this.body.append(
+      this.pickerSlot,
+      this.hint,
+      this.details,
+      this.windowSlot,
+      this.quantitySlot,
+      this.chartSlot,
+      this.analyticsSlot,
+    );
     root.append(this.toggle, this.body);
   }
 
